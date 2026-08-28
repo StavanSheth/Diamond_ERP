@@ -1,0 +1,1 @@
+import{t as e}from"../ne-PwPalXsx.js";export{e as faker};

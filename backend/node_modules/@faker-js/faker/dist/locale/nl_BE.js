@@ -1,0 +1,1 @@
+import{t as e}from"../nl_BE-hmC--TOi.js";export{e as faker};

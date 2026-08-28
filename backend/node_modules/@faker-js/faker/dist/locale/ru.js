@@ -1,0 +1,1 @@
+import{t as e}from"../ru-CAoluEif.js";export{e as faker};

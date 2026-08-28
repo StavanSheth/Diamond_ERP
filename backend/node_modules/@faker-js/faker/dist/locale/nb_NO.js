@@ -1,0 +1,1 @@
+import{t as e}from"../nb_NO-BgipExQS.js";export{e as faker};

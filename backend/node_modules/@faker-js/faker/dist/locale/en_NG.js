@@ -1,0 +1,1 @@
+import{t as e}from"../en_NG-DNS7xT91.js";export{e as faker};

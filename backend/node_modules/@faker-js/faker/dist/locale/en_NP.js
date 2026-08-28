@@ -1,0 +1,1 @@
+import{t as e}from"../en_NP-ZZW1pen6.js";export{e as faker};

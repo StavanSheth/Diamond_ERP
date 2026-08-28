@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #fbf9f9;
+  margin: 0;
+  padding: 0;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.material-symbols-outlined[data-weight="fill"] {
+  font-variation-settings: 'FILL' 1;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #fbf9f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #c1c6d4;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #717783;
+}
+
+/* Modal animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.25s ease-out;
+}
+
+/* Stock card hover effects */
+.stock-card:hover .quick-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.quick-actions {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.2s ease-in-out;
+}
+
+/* KPI card shimmer */
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #efeded 25%, #e3e2e2 50%, #efeded 75%);
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Smooth page transitions */
+.page-enter {
+  opacity: 0;
+  transform: translateX(10px);
+}
+.page-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+}

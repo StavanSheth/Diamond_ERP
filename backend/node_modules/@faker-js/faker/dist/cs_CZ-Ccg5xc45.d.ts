@@ -1,0 +1,18 @@
+import { F as Faker } from "./core-BMOHu6e5.js";
+
+//#region src/locale/cs_CZ.d.ts
+/**
+ * The faker instance for the `cs_CZ` locale.
+ *
+ * - Language: Czech (Czechia)
+ * - Endonym: čeština (Česká republika)
+ *
+ * This instance uses the following locales internally (in descending precedence):
+ *
+ * - `cs_CZ`
+ * - `en`
+ * - `base`
+ */
+declare const faker: Faker;
+//#endregion
+export { faker as t };

@@ -1,0 +1,1 @@
+import{t as e}from"../ka_GE-DEeDON9_.js";export{e as faker};

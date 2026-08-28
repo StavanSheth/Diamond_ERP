@@ -1,0 +1,120 @@
+export declare enum PartyType {
+    CUSTOMER = "CUSTOMER",
+    SUPPLIER = "SUPPLIER",
+    WORKSHOP = "WORKSHOP",
+    CERTIFICATION_LAB = "CERTIFICATION_LAB",
+    OTHER = "OTHER"
+}
+export declare enum LedgerType {
+    INVENTORY = "INVENTORY",
+    FINANCIAL = "FINANCIAL"
+}
+export declare enum TransactionType {
+    PURCHASE = "PURCHASE",
+    SALE = "SALE",
+    RETURN = "RETURN",
+    REPAIR = "REPAIR",
+    REPAIR_IN = "REPAIR_IN",
+    CERTIFICATION = "CERTIFICATION",
+    CERTIFICATION_IN = "CERTIFICATION_IN",
+    TRANSFER = "TRANSFER",
+    ADJUSTMENT = "ADJUSTMENT",
+    ADD_IN = "ADD_IN",
+    WRITE_OFF = "WRITE_OFF",
+    TRANSFORMATION = "TRANSFORMATION"
+}
+export declare enum TransactionItemAction {
+    IN = "IN",
+    OUT = "OUT"
+}
+export declare enum ItemEventType {
+    PURCHASED = "PURCHASED",
+    SOLD = "SOLD",
+    RETURNED = "RETURNED",
+    REPAIRED = "REPAIRED",
+    CERTIFIED = "CERTIFIED",
+    TRANSFERRED = "TRANSFERRED",
+    ADJUSTED = "ADJUSTED",
+    WRITTEN_OFF = "WRITTEN_OFF",
+    TRANSFORMED = "TRANSFORMED"
+}
+export declare enum CertificationStatus {
+    PENDING = "PENDING",
+    SUBMITTED = "SUBMITTED",
+    ISSUED = "ISSUED",
+    REJECTED = "REJECTED",
+    EXPIRED = "EXPIRED",
+    REPLACED = "REPLACED",
+    CANCELLED = "CANCELLED"
+}
+export declare enum RepairStatus {
+    IN_PROGRESS = "IN_PROGRESS",
+    COMPLETED = "COMPLETED",
+    CANCELLED = "CANCELLED"
+}
+export declare enum RepairType {
+    REPOLISH = "REPOLISH",
+    SETTING_REPAIR = "SETTING_REPAIR",
+    CHIP_REPAIR = "CHIP_REPAIR",
+    SYMMETRY_CORRECTION = "SYMMETRY_CORRECTION",
+    SURFACE_REPAIR = "SURFACE_REPAIR",
+    OTHER = "OTHER"
+}
+export declare enum TransformationType {
+    CUT = "CUT",
+    RECUT = "RECUT",
+    POLISH = "POLISH",
+    REPOLISH = "REPOLISH",
+    REWORK = "REWORK",
+    SPLIT = "SPLIT",
+    MERGE = "MERGE",
+    RECLASSIFICATION = "RECLASSIFICATION",
+    OTHER = "OTHER"
+}
+export declare enum MovementType {
+    PURCHASE = "PURCHASE",
+    SALE = "SALE",
+    RETURN = "RETURN",
+    TRANSFER = "TRANSFER",
+    REPAIR_OUT = "REPAIR_OUT",
+    REPAIR_IN = "REPAIR_IN",
+    CERTIFICATION_OUT = "CERTIFICATION_OUT",
+    CERTIFICATION_IN = "CERTIFICATION_IN",
+    WRITE_OFF = "WRITE_OFF",
+    ADJUSTMENT = "ADJUSTMENT",
+    TRANSFORMATION = "TRANSFORMATION"
+}
+export declare enum ItemStatus {
+    AVAILABLE = "AVAILABLE",
+    SOLD = "SOLD",
+    IN_REPAIR = "IN_REPAIR",
+    IN_CERTIFICATION = "IN_CERTIFICATION",
+    WRITTEN_OFF = "WRITTEN_OFF",
+    IN_TRANSIT = "IN_TRANSIT",
+    RESERVED = "RESERVED"
+}
+export declare enum CertificateState {
+    NONE = "NONE",
+    PENDING = "PENDING",
+    RECEIVED = "RECEIVED"
+}
+export declare enum FinancialEntryType {
+    PURCHASE = "PURCHASE",
+    SALE = "SALE",
+    REFUND = "REFUND",
+    REPAIR_EXPENSE = "REPAIR_EXPENSE",
+    CERTIFICATION_EXPENSE = "CERTIFICATION_EXPENSE",
+    ADJUSTMENT = "ADJUSTMENT",
+    WRITE_OFF = "WRITE_OFF",
+    OTHER = "OTHER"
+}
+export declare enum ValuationType {
+    PURCHASE_COST = "PURCHASE_COST",
+    MARKET_REVALUATION = "MARKET_REVALUATION",
+    REPAIR_REVALUATION = "REPAIR_REVALUATION",
+    CERTIFICATION_REVALUATION = "CERTIFICATION_REVALUATION",
+    ADJUSTMENT = "ADJUSTMENT",
+    SALE = "SALE",
+    OTHER = "OTHER"
+}
+//# sourceMappingURL=enums.d.ts.map

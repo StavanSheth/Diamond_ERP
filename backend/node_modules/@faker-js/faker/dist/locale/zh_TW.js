@@ -1,0 +1,1 @@
+import{t as e}from"../zh_TW-DuFE-x3S.js";export{e as faker};

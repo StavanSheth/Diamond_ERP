@@ -1,0 +1,1 @@
+import{t as e}from"../ja-CSRunEt8.js";export{e as faker};

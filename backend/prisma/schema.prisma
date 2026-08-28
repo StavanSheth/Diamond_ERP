@@ -1,0 +1,566 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Stock {
+  id          String   @id @default(uuid())
+  stockCode   String   @unique
+  name        String
+  description String?
+  currency    String   @default("INR")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ledgers      Ledger[]
+  diamondItems DiamondItem[]
+  locations    Location[]
+}
+
+model Ledger {
+  id           String   @id @default(uuid())
+  stockId      String
+  stock        Stock    @relation(fields: [stockId], references: [id])
+  ledgerType   String
+  name         String
+  openingCarat Decimal  @default(0)
+  openingValue Decimal  @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transactions Transaction[]
+}
+
+model Party {
+  id        String   @id @default(uuid())
+  partyCode String   @unique
+  name      String
+  partyType String // CUSTOMER, SUPPLIER, WORKSHOP, CERTIFICATION_LAB, OTHER
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions     Transaction[]
+  repairs          Repair[]
+  events           ItemEvent[]
+  financialEntries FinancialEntry[]
+  transformations  ItemTransformation[]
+}
+
+model DiamondItem {
+  id          String @id @default(uuid())
+  itemCode    String @unique // D-000001
+  stockId     String
+  stock       Stock  @relation(fields: [stockId], references: [id])
+  displayName String
+
+  carat   Decimal
+  color   String
+  clarity String
+  cut     String
+  shape   String
+
+  polish       String?
+  symmetry     String?
+  fluorescence String?
+
+  category String @default("SINGLE")
+
+  lengthMm Decimal?
+  widthMm  Decimal?
+  depthMm  Decimal?
+
+  ratePerCarat Decimal
+  currentValue Decimal
+
+  status     String // AVAILABLE, SOLD, IN_REPAIR, WRITTEN_OFF, IN_TRANSIT, RESERVED
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+
+  certificateStatus    String
+  currentCertificateId String?        @unique
+  currentCertificate   Certification? @relation("CurrentCertificate", fields: [currentCertificateId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactionItems   TransactionItem[]
+  events             ItemEvent[]
+  certifications     Certification[]
+  repairs            Repair[]
+  inventoryMovements InventoryMovement[]
+  financialEntries   FinancialEntry[]
+  provenance         TransformationProvenance[]
+
+  @@index([stockId])
+  @@index([status])
+  @@index([locationId])
+}
+
+model Transaction {
+  id            String @id @default(uuid())
+  ledgerId      String
+  ledger        Ledger @relation(fields: [ledgerId], references: [id])
+  transactionNo String @unique
+
+  transactionDate DateTime
+  transactionType String // PURCHASE, SALE, RETURN, REPAIR, CERTIFICATION, TRANSFER, ADJUSTMENT, ADD_IN, WRITE_OFF, TRANSFORMATION
+  status          String @default("DRAFT") // DRAFT, PENDING_AUTHORIZATION, AUTHORIZED, POSTED, CANCELLED, REVERSED
+  
+  authorizedBy        String?
+  authorizedAt        DateTime?
+  authorizationReason String?
+  
+  version         Int @default(1)
+  sequenceNumber  Int 
+
+  partyId String?
+  party   Party?  @relation(fields: [partyId], references: [id])
+
+  remarks     String?
+  referenceNo String?
+
+  paymentStatus String? @default("PENDING") // PENDING, PARTIAL, COMPLETED
+  paymentDone   Decimal? @default(0)
+  paymentDue    Decimal? @default(0)
+
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items   TransactionItem[]
+  events  ItemEvent[]
+  repairs Repair[]
+
+  inventoryMovements InventoryMovement[]
+  financialEntries   FinancialEntry[]
+  transformations    ItemTransformation[]
+  certifications     Certification[]
+
+  @@index([ledgerId])
+  @@index([transactionDate])
+  @@index([transactionType])
+  @@index([status])
+  @@index([partyId])
+  @@unique([ledgerId, sequenceNumber])
+}
+
+model TransactionItem {
+  id            String      @id @default(uuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  diamondItemId String
+  diamondItem   DiamondItem @relation(fields: [diamondItemId], references: [id])
+
+  name         String?
+  quantity     Decimal
+  carat        Decimal
+  ratePerCarat Decimal
+  totalValue   Decimal
+
+  itemAction String // e.g. IN, OUT
+
+  createdAt DateTime @default(now())
+
+  @@index([transactionId])
+  @@index([diamondItemId])
+}
+
+model ItemEvent {
+  id            String       @id @default(uuid())
+  diamondItemId String
+  diamondItem   DiamondItem  @relation(fields: [diamondItemId], references: [id])
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  eventType String // PURCHASED, SOLD, RETURNED, REPAIRED, CERTIFIED, TRANSFERRED, ADJUSTED, WRITTEN_OFF, TRANSFORMED
+  eventDate DateTime
+
+  partyId String?
+  party   Party?  @relation(fields: [partyId], references: [id])
+
+  caratBefore Decimal?
+  caratAfter  Decimal?
+  rateBefore  Decimal?
+  rateAfter   Decimal?
+  valueBefore Decimal?
+  valueAfter  Decimal?
+
+  statusBefore String?
+  statusAfter  String?
+
+  stockBeforeId String?
+  stockAfterId  String?
+
+  locationBeforeId String?
+  locationAfterId  String?
+
+  certificateBeforeId String?
+  certificateAfterId  String?
+
+  polishBefore   String?
+  polishAfter    String?
+  symmetryBefore String?
+  symmetryAfter  String?
+  colorBefore    String?
+  colorAfter     String?
+  clarityBefore  String?
+  clarityAfter   String?
+  cutBefore      String?
+  cutAfter       String?
+
+  remarks   String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([diamondItemId])
+  @@index([eventDate])
+  @@index([eventType])
+}
+
+model Certification {
+  id            String       @id @default(uuid())
+  name          String?
+  diamondItemId String?
+  diamondItem   DiamondItem? @relation(fields: [diamondItemId], references: [id])
+
+  currentForDiamond DiamondItem? @relation("CurrentCertificate")
+
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  labType           String?
+  reportNumber      String?
+  certificateStatus String? @default("PENDING") // PENDING, SUBMITTED, ISSUED, REJECTED, EXPIRED, REPLACED, CANCELLED
+
+  cost              Decimal? @default(0)
+  measurements      String?
+  polish            String?
+  symmetry          String?
+  fluorescence      String?
+  laserInscription  String?
+  naturalOrLabGrown String?
+
+  pdfPath               String?
+  proportionDiagramPath String?
+  inclusionPlotPath     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([diamondItemId])
+  @@index([reportNumber])
+}
+
+model Repair {
+  id            String       @id @default(uuid())
+  name          String?
+  diamondItemId String
+  diamondItem   DiamondItem  @relation(fields: [diamondItemId], references: [id])
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  repairType    String // REPOLISH, SETTING_REPAIR, CHIP_REPAIR, SYMMETRY_CORRECTION, SURFACE_REPAIR, OTHER
+  vendorPartyId String
+  vendor        Party  @relation(fields: [vendorPartyId], references: [id])
+
+  dateSent      DateTime
+  dateCompleted DateTime?
+
+  caratBefore Decimal
+  caratAfter  Decimal?
+
+  cost Decimal
+
+  status  String // IN_PROGRESS, COMPLETED, CANCELLED
+  remarks String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([diamondItemId])
+  @@index([status])
+}
+
+model Location {
+  id               String     @id @default(uuid())
+  stockId          String
+  stock            Stock      @relation(fields: [stockId], references: [id])
+  name             String
+  locationType     String
+  parentLocationId String?
+  parentLocation   Location?  @relation("LocationHierarchy", fields: [parentLocationId], references: [id])
+  childLocations   Location[] @relation("LocationHierarchy")
+
+  diamondItems DiamondItem[]
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model InventoryMovement {
+  id            String       @id @default(uuid())
+  diamondItemId String
+  diamondItem   DiamondItem  @relation(fields: [diamondItemId], references: [id])
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  movementType String // PURCHASE, SALE, RETURN, TRANSFER, REPAIR_OUT, REPAIR_IN, WRITE_OFF, ADJUSTMENT, TRANSFORMATION
+
+  fromStockId    String?
+  toStockId      String?
+  fromLocationId String?
+  toLocationId   String?
+
+  caratMoved Decimal
+  quantity   Decimal
+
+  movementDate DateTime @default(now())
+  reason       String?
+
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([diamondItemId])
+  @@index([transactionId])
+  @@index([movementDate])
+}
+
+model FinancialEntry {
+  id            String       @id @default(uuid())
+  transactionId String
+  transaction   Transaction  @relation(fields: [transactionId], references: [id])
+  partyId       String?
+  party         Party?       @relation(fields: [partyId], references: [id])
+  diamondItemId String?
+  diamondItem   DiamondItem? @relation(fields: [diamondItemId], references: [id])
+
+  entryType String // PURCHASE, SALE, REFUND, REPAIR_EXPENSE, CERTIFICATION_EXPENSE, ADJUSTMENT, WRITE_OFF, OTHER
+  debit     Decimal @default(0)
+  credit    Decimal @default(0)
+  amount    Decimal @default(0)
+  currency  String  @default("INR")
+
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([transactionId])
+  @@index([diamondItemId])
+  @@index([partyId])
+}
+
+model ItemTransformation {
+  id            String       @id @default(uuid())
+  provenance    TransformationProvenance[]
+
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  transformationType String // CUT, RECUT, POLISH, REPOLISH, REWORK, SPLIT, MERGE, RECLASSIFICATION, OTHER
+
+  dateStarted   DateTime
+  dateCompleted DateTime?
+
+  caratBefore Decimal
+  caratAfter  Decimal?
+
+  colorBefore String?
+  colorAfter  String?
+
+  clarityBefore String?
+  clarityAfter  String?
+
+  cutBefore String?
+  cutAfter  String?
+
+  polishBefore String?
+  polishAfter  String?
+
+  symmetryBefore String?
+  symmetryAfter  String?
+
+  valueBefore Decimal
+  valueAfter  Decimal?
+
+  vendorPartyId String?
+  vendor        Party?  @relation(fields: [vendorPartyId], references: [id])
+
+  cost    Decimal @default(0)
+  status  String // IN_PROGRESS, COMPLETED, CANCELLED
+  remarks String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TransformationProvenance {
+  id               String             @id @default(uuid())
+  transformationId String
+  transformation   ItemTransformation @relation(fields: [transformationId], references: [id])
+  
+  diamondItemId    String
+  diamondItem      DiamondItem        @relation(fields: [diamondItemId], references: [id])
+  
+  role             String // "SOURCE" or "RESULT"
+  
+  @@unique([transformationId, diamondItemId, role])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VERSION-CONTROL ARCHITECTURE
+// ═══════════════════════════════════════════════════════════════
+
+/// An unfinished transaction or entity being composed by a user.
+/// Lifecycle: ACTIVE → SAVED → SUBMITTED → COMMITTED | ABANDONED | EXPIRED
+model DocumentDraft {
+  id            String   @id @default(uuid())
+  draftNumber   String   @unique  // DR-000001
+
+  entityType    String   // TRANSACTION, STOCK, CERTIFICATION, REPAIR
+  entityId      String?  // null for new, populated when editing an existing entity
+  version       Int      @default(1)
+
+  createdBy     String
+  updatedBy     String
+
+  status        String   @default("ACTIVE") // ACTIVE, SAVED, SUBMITTED, COMMITTED, ABANDONED, EXPIRED
+
+  latestRevisionId String?
+
+  ledgerId      String?  // context: which ledger this draft targets
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime?
+
+  revisions     DraftRevision[]
+
+  @@index([status])
+  @@index([entityType])
+  @@index([createdBy])
+}
+
+/// A single point-in-time revision of a draft. Created on server sync (Level B).
+model DraftRevision {
+  id              String   @id @default(uuid())
+  revisionNumber  Int
+
+  draftId         String
+  draft           DocumentDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  snapshotSchemaVersion Int @default(1)
+  snapshot        String   // JSON: complete state at this revision
+  changeSet       String?  // JSON: diff from previous revision
+
+  changeSummary   String?  // Human-readable: "Added D-000123, Changed carat 1.00 → 1.20"
+
+  createdBy       String
+  createdAt       DateTime @default(now())
+
+  deviceId        String?
+  sessionId       String?
+
+  @@unique([draftId, revisionNumber])
+  @@index([draftId])
+}
+
+/// Immutable version history entry for a committed business record.
+/// Created on major business events (TRANSACTION_CREATED, AUTHORIZED, EDITED, etc.)
+/// and periodically during active editing (CHECKPOINT, AUTOSAVE).
+model RecordVersion {
+  id            String   @id @default(uuid())
+
+  entityType    String   // TRANSACTION, STOCK, DIAMOND_ITEM, CERTIFICATION, REPAIR
+  entityId      String   // The ID of the record being versioned
+
+  versionNumber Int
+
+  versionType   String   // AUTOSAVE, CHECKPOINT, MANUAL_SAVE, TRANSACTION_CREATED,
+                         // TRANSACTION_AUTHORIZED, TRANSACTION_EDITED, TRANSACTION_REVERSED,
+                         // RESTORED, IMPORT, SYSTEM
+
+  snapshotSchemaVersion Int @default(1)
+  snapshot      String   // JSON: complete state at this version
+  changeSet     String?  // JSON: array of { path, before, after }
+
+  changeSummary String?  // "Added certification details"
+
+  createdBy     String
+  createdAt     DateTime @default(now())
+
+  source        String?  // WEB, API, IMPORT, SYSTEM
+  deviceId      String?
+  sessionId     String?
+
+  parentVersionId String?
+  parentVersion   RecordVersion?  @relation("VersionHierarchy", fields: [parentVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  childVersions   RecordVersion[] @relation("VersionHierarchy")
+
+  restoredFromVersionId String?
+  restoredFromVersion   RecordVersion?  @relation("RestoredFrom", fields: [restoredFromVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  restores              RecordVersion[] @relation("RestoredFrom")
+
+  changes       VersionChange[]
+
+  @@unique([entityType, entityId, versionNumber])
+  @@index([entityType, entityId])
+  @@index([versionType])
+  @@index([createdAt])
+}
+
+/// Individual field-level change within a RecordVersion.
+/// Enables precise "What changed?" views without parsing JSON diffs.
+model VersionChange {
+  id              String        @id @default(uuid())
+  recordVersionId String
+  recordVersion   RecordVersion @relation(fields: [recordVersionId], references: [id], onDelete: Cascade)
+
+  fieldPath       String   // "items[0].carat", "partyId", "remarks"
+  valueBefore     String?  // JSON-encoded previous value
+  valueAfter      String?  // JSON-encoded new value
+
+  @@index([recordVersionId])
+}
+
+/// System-level audit event covering all entity types and business actions.
+/// Distinct from ItemEvent which is the immutable operational trail for diamond items.
+model AuditEvent {
+  id            String   @id @default(uuid())
+
+  entityType    String
+  entityId      String
+
+  eventType     String   // TRANSACTION_CREATED, TRANSACTION_AUTHORIZED, TRANSACTION_EDITED,
+                         // TRANSACTION_CANCELLED, TRANSACTION_REVERSED, ITEM_ADDED, ITEM_REMOVED,
+                         // ITEM_SOLD, ITEM_RETURNED, REPAIR_STARTED, REPAIR_COMPLETED,
+                         // CERTIFICATION_REQUESTED, CERTIFICATION_COMPLETED, CERTIFICATE_REPLACED,
+                         // STOCK_TRANSFERRED, LOCATION_CHANGED, TRANSFORMATION_PERFORMED,
+                         // LEDGER_ADJUSTMENT, FINANCIAL_CORRECTION, DRAFT_CREATED, DRAFT_COMMITTED,
+                         // VERSION_RESTORED
+
+  description   String?
+  metadata      String?  // JSON: additional context
+
+  performedBy   String
+  performedAt   DateTime @default(now())
+
+  ipAddress     String?
+  deviceId      String?
+  sessionId     String?
+
+  @@index([entityType, entityId])
+  @@index([eventType])
+  @@index([performedAt])
+}
+

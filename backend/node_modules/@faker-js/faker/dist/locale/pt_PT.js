@@ -1,0 +1,1 @@
+import{t as e}from"../pt_PT-COgC_ZKA.js";export{e as faker};

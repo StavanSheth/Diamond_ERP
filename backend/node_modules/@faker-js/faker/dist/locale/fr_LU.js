@@ -1,0 +1,1 @@
+import{t as e}from"../fr_LU-CAAUO1xT.js";export{e as faker};

@@ -1,0 +1,1 @@
+import{t as e}from"../id_ID-DAM9lLPt.js";export{e as faker};

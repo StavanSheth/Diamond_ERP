@@ -1,0 +1,1 @@
+import{t as e}from"../ur-XnaxA1rj.js";export{e as faker};

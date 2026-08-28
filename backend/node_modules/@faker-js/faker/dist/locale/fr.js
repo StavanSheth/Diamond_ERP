@@ -1,0 +1,1 @@
+import{n as e,t}from"../base-BpJm8uRb.js";import{t as n}from"../en-Blck6vH3.js";import{t as r}from"../fr-Du1jdv9B.js";const i=new e({locale:[r,n,t]});export{i as faker};

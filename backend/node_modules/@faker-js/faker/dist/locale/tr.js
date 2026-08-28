@@ -1,0 +1,1 @@
+import{t as e}from"../tr-DBBU7Li4.js";export{e as faker};

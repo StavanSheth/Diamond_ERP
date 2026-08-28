@@ -1,0 +1,1 @@
+import{t as e}from"../en_IE-DODBA6aC.js";export{e as faker};

@@ -1,0 +1,1 @@
+import{t as e}from"../ar-CemwnVDS.js";export{e as faker};
