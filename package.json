@@ -13,7 +13,7 @@
     "build:contracts": "npm run build --workspace=@diamond-erp/contracts",
     "build:utils": "npm run build --workspace=@diamond-erp/shared-utils",
     "build": "npm run build --workspaces --if-present",
-    "build:installer": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:installer\\Installer.exe /target:winexe /win32icon:installer\\app.ico installer\\Installer.cs && C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:installer\\DiamondERP.exe /target:winexe /win32icon:installer\\app.ico installer\\Launcher.cs",
+    "build:installer": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:installer\\Installer.exe /target:winexe /win32icon:installer\\app.ico installer\\Installer.cs && C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /target:winexe /out:installer\\DiamondERP.exe /win32icon:installer\\app.ico /r:installer\\Microsoft.Web.WebView2.Core.dll /r:installer\\Microsoft.Web.WebView2.Wpf.dll /r:C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationFramework.dll /r:C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationCore.dll /r:C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\WindowsBase.dll /r:C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\System.Xaml.dll /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll installer\\Launcher.cs",
     "test": "npm run test --workspaces --if-present"
   }
 }

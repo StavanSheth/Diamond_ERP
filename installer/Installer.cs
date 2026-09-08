@@ -797,6 +797,18 @@ namespace DiamondERP.Setup
                     SetInstallStatus("Preparing desktop launcher executable...", 45);
                     AppendLog("[2/4] Verifying DiamondERP.exe launcher...");
 
+                    // Ensure WebView2 support DLLs are present in appDir
+                    string[] webViewDlls = new string[] { "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.Wpf.dll", "WebView2Loader.dll" };
+                    foreach (string dll in webViewDlls)
+                    {
+                        string targetDll = Path.Combine(appDir, dll);
+                        string installerDll = Path.Combine(appDir, "installer", dll);
+                        if (!File.Exists(targetDll) && File.Exists(installerDll))
+                        {
+                            try { File.Copy(installerDll, targetDll, true); } catch { }
+                        }
+                    }
+
                     // If DiamondERP.exe is in installer folder, copy to root as well
                     if (!File.Exists(targetLauncherExe) && File.Exists(installerLauncherExe))
                     {
@@ -809,7 +821,12 @@ namespace DiamondERP.Setup
                         string csc = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe";
                         if (File.Exists(csc))
                         {
-                            string args = string.Format("/out:\"{0}\" /target:winexe /win32icon:\"{1}\" \"{2}\"", targetLauncherExe, iconPath, launcherCs);
+                            string args = string.Format("/nologo /target:winexe /out:\"{0}\" /win32icon:\"{1}\" /r:\"{2}\" /r:\"{3}\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationFramework.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationCore.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\WindowsBase.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\System.Xaml.dll\" /r:\"System.dll\" /r:\"System.Drawing.dll\" /r:\"System.Windows.Forms.dll\" \"{4}\"",
+                                targetLauncherExe,
+                                iconPath,
+                                Path.Combine(appDir, "Microsoft.Web.WebView2.Core.dll"),
+                                Path.Combine(appDir, "Microsoft.Web.WebView2.Wpf.dll"),
+                                launcherCs);
                             RunProcess(csc, args);
                         }
                     }
