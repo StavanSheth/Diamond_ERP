@@ -8,55 +8,67 @@ using System.Windows.Forms;
 
 namespace DiamondERP.Setup
 {
-    public class SetupForm : Form
+    public class SetupWizardForm : Form
     {
-        private Panel headerPanel;
-        private Label lblHeaderTitle;
-        private Label lblHeaderSubtitle;
+        // Dimensions & Navigation
+        private int currentPage = 0;
+        private const int TOTAL_PAGES = 7;
 
-        private Panel contentPanel;
-        private Panel step1Panel;
-        private Panel step2Panel;
-        private Panel step3Panel;
+        // Container Panels
+        private Panel leftSidebarPanel;
+        private Panel topBannerPanel;
+        private Label lblTopBannerTitle;
+        private Label lblTopBannerSubtitle;
+        private PictureBox picTopBannerIcon;
 
-        private Panel footerPanel;
-        private Button btnCancel;
+        private Panel mainAreaPanel;
+        private Panel[] pages = new Panel[TOTAL_PAGES];
+
+        private Panel bottomNavPanel;
+        private Button btnBack;
         private Button btnNext;
+        private Button btnCancel;
 
-        // Step 1 Controls
-        private Label lblNodeStatus;
-        private Label lblNpmStatus;
-        private Button btnDownloadNode;
+        // Page 1: License Controls
+        private RadioButton rbAccept;
+        private RadioButton rbDoNotAccept;
+
+        // Page 2: Destination Controls
+        private TextBox txtDestPath;
+        private Button btnBrowse;
+
+        // Page 3: Additional Tasks Controls
         private CheckBox chkDesktopShortcut;
         private CheckBox chkStartMenuShortcut;
         private CheckBox chkLaunchAfter;
-        private TextBox txtInstallPath;
 
-        // Step 2 Controls
+        // Page 4: Ready to Install Controls
+        private TextBox txtSummary;
+
+        // Page 5: Installing Controls
         private ProgressBar progressBar;
-        private Label lblProgressStatus;
-        private TextBox txtLog;
+        private Label lblInstallStatus;
+        private TextBox txtInstallLog;
 
-        // Step 3 Controls
-        private Label lblFinishedTitle;
-        private Label lblFinishedDesc;
-        private Label lblFirstRunNote;
+        // Page 6: Completed Controls
+        private CheckBox chkFinishLaunch;
 
+        // Context
         private string appDir;
-        private bool isNodeInstalled = false;
-        private bool isNpmInstalled = false;
         private string nodeVersion = "";
         private string npmVersion = "";
+        private bool isNodeInstalled = false;
+        private bool isNpmInstalled = false;
 
         [STAThread]
         public static void Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new SetupForm());
+            Application.Run(new SetupWizardForm());
         }
 
-        public SetupForm()
+        public SetupWizardForm()
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
@@ -70,495 +82,635 @@ namespace DiamondERP.Setup
 
             InitializeComponent();
             CheckPrerequisites();
+            ShowPage(0);
         }
 
         private void InitializeComponent()
         {
-            this.Text = "DiamondERP V3.0 — Setup Wizard";
-            this.Size = new Size(680, 520);
+            this.Text = "Setup — DiamondERP V3.0";
+            this.Size = new Size(540, 410);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = true;
-            this.BackColor = Color.FromArgb(248, 250, 252);
-            this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
+            this.BackColor = SystemColors.Control;
+            this.Font = new Font("Segoe UI", 9f);
 
             string iconPath = Path.Combine(appDir, "installer", "app.ico");
-            if (!File.Exists(iconPath))
-            {
-                iconPath = Path.Combine(appDir, "app.ico");
-            }
+            if (!File.Exists(iconPath)) { iconPath = Path.Combine(appDir, "app.ico"); }
             if (File.Exists(iconPath))
             {
                 try { this.Icon = new Icon(iconPath); } catch { }
             }
 
-            // Top Banner
-            headerPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 76,
-                BackColor = Color.FromArgb(15, 23, 42)
-            };
-
-            lblHeaderTitle = new Label
-            {
-                Text = "DiamondERP V3.0 Setup Wizard",
-                Font = new Font("Segoe UI", 13.5f, FontStyle.Bold),
-                ForeColor = Color.White,
-                Location = new Point(24, 14),
-                AutoSize = true
-            };
-
-            lblHeaderSubtitle = new Label
-            {
-                Text = "Install and configure DiamondERP Enterprise Management on this machine",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(25, 42),
-                AutoSize = true
-            };
-
-            headerPanel.Controls.Add(lblHeaderTitle);
-            headerPanel.Controls.Add(lblHeaderSubtitle);
-            this.Controls.Add(headerPanel);
-
-            // Bottom Footer
-            footerPanel = new Panel
+            // --- Bottom Navigation Panel ---
+            bottomNavPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 60,
-                BackColor = Color.FromArgb(241, 245, 249)
+                Height = 48,
+                BackColor = SystemColors.Control
+            };
+            bottomNavPanel.Paint += (s, e) =>
+            {
+                using (Pen p = new Pen(SystemColors.ControlDark))
+                {
+                    e.Graphics.DrawLine(p, 0, 0, bottomNavPanel.Width, 0);
+                }
             };
 
             btnCancel = new Button
             {
                 Text = "Cancel",
-                Size = new Size(88, 32),
-                Location = new Point(560, 14),
-                BackColor = Color.White,
+                Size = new Size(76, 24),
+                Location = new Point(444, 12),
                 FlatStyle = FlatStyle.System
             };
             btnCancel.Click += (s, e) => this.Close();
 
             btnNext = new Button
             {
-                Text = "Install Now",
-                Size = new Size(110, 32),
-                Location = new Point(440, 14),
-                BackColor = Color.FromArgb(79, 70, 229),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Text = "Next >",
+                Size = new Size(76, 24),
+                Location = new Point(360, 12),
                 FlatStyle = FlatStyle.System
             };
             btnNext.Click += BtnNext_Click;
 
-            footerPanel.Controls.Add(btnCancel);
-            footerPanel.Controls.Add(btnNext);
-            this.Controls.Add(footerPanel);
-
-            // Central Content Container
-            contentPanel = new Panel
+            btnBack = new Button
             {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(24, 18, 24, 18)
+                Text = "< Back",
+                Size = new Size(76, 24),
+                Location = new Point(280, 12),
+                FlatStyle = FlatStyle.System
             };
-            this.Controls.Add(contentPanel);
+            btnBack.Click += BtnBack_Click;
 
-            BuildStep1Panel();
-            BuildStep2Panel();
-            BuildStep3Panel();
+            bottomNavPanel.Controls.Add(btnBack);
+            bottomNavPanel.Controls.Add(btnNext);
+            bottomNavPanel.Controls.Add(btnCancel);
+            this.Controls.Add(bottomNavPanel);
 
-            ShowStep(1);
-        }
-
-        private void BuildStep1Panel()
-        {
-            step1Panel = new Panel
+            // --- Top Banner (for interior pages 1 through 5) ---
+            topBannerPanel = new Panel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
+                Height = 60,
+                BackColor = Color.White,
                 Visible = false
             };
-
-            Label lblWelcome = new Label
+            topBannerPanel.Paint += (s, e) =>
             {
-                Text = "Ready to install DiamondERP",
-                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59),
-                Location = new Point(0, 4),
-                AutoSize = true
+                using (Pen p = new Pen(SystemColors.ControlDark))
+                {
+                    e.Graphics.DrawLine(p, 0, topBannerPanel.Height - 1, topBannerPanel.Width, topBannerPanel.Height - 1);
+                }
             };
-            step1Panel.Controls.Add(lblWelcome);
+
+            lblTopBannerTitle = new Label
+            {
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Location = new Point(22, 10),
+                AutoSize = true,
+                ForeColor = Color.Black
+            };
+            lblTopBannerSubtitle = new Label
+            {
+                Font = new Font("Segoe UI", 8.5f),
+                Location = new Point(36, 30),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(70, 70, 70)
+            };
+
+            picTopBannerIcon = new PictureBox
+            {
+                Size = new Size(36, 36),
+                Location = new Point(478, 12),
+                SizeMode = PictureBoxSizeMode.StretchImage
+            };
+            if (File.Exists(iconPath))
+            {
+                try { picTopBannerIcon.Image = Image.FromFile(iconPath); } catch { }
+            }
+
+            topBannerPanel.Controls.Add(lblTopBannerTitle);
+            topBannerPanel.Controls.Add(lblTopBannerSubtitle);
+            topBannerPanel.Controls.Add(picTopBannerIcon);
+            this.Controls.Add(topBannerPanel);
+
+            // --- Left Sidebar Panel (for Welcome & Finish pages) ---
+            leftSidebarPanel = new Panel
+            {
+                Dock = DockStyle.Left,
+                Width = 164,
+                BackColor = Color.FromArgb(15, 23, 42)
+            };
+            leftSidebarPanel.Paint += (s, e) =>
+            {
+                Rectangle rect = new Rectangle(0, 0, leftSidebarPanel.Width, leftSidebarPanel.Height);
+                using (LinearGradientBrush br = new LinearGradientBrush(rect, Color.FromArgb(15, 23, 42), Color.FromArgb(30, 41, 59), 90f))
+                {
+                    e.Graphics.FillRectangle(br, rect);
+                }
+
+                // Draw diamond symbol
+                using (Font symFont = new Font("Segoe UI Symbol", 36f))
+                using (SolidBrush symBrush = new SolidBrush(Color.FromArgb(96, 165, 250)))
+                {
+                    e.Graphics.DrawString("💎", symFont, symBrush, 45, 110);
+                }
+
+                using (Font brandFont = new Font("Segoe UI", 12f, FontStyle.Bold))
+                using (SolidBrush textBrush = new SolidBrush(Color.White))
+                {
+                    e.Graphics.DrawString("DiamondERP", brandFont, textBrush, 28, 185);
+                }
+
+                using (Font subFont = new Font("Segoe UI", 8f))
+                using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
+                {
+                    e.Graphics.DrawString("Enterprise Version 3.0", subFont, textBrush, 24, 210);
+                }
+            };
+            this.Controls.Add(leftSidebarPanel);
+
+            // --- Central Main Area ---
+            mainAreaPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = SystemColors.Control
+            };
+            this.Controls.Add(mainAreaPanel);
+
+            // Build all pages
+            BuildPage0_Welcome();
+            BuildPage1_License();
+            BuildPage2_Destination();
+            BuildPage3_Tasks();
+            BuildPage4_Ready();
+            BuildPage5_Installing();
+            BuildPage6_Finish();
+        }
+
+        private void BuildPage0_Welcome()
+        {
+            pages[0] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(22, 20, 22, 20) };
+
+            Label lblTitle = new Label
+            {
+                Text = "Welcome to the DiamondERP\nSetup Wizard",
+                Font = new Font("Segoe UI", 12.5f, FontStyle.Bold),
+                Location = new Point(18, 16),
+                Size = new Size(320, 56),
+                ForeColor = Color.Black
+            };
+            pages[0].Controls.Add(lblTitle);
+
+            Label lblDesc = new Label
+            {
+                Text = "This will install DiamondERP V3.0 on your computer.\n\n" +
+                       "DiamondERP is an enterprise management system providing parcel inventory tracking, 4Cs diamond categorization, and dual-entry accounting ledgers.\n\n" +
+                       "It is recommended that you close all other applications before continuing.\n\n" +
+                       "Click Next to continue, or Cancel to exit Setup.",
+                Location = new Point(20, 85),
+                Size = new Size(320, 190),
+                ForeColor = Color.FromArgb(50, 50, 50)
+            };
+            pages[0].Controls.Add(lblDesc);
+
+            mainAreaPanel.Controls.Add(pages[0]);
+        }
+
+        private void BuildPage1_License()
+        {
+            pages[1] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
 
             Label lblIntro = new Label
             {
-                Text = "This wizard will configure the enterprise runtime, verify dependencies, and create desktop shortcuts for one-click access.",
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Location = new Point(1, 28),
-                Size = new Size(610, 32)
+                Text = "Please read the following License Agreement. You must accept the terms of this agreement before continuing with the installation.",
+                Location = new Point(16, 6),
+                Size = new Size(490, 30)
             };
-            step1Panel.Controls.Add(lblIntro);
+            pages[1].Controls.Add(lblIntro);
 
-            // Group: System Verification
-            GroupBox grpPre = new GroupBox
+            TextBox txtLicense = new TextBox
             {
-                Text = "System Prerequisites",
-                Location = new Point(0, 68),
-                Size = new Size(612, 100),
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(51, 65, 85)
-            };
-
-            lblNodeStatus = new Label
-            {
-                Text = "Checking Node.js...",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Location = new Point(16, 26),
-                AutoSize = true
-            };
-            grpPre.Controls.Add(lblNodeStatus);
-
-            lblNpmStatus = new Label
-            {
-                Text = "Checking NPM...",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Location = new Point(16, 54),
-                AutoSize = true
-            };
-            grpPre.Controls.Add(lblNpmStatus);
-
-            btnDownloadNode = new Button
-            {
-                Text = "Download Node.js (v18+)",
-                Location = new Point(440, 24),
-                Size = new Size(155, 28),
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Visible = false
-            };
-            btnDownloadNode.Click += (s, e) => Process.Start("https://nodejs.org/en/download/");
-            grpPre.Controls.Add(btnDownloadNode);
-
-            step1Panel.Controls.Add(grpPre);
-
-            // Group: Options
-            GroupBox grpOpt = new GroupBox
-            {
-                Text = "Setup Preferences",
-                Location = new Point(0, 180),
-                Size = new Size(612, 130),
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(51, 65, 85)
-            };
-
-            Label lblPath = new Label
-            {
-                Text = "Application Location:",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                Location = new Point(16, 24),
-                AutoSize = true
-            };
-            grpOpt.Controls.Add(lblPath);
-
-            txtInstallPath = new TextBox
-            {
-                Text = appDir,
-                ReadOnly = true,
-                Location = new Point(18, 45),
-                Size = new Size(576, 24),
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                BackColor = Color.FromArgb(248, 250, 252)
-            };
-            grpOpt.Controls.Add(txtInstallPath);
-
-            chkDesktopShortcut = new CheckBox
-            {
-                Text = "Create Desktop Shortcut (DiamondERP)",
-                Checked = true,
-                Location = new Point(18, 76),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
-            };
-            grpOpt.Controls.Add(chkDesktopShortcut);
-
-            chkStartMenuShortcut = new CheckBox
-            {
-                Text = "Add to Windows Start Menu",
-                Checked = true,
-                Location = new Point(310, 76),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
-            };
-            grpOpt.Controls.Add(chkStartMenuShortcut);
-
-            chkLaunchAfter = new CheckBox
-            {
-                Text = "Launch DiamondERP immediately after installation",
-                Checked = true,
-                Location = new Point(18, 102),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
-            };
-            grpOpt.Controls.Add(chkLaunchAfter);
-
-            step1Panel.Controls.Add(grpOpt);
-            contentPanel.Controls.Add(step1Panel);
-        }
-
-        private void BuildStep2Panel()
-        {
-            step2Panel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                Visible = false
-            };
-
-            Label lblStep2Title = new Label
-            {
-                Text = "Installing DiamondERP...",
-                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59),
-                Location = new Point(0, 4),
-                AutoSize = true
-            };
-            step2Panel.Controls.Add(lblStep2Title);
-
-            lblProgressStatus = new Label
-            {
-                Text = "Initializing installation...",
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Location = new Point(1, 30),
-                AutoSize = true
-            };
-            step2Panel.Controls.Add(lblProgressStatus);
-
-            progressBar = new ProgressBar
-            {
-                Location = new Point(0, 58),
-                Size = new Size(612, 22),
-                Style = ProgressBarStyle.Continuous,
-                Value = 10
-            };
-            step2Panel.Controls.Add(progressBar);
-
-            Label lblLogTitle = new Label
-            {
-                Text = "Installation Log:",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Location = new Point(0, 92),
-                AutoSize = true
-            };
-            step2Panel.Controls.Add(lblLogTitle);
-
-            txtLog = new TextBox
-            {
-                Location = new Point(0, 112),
-                Size = new Size(612, 190),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(15, 23, 42),
-                ForeColor = Color.FromArgb(226, 232, 240),
-                Font = new Font("Consolas", 8.5f)
+                Location = new Point(18, 38),
+                Size = new Size(486, 150),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 8.5f),
+                Text = "DiamondERP V3.0 — Enterprise Software License Agreement\r\n\r\n" +
+                       "Copyright (c) 2026 DiamondERP Enterprise Systems. All rights reserved.\r\n\r\n" +
+                       "1. GRANT OF LICENSE\r\n" +
+                       "This software is licensed, not sold. DiamondERP grants you the non-exclusive, non-transferable right to install and execute this software on authorized devices solely for diamond trading, parcel inventory management, and ledger accounting operations.\r\n\r\n" +
+                       "2. SECURITY & ACCESS CONTROL\r\n" +
+                       "Access to this software is secured by device hardware locks and an authorized master key. You agree to protect the installation credentials and not distribute unauthorized copies of the runtime.\r\n\r\n" +
+                       "3. DATA OWNERSHIP & PRIVACY\r\n" +
+                       "All local database records, inventory entries, customer party records, and financial transaction ledgers belong exclusively to your organization and are stored locally on your machine.\r\n\r\n" +
+                       "4. DISCLAIMER OF WARRANTIES\r\n" +
+                       "This software is provided \"AS IS\", without warranty of any kind, express or implied."
             };
-            step2Panel.Controls.Add(txtLog);
+            pages[1].Controls.Add(txtLicense);
 
-            contentPanel.Controls.Add(step2Panel);
+            rbAccept = new RadioButton
+            {
+                Text = "I accept the agreement",
+                Location = new Point(20, 196),
+                AutoSize = true,
+                Checked = true
+            };
+            rbAccept.CheckedChanged += (s, e) => btnNext.Enabled = rbAccept.Checked;
+            pages[1].Controls.Add(rbAccept);
+
+            rbDoNotAccept = new RadioButton
+            {
+                Text = "I do not accept the agreement",
+                Location = new Point(20, 220),
+                AutoSize = true
+            };
+            pages[1].Controls.Add(rbDoNotAccept);
+
+            mainAreaPanel.Controls.Add(pages[1]);
         }
 
-        private void BuildStep3Panel()
+        private void BuildPage2_Destination()
         {
-            step3Panel = new Panel
+            pages[2] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+
+            Label lblIntro = new Label
             {
-                Dock = DockStyle.Fill,
-                Visible = false
+                Text = "Setup will install DiamondERP into the following folder.\nTo continue, click Next. If you would like to select a different folder, click Browse.",
+                Location = new Point(16, 10),
+                Size = new Size(490, 36)
+            };
+            pages[2].Controls.Add(lblIntro);
+
+            GroupBox grpPath = new GroupBox
+            {
+                Text = "Destination Location",
+                Location = new Point(16, 56),
+                Size = new Size(488, 70),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
             };
 
-            Panel successBadge = new Panel
+            txtDestPath = new TextBox
             {
-                Size = new Size(54, 54),
-                Location = new Point(280, 20),
-                BackColor = Color.Transparent
+                Text = appDir,
+                Location = new Point(16, 26),
+                Size = new Size(365, 23),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                ReadOnly = true,
+                BackColor = Color.White
             };
-            successBadge.Paint += (s, e) =>
+            grpPath.Controls.Add(txtDestPath);
+
+            btnBrowse = new Button
             {
-                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (SolidBrush b = new SolidBrush(Color.FromArgb(16, 185, 129)))
+                Text = "Browse...",
+                Location = new Point(390, 25),
+                Size = new Size(82, 25),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                FlatStyle = FlatStyle.System
+            };
+            btnBrowse.Click += (s, e) =>
+            {
+                using (FolderBrowserDialog fbd = new FolderBrowserDialog())
                 {
-                    e.Graphics.FillEllipse(b, 2, 2, 50, 50);
-                }
-                using (Pen p = new Pen(Color.White, 3.5f))
-                {
-                    e.Graphics.DrawLine(p, 16, 27, 24, 35);
-                    e.Graphics.DrawLine(p, 24, 35, 38, 19);
-                }
-            };
-            step3Panel.Controls.Add(successBadge);
-
-            lblFinishedTitle = new Label
-            {
-                Text = "Installation Completed Successfully!",
-                Font = new Font("Segoe UI", 13f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(15, 23, 42),
-                Location = new Point(0, 85),
-                Size = new Size(612, 28),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            step3Panel.Controls.Add(lblFinishedTitle);
-
-            lblFinishedDesc = new Label
-            {
-                Text = "DiamondERP V3.0 is ready. Desktop shortcuts have been configured for instant access.",
-                Font = new Font("Segoe UI", 9.5f),
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Location = new Point(40, 118),
-                Size = new Size(532, 38),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            step3Panel.Controls.Add(lblFinishedDesc);
-
-            Panel noteBox = new Panel
-            {
-                Location = new Point(40, 168),
-                Size = new Size(532, 80),
-                BackColor = Color.FromArgb(238, 242, 255)
-            };
-            noteBox.Paint += (s, e) =>
-            {
-                using (Pen p = new Pen(Color.FromArgb(199, 210, 254), 1f))
-                {
-                    e.Graphics.DrawRectangle(p, 0, 0, noteBox.Width - 1, noteBox.Height - 1);
+                    fbd.SelectedPath = appDir;
+                    fbd.Description = "Select the folder where DiamondERP is located:";
+                    if (fbd.ShowDialog() == DialogResult.OK)
+                    {
+                        appDir = fbd.SelectedPath;
+                        txtDestPath.Text = appDir;
+                    }
                 }
             };
+            grpPath.Controls.Add(btnBrowse);
+            pages[2].Controls.Add(grpPath);
 
-            lblFirstRunNote = new Label
+            Label lblSpace = new Label
             {
-                Text = "Security Note: On first start, you will be prompted once for your master password to unlock and activate this machine for its lifetime. Once activated, the password is never asked again.",
-                Font = new Font("Segoe UI", 9f),
-                ForeColor = Color.FromArgb(67, 56, 202),
-                Location = new Point(14, 14),
-                Size = new Size(504, 52)
+                Text = "At least 250 MB of free disk space is required on this drive.",
+                Location = new Point(18, 140),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(70, 70, 70)
             };
-            noteBox.Controls.Add(lblFirstRunNote);
-            step3Panel.Controls.Add(noteBox);
+            pages[2].Controls.Add(lblSpace);
 
-            contentPanel.Controls.Add(step3Panel);
+            mainAreaPanel.Controls.Add(pages[2]);
+        }
+
+        private void BuildPage3_Tasks()
+        {
+            pages[3] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+
+            Label lblIntro = new Label
+            {
+                Text = "Select the additional tasks you would like Setup to perform while installing DiamondERP, then click Next.",
+                Location = new Point(16, 10),
+                Size = new Size(490, 32)
+            };
+            pages[3].Controls.Add(lblIntro);
+
+            GroupBox grpShortcuts = new GroupBox
+            {
+                Text = "Additional shortcuts:",
+                Location = new Point(16, 48),
+                Size = new Size(488, 80),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
+            };
+
+            chkDesktopShortcut = new CheckBox
+            {
+                Text = "Create a desktop shortcut",
+                Location = new Point(20, 24),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+            };
+            grpShortcuts.Controls.Add(chkDesktopShortcut);
+
+            chkStartMenuShortcut = new CheckBox
+            {
+                Text = "Create a Start Menu shortcut",
+                Location = new Point(20, 48),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+            };
+            grpShortcuts.Controls.Add(chkStartMenuShortcut);
+            pages[3].Controls.Add(grpShortcuts);
+
+            GroupBox grpLaunch = new GroupBox
+            {
+                Text = "Launch options:",
+                Location = new Point(16, 140),
+                Size = new Size(488, 60),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
+            };
+
+            chkLaunchAfter = new CheckBox
+            {
+                Text = "Launch DiamondERP after setup completes",
+                Location = new Point(20, 24),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+            };
+            grpLaunch.Controls.Add(chkLaunchAfter);
+            pages[3].Controls.Add(grpLaunch);
+
+            mainAreaPanel.Controls.Add(pages[3]);
+        }
+
+        private void BuildPage4_Ready()
+        {
+            pages[4] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+
+            Label lblIntro = new Label
+            {
+                Text = "Click Install to continue with the installation, or click Back if you want to review or change any settings.",
+                Location = new Point(16, 10),
+                Size = new Size(490, 26)
+            };
+            pages[4].Controls.Add(lblIntro);
+
+            txtSummary = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Location = new Point(18, 38),
+                Size = new Size(486, 190),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 8.5f)
+            };
+            pages[4].Controls.Add(txtSummary);
+
+            mainAreaPanel.Controls.Add(pages[4]);
+        }
+
+        private void BuildPage5_Installing()
+        {
+            pages[5] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+
+            lblInstallStatus = new Label
+            {
+                Text = "Preparing installation...",
+                Location = new Point(16, 12),
+                Size = new Size(490, 20),
+                AutoEllipsis = true
+            };
+            pages[5].Controls.Add(lblInstallStatus);
+
+            progressBar = new ProgressBar
+            {
+                Location = new Point(18, 36),
+                Size = new Size(486, 20),
+                Style = ProgressBarStyle.Continuous,
+                Value = 10
+            };
+            pages[5].Controls.Add(progressBar);
+
+            txtInstallLog = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Location = new Point(18, 70),
+                Size = new Size(486, 155),
+                BackColor = Color.FromArgb(248, 250, 252),
+                Font = new Font("Consolas", 8f)
+            };
+            pages[5].Controls.Add(txtInstallLog);
+
+            mainAreaPanel.Controls.Add(pages[5]);
+        }
+
+        private void BuildPage6_Finish()
+        {
+            pages[6] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(22, 20, 22, 20) };
+
+            Label lblTitle = new Label
+            {
+                Text = "Completing the DiamondERP\nSetup Wizard",
+                Font = new Font("Segoe UI", 12.5f, FontStyle.Bold),
+                Location = new Point(18, 16),
+                Size = new Size(320, 56),
+                ForeColor = Color.Black
+            };
+            pages[6].Controls.Add(lblTitle);
+
+            Label lblDesc = new Label
+            {
+                Text = "Setup has finished installing DiamondERP on your computer. The application may be launched by selecting the installed shortcuts.\n\n" +
+                       "Click Finish to exit Setup.",
+                Location = new Point(20, 85),
+                Size = new Size(320, 70),
+                ForeColor = Color.FromArgb(50, 50, 50)
+            };
+            pages[6].Controls.Add(lblDesc);
+
+            Panel securityBox = new Panel
+            {
+                Location = new Point(20, 160),
+                Size = new Size(310, 65),
+                BackColor = Color.FromArgb(240, 245, 255)
+            };
+            securityBox.Paint += (s, e) =>
+            {
+                using (Pen p = new Pen(Color.FromArgb(199, 210, 254)))
+                {
+                    e.Graphics.DrawRectangle(p, 0, 0, securityBox.Width - 1, securityBox.Height - 1);
+                }
+            };
+            Label lblSecNote = new Label
+            {
+                Text = "Security Note: On first start, you will be prompted once for your master password to activate this computer for its lifetime.",
+                Font = new Font("Segoe UI", 8f),
+                ForeColor = Color.FromArgb(55, 48, 163),
+                Location = new Point(8, 8),
+                Size = new Size(294, 48)
+            };
+            securityBox.Controls.Add(lblSecNote);
+            pages[6].Controls.Add(securityBox);
+
+            chkFinishLaunch = new CheckBox
+            {
+                Text = "Launch DiamondERP",
+                Location = new Point(22, 235),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9f)
+            };
+            pages[6].Controls.Add(chkFinishLaunch);
+
+            mainAreaPanel.Controls.Add(pages[6]);
         }
 
         private void CheckPrerequisites()
         {
-            // Check Node
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c node -v",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
+                ProcessStartInfo psi = new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c node -v", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using (Process p = Process.Start(psi))
                 {
                     nodeVersion = p.StandardOutput.ReadToEnd().Trim();
                     p.WaitForExit(3000);
-                    if (p.ExitCode == 0 && nodeVersion.StartsWith("v"))
-                    {
-                        isNodeInstalled = true;
-                    }
+                    if (p.ExitCode == 0 && nodeVersion.StartsWith("v")) { isNodeInstalled = true; }
                 }
-            }
-            catch { }
+            } catch { }
 
-            // Check NPM
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c npm -v",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
+                ProcessStartInfo psi = new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c npm -v", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using (Process p = Process.Start(psi))
                 {
                     npmVersion = p.StandardOutput.ReadToEnd().Trim();
                     p.WaitForExit(3000);
-                    if (p.ExitCode == 0 && npmVersion.Length > 0)
-                    {
-                        isNpmInstalled = true;
-                    }
+                    if (p.ExitCode == 0 && npmVersion.Length > 0) { isNpmInstalled = true; }
                 }
-            }
-            catch { }
+            } catch { }
+        }
 
-            if (isNodeInstalled)
+        private void ShowPage(int pageIndex)
+        {
+            currentPage = pageIndex;
+
+            for (int i = 0; i < TOTAL_PAGES; i++)
             {
-                lblNodeStatus.Text = "✔ Node.js: " + nodeVersion + " (Detected)";
-                lblNodeStatus.ForeColor = Color.FromArgb(22, 101, 52);
-            }
-            else
-            {
-                lblNodeStatus.Text = "✖ Node.js: Not found in system PATH";
-                lblNodeStatus.ForeColor = Color.FromArgb(185, 28, 28);
-                btnDownloadNode.Visible = true;
+                pages[i].Visible = (i == pageIndex);
             }
 
-            if (isNpmInstalled)
-            {
-                lblNpmStatus.Text = "✔ NPM: v" + npmVersion + " (Detected)";
-                lblNpmStatus.ForeColor = Color.FromArgb(22, 101, 52);
-            }
-            else
-            {
-                lblNpmStatus.Text = "✖ NPM: Not found in system PATH";
-                lblNpmStatus.ForeColor = Color.FromArgb(185, 28, 28);
-            }
+            // Top banner is only visible for interior pages (1 through 5)
+            bool isInterior = (pageIndex >= 1 && pageIndex <= 5);
+            topBannerPanel.Visible = isInterior;
+            leftSidebarPanel.Visible = !isInterior;
 
-            if (!isNodeInstalled || !isNpmInstalled)
+            // Configure headers & buttons
+            btnBack.Visible = (pageIndex > 0 && pageIndex < 6);
+            btnBack.Enabled = (pageIndex > 0 && pageIndex != 5);
+            btnCancel.Visible = (pageIndex < 6);
+            btnCancel.Enabled = (pageIndex != 5);
+
+            switch (pageIndex)
             {
-                btnNext.Text = "Proceed Anyway";
+                case 0: // Welcome
+                    btnNext.Text = "Next >";
+                    btnNext.Enabled = true;
+                    break;
+
+                case 1: // License
+                    lblTopBannerTitle.Text = "License Agreement";
+                    lblTopBannerSubtitle.Text = "Please read the following important information before continuing.";
+                    btnNext.Text = "Next >";
+                    btnNext.Enabled = rbAccept.Checked;
+                    break;
+
+                case 2: // Destination
+                    lblTopBannerTitle.Text = "Select Destination Location";
+                    lblTopBannerSubtitle.Text = "Where should DiamondERP be installed?";
+                    txtDestPath.Text = appDir;
+                    btnNext.Text = "Next >";
+                    btnNext.Enabled = true;
+                    break;
+
+                case 3: // Additional Tasks
+                    lblTopBannerTitle.Text = "Select Additional Tasks";
+                    lblTopBannerSubtitle.Text = "Which additional tasks should be performed?";
+                    btnNext.Text = "Next >";
+                    btnNext.Enabled = true;
+                    break;
+
+                case 4: // Ready to Install
+                    lblTopBannerTitle.Text = "Ready to Install";
+                    lblTopBannerSubtitle.Text = "Setup is now ready to begin installing DiamondERP on your computer.";
+                    btnNext.Text = "Install";
+                    btnNext.Enabled = true;
+                    UpdateSummary();
+                    break;
+
+                case 5: // Installing
+                    lblTopBannerTitle.Text = "Installing";
+                    lblTopBannerSubtitle.Text = "Please wait while Setup installs DiamondERP on your computer.";
+                    btnNext.Enabled = false;
+                    StartInstallWorker();
+                    break;
+
+                case 6: // Finished
+                    btnNext.Text = "Finish";
+                    btnNext.Enabled = true;
+                    break;
             }
         }
 
-        private void ShowStep(int step)
+        private void UpdateSummary()
         {
-            step1Panel.Visible = (step == 1);
-            step2Panel.Visible = (step == 2);
-            step3Panel.Visible = (step == 3);
+            string summary = "Destination location:\r\n" +
+                             "      " + appDir + "\r\n\r\n" +
+                             "Additional tasks:\r\n";
+            if (chkDesktopShortcut.Checked) summary += "      Create a desktop shortcut\r\n";
+            if (chkStartMenuShortcut.Checked) summary += "      Create a Start Menu shortcut\r\n";
+            if (chkLaunchAfter.Checked) summary += "      Launch DiamondERP after installation\r\n";
 
-            if (step == 1)
-            {
-                btnNext.Text = (!isNodeInstalled || !isNpmInstalled) ? "Proceed Anyway" : "Install Now";
-                btnNext.Visible = true;
-                btnCancel.Visible = true;
-            }
-            else if (step == 2)
-            {
-                btnNext.Visible = false;
-                btnCancel.Enabled = false;
-            }
-            else if (step == 3)
-            {
-                btnNext.Text = "Finish & Launch";
-                btnNext.Visible = true;
-                btnCancel.Visible = false;
-            }
+            summary += "\r\nSystem Prerequisites:\r\n";
+            summary += isNodeInstalled ? "      Node.js: " + nodeVersion + " (OK)\r\n" : "      Node.js: Not detected in PATH (Warning)\r\n";
+            summary += isNpmInstalled ? "      NPM: v" + npmVersion + " (OK)\r\n" : "      NPM: Not detected in PATH (Warning)\r\n";
+
+            txtSummary.Text = summary;
         }
 
         private void BtnNext_Click(object sender, EventArgs e)
         {
-            if (step1Panel.Visible)
+            if (currentPage < 5)
             {
-                ShowStep(2);
-                StartInstallWorker();
+                ShowPage(currentPage + 1);
             }
-            else if (step3Panel.Visible)
+            else if (currentPage == 6)
             {
-                if (chkLaunchAfter.Checked)
+                if (chkFinishLaunch.Checked)
                 {
                     LaunchApp();
                 }
@@ -566,25 +718,33 @@ namespace DiamondERP.Setup
             }
         }
 
-        private void AppendLog(string text)
+        private void BtnBack_Click(object sender, EventArgs e)
         {
-            if (txtLog.InvokeRequired)
+            if (currentPage > 0 && currentPage != 5)
             {
-                txtLog.Invoke(new Action<string>(AppendLog), text);
-                return;
+                ShowPage(currentPage - 1);
             }
-            txtLog.AppendText(text + Environment.NewLine);
         }
 
-        private void UpdateProgress(int pct, string status)
+        private void AppendLog(string text)
+        {
+            if (txtInstallLog.InvokeRequired)
+            {
+                txtInstallLog.Invoke(new Action<string>(AppendLog), text);
+                return;
+            }
+            txtInstallLog.AppendText(text + Environment.NewLine);
+        }
+
+        private void SetInstallStatus(string text, int progress)
         {
             if (this.InvokeRequired)
             {
-                this.Invoke(new Action<int, string>(UpdateProgress), pct, status);
+                this.Invoke(new Action<string, int>(SetInstallStatus), text, progress);
                 return;
             }
-            progressBar.Value = Math.Min(100, Math.Max(0, pct));
-            lblProgressStatus.Text = status;
+            lblInstallStatus.Text = text;
+            progressBar.Value = Math.Min(100, Math.Max(0, progress));
         }
 
         private void StartInstallWorker()
@@ -593,33 +753,24 @@ namespace DiamondERP.Setup
             {
                 try
                 {
-                    AppendLog("[1/4] Checking environment and database...");
-                    UpdateProgress(20, "Configuring runtime environment...");
-                    Thread.Sleep(400);
+                    SetInstallStatus("Validating environment...", 20);
+                    AppendLog("[1/4] Checking environment runtime...");
+                    Thread.Sleep(300);
 
-                    // Compile DiamondERP.exe if missing
+                    // Compile DiamondERP.exe launcher if missing
                     string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-                    if (!File.Exists(launcherExe))
-                    {
-                        launcherExe = Path.Combine(appDir, "DiamondERP.exe");
-                    }
+                    if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "DiamondERP.exe"); }
 
                     string launcherCs = Path.Combine(appDir, "installer", "Launcher.cs");
-                    if (!File.Exists(launcherCs))
-                    {
-                        launcherCs = Path.Combine(appDir, "Launcher.cs");
-                    }
+                    if (!File.Exists(launcherCs)) { launcherCs = Path.Combine(appDir, "Launcher.cs"); }
 
                     string iconPath = Path.Combine(appDir, "installer", "app.ico");
-                    if (!File.Exists(iconPath))
-                    {
-                        iconPath = Path.Combine(appDir, "app.ico");
-                    }
+                    if (!File.Exists(iconPath)) { iconPath = Path.Combine(appDir, "app.ico"); }
 
                     if (!File.Exists(launcherExe) && File.Exists(launcherCs))
                     {
-                        AppendLog("[2/4] Compiling native DiamondERP.exe launcher...");
-                        UpdateProgress(40, "Building desktop launcher executable...");
+                        SetInstallStatus("Compiling application launcher...", 40);
+                        AppendLog("[2/4] Generating native DiamondERP.exe launcher...");
                         string csc = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe";
                         if (File.Exists(csc))
                         {
@@ -628,14 +779,9 @@ namespace DiamondERP.Setup
                         }
                     }
 
-                    // Build packages
-                    AppendLog("[3/4] Validating monorepo packages and assets...");
-                    UpdateProgress(60, "Verifying build assets...");
+                    SetInstallStatus("Configuring application shortcuts...", 70);
+                    AppendLog("[3/4] Creating application shortcuts...");
                     Thread.Sleep(300);
-
-                    // Shortcuts
-                    AppendLog("[4/4] Creating Windows shortcuts...");
-                    UpdateProgress(85, "Configuring shortcuts...");
 
                     string targetExe = File.Exists(launcherExe) ? launcherExe : Path.Combine(appDir, "start.bat");
 
@@ -655,11 +801,11 @@ namespace DiamondERP.Setup
                         AppendLog("✔ Created Start Menu shortcut: " + lnkPath);
                     }
 
-                    UpdateProgress(100, "Setup complete!");
-                    AppendLog("✔ DiamondERP Setup completed successfully.");
+                    SetInstallStatus("Installation complete!", 100);
+                    AppendLog("[4/4] Installation finished successfully.");
                     Thread.Sleep(500);
 
-                    this.Invoke(new Action(() => ShowStep(3)));
+                    this.Invoke(new Action(() => ShowPage(6)));
                 }
                 catch (Exception ex)
                 {
@@ -698,10 +844,7 @@ namespace DiamondERP.Setup
         private void LaunchApp()
         {
             string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-            if (!File.Exists(launcherExe))
-            {
-                launcherExe = Path.Combine(appDir, "DiamondERP.exe");
-            }
+            if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "DiamondERP.exe"); }
 
             if (File.Exists(launcherExe))
             {
