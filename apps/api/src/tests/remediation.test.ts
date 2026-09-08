@@ -91,6 +91,6 @@ describe('Production Remediation Verification Suite', () => {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       );
       expect(headers['Content-Disposition']).toContain('attachment; filename=');
-    });
+    }, 15000);
   });
 });

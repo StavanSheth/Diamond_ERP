@@ -149,9 +149,13 @@ export const AppLockProvider: React.FC<{ children: React.ReactNode }> = ({ child
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
         return { success: true };
       }
-      return { success: false, error: 'Device verification was unsuccessful or cancelled.' };
+      return { success: false, error: 'Verification was cancelled. Please try again or enter your PIN.' };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Device authentication failed.' };
+      const rawMsg = err?.message || '';
+      if (rawMsg.includes('timed out') || rawMsg.includes('not allowed') || rawMsg.includes('webauthn')) {
+        return { success: false, error: 'Verification timed out or was cancelled. Please try again or enter your PIN.' };
+      }
+      return { success: false, error: 'Device verification could not be completed. Please try again or enter your PIN.' };
     }
   }, [deviceCredentialId, isPlatformAuthSupported]);
 

@@ -97,10 +97,10 @@ export const FirstRunActivationOverlay: React.FC = () => {
             </svg>
           </div>
           <h2 className="text-2xl font-bold tracking-tight text-white mb-1">
-            DiamondERP System Activation
+            Welcome to DiamondERP
           </h2>
           <p className="text-sm text-slate-400 max-w-xs">
-            Enter the authorized master security key to initialize and unlock this installation.
+            Enter your password to unlock and start the app.
           </p>
         </div>
 
@@ -126,7 +126,7 @@ export const FirstRunActivationOverlay: React.FC = () => {
               htmlFor="master-activation-password"
               className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
             >
-              Master Password
+              Password
             </label>
             <div className="relative">
               <input
@@ -198,17 +198,17 @@ export const FirstRunActivationOverlay: React.FC = () => {
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                   />
                 </svg>
-                <span>Validating Security Key...</span>
+                <span>Checking password...</span>
               </>
             ) : (
-              <span>Unlock & Activate</span>
+              <span>Unlock & Start App</span>
             )}
           </button>
         </form>
 
         <div className="mt-6 pt-5 border-t border-slate-800/80 text-center">
-          <p className="text-xs text-slate-500">
-            One-time verification. Once unlocked, this app will remain permanently activated on this machine.
+          <p className="text-xs text-slate-400">
+            One-time setup. Once unlocked, the app will never ask for this password again on this computer.
           </p>
         </div>
       </div>

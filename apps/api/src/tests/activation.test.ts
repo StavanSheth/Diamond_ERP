@@ -4,13 +4,19 @@ import fs from 'fs';
 import path from 'path';
 import prisma from '../infrastructure/database/prisma';
 
-const ACTIVATION_FILE = path.resolve(__dirname, '../../../../.app-activation.json');
+const ACTIVATION_FILE = path.resolve(process.cwd(), '.app-activation.json');
 
 describe('Master App Lock & Lifetime Activation Controller', () => {
   beforeEach(async () => {
     // Clean up activation state before each test
-    if (fs.existsSync(ACTIVATION_FILE)) {
-      fs.unlinkSync(ACTIVATION_FILE);
+    const files = [
+      ACTIVATION_FILE,
+      path.resolve(__dirname, '../../../../.app-activation.json'),
+    ];
+    for (const f of files) {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch {}
+      }
     }
     await prisma.setting.deleteMany({
       where: { key: 'app_activated' }
