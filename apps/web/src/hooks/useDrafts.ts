@@ -31,22 +31,6 @@ export function useDrafts() {
     setError(null);
 
     try {
-      // Fetch server drafts
-      const serverRes = await api.getDrafts();
-      const serverDrafts: DraftListItem[] = (serverRes.data || []).map((d: any) => ({
-        id: d.id,
-        draftNumber: d.draftNumber,
-        entityType: d.entityType,
-        entityId: d.entityId,
-        status: d.status,
-        updatedAt: d.updatedAt,
-        createdBy: d.createdBy,
-        updatedBy: d.updatedBy,
-        ledgerId: d.ledgerId,
-        latestRevisionSummary: d.revisions?.[0]?.changeSummary,
-        isLocalOnly: false,
-      }));
-
       // Fetch local-only drafts (not yet synced)
       const localDrafts = await getActiveDrafts();
       const localOnlyDrafts: DraftListItem[] = localDrafts
@@ -66,7 +50,7 @@ export function useDrafts() {
           localId: ld.id,
         }));
 
-      setDrafts([...localOnlyDrafts, ...serverDrafts]);
+      setDrafts(localOnlyDrafts);
     } catch (err: any) {
       setError(err.message || 'Failed to load drafts');
       // Still try to show local drafts if server is unavailable

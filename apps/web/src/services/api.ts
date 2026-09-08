@@ -45,6 +45,8 @@ export interface AdvancedItemFilters {
   maxCarat?: string;
   minPrice?: string;
   maxPrice?: string;
+  paymentDirection?: string;
+  agingDays?: string;
 }
 
 const buildFilterQueryString = (filters?: AdvancedItemFilters) => {
@@ -98,24 +100,27 @@ export const api = {
     return request('/health');
   },
 
-  /** Get ledger entries, optionally filtered by stockId, partyId, itemCode, and paymentStatus */
-  getLedger(stockId?: string, partyId?: string, itemCode?: string, paymentStatus?: string): Promise<{ success: boolean; data: LedgerEntry[]; count: number }> {
+  /** Get ledger entries, optionally filtered by stockId, partyId, itemCode, paymentStatus, agingDays, and paymentDirection */
+  getLedger(stockId?: string, partyId?: string, itemCode?: string, paymentStatus?: string, agingDays?: string | number, paymentDirection?: string): Promise<{ success: boolean; data: LedgerEntry[]; count: number }> {
     const params = new URLSearchParams();
     if (stockId) params.append('stockId', stockId);
     if (partyId) params.append('partyId', partyId);
     if (itemCode) params.append('itemCode', itemCode);
     if (paymentStatus) params.append('paymentStatus', paymentStatus);
+    if (agingDays) params.append('agingDays', String(agingDays));
+    if (paymentDirection) params.append('paymentDirection', paymentDirection);
     
     const qs = params.toString() ? `?${params.toString()}` : '';
     return request(`/api/ledger${qs}`);
   },
 
-  /** Get ledger payment summary */
-  getPaymentSummary(stockId?: string, partyId?: string, itemCode?: string): Promise<{ success: boolean; data: { payableDue: number; payablePaid: number; receivableDue: number; receivableCollected: number } }> {
+  /** Get ledger payment summary with optional aging filter */
+  getPaymentSummary(stockId?: string, partyId?: string, itemCode?: string, agingDays?: string | number): Promise<{ success: boolean; data: { payableDue: number; payablePaid: number; receivableDue: number; receivableCollected: number; aging?: any } }> {
     const params = new URLSearchParams();
     if (stockId) params.append('stockId', stockId);
     if (partyId) params.append('partyId', partyId);
     if (itemCode) params.append('itemCode', itemCode);
+    if (agingDays) params.append('agingDays', String(agingDays));
     
     const qs = params.toString() ? `?${params.toString()}` : '';
     return request(`/api/ledger/payment-summary${qs}`);
@@ -148,7 +153,10 @@ export const api = {
   },
 
 
-  /** Delete transaction */
+  /**
+   * Delete transaction - Note: Historical transactions are immutable in the ledger.
+   * Attempting to delete will be rejected by the backend. Use a reversal transaction instead.
+   */
   deleteLedger(id: string): Promise<any> {
     return request(`/api/ledger/${id}`, {
       method: 'DELETE',
@@ -264,6 +272,54 @@ export const api = {
     return request('/api/reports');
   },
 
+  getReportPreview(params?: Record<string, any>): Promise<{
+    success: boolean;
+    title: string;
+    subtitle: string;
+    columns: Array<{ key: string; header: string; align?: 'left' | 'center' | 'right'; width?: number }>;
+    rows: any[];
+    kpis: Array<{ label: string; value: string | number; color?: string }>;
+    entityProfile?: any;
+  }> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (Array.isArray(v)) {
+          if (v.length > 0) searchParams.append(k, v.join(','));
+        } else if (v !== undefined && v !== null && v !== '') {
+          searchParams.append(k, String(v));
+        }
+      });
+    }
+    const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+    return request(`/api/reports/preview${qs}`);
+  },
+
+  async downloadReportExcel(params?: Record<string, any>, customFilename?: string): Promise<void> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (Array.isArray(v)) {
+          if (v.length > 0) searchParams.append(k, v.join(','));
+        } else if (v !== undefined && v !== null && v !== '') {
+          searchParams.append(k, String(v));
+        }
+      });
+    }
+    const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
+    const res = await fetch(`/api/reports/export/excel${qs}`);
+    if (!res.ok) throw new Error('Failed to download report Excel');
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = customFilename || `DiamondERP_${params?.reportType || 'Report'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  },
+
   updateSettings(data: Record<string, string>): Promise<any> {
     return request('/api/settings', { method: 'PUT', body: JSON.stringify(data) });
   },
@@ -276,86 +332,59 @@ export const api = {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // DRAFTS API (Version-Control Architecture)
+  // DATA MANAGEMENT & PROFILES API
   // ═══════════════════════════════════════════════════════════════
 
-  /** List all drafts */
-  getDrafts(status?: string): Promise<{ success: boolean; data: any[] }> {
-    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-    return request(`/api/drafts${qs}`);
+  getProfiles(): Promise<{ success: boolean; data: { profiles: string[], active: string } }> {
+    return request('/api/settings/profiles');
+  },
+  switchProfile(profileName: string): Promise<any> {
+    return request('/api/settings/profile', { method: 'POST', body: JSON.stringify({ profileName }) });
+  },
+  factoryReset(): Promise<any> {
+    return request('/api/settings/factory-reset', { method: 'POST' });
   },
 
-  /** Get a single draft */
-  getDraft(id: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/drafts/${encodeURIComponent(id)}`);
+  /** Export data to Excel */
+  exportExcel(): Promise<Blob> {
+    return fetch(`/api/settings/export/excel`).then((res) => {
+      if (!res.ok) throw new Error('Export failed');
+      return res.blob();
+    });
   },
 
-  /** Create a new draft */
-  createDraft(data: {
-    entityType: string;
-    entityId?: string;
-    ledgerId?: string;
-    payload: Record<string, unknown>;
-    createdBy: string;
-  }): Promise<{ success: boolean; data: any }> {
-    return request('/api/drafts', {
+  /** Download Excel template */
+  downloadTemplate(): Promise<Blob> {
+    return fetch(`/api/settings/export/template`).then((res) => {
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    });
+  },
+
+  /** Import data from Excel */
+  importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetch(`/api/settings/import/excel?mode=${mode}`, {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: formData,
+    }).then(async (res) => {
+      if (res.status === 400 && res.headers.get('content-type')?.includes('spreadsheetml')) {
+        // Automatically trigger a download of the error excel file if the backend returned it
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Import_Errors.xlsx';
+        a.click();
+        window.URL.revokeObjectURL(url);
+        return { success: false, message: 'Import failed with errors. Downloaded error file for review.' };
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || 'Import failed');
+      }
+      return res.json();
     });
-  },
-
-  /** Save a draft revision (Level B — server sync) */
-  saveDraftRevision(draftId: string, data: {
-    payload: Record<string, unknown>;
-    changeSet?: Array<{ path: string; before: unknown; after: unknown }>;
-    changeSummary?: string;
-    updatedBy: string;
-  }): Promise<{ success: boolean; data: any }> {
-    return request(`/api/drafts/${encodeURIComponent(draftId)}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Commit a draft (authorize ledger entry) */
-  commitDraft(draftId: string, createdBy?: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/drafts/${encodeURIComponent(draftId)}/commit`, {
-      method: 'POST',
-      body: JSON.stringify({ createdBy: createdBy || 'system' }),
-    });
-  },
-
-  /** Abandon a draft */
-  abandonDraft(draftId: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/drafts/${encodeURIComponent(draftId)}`, {
-      method: 'DELETE',
-    });
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // VERSIONS API (Version History)
-  // ═══════════════════════════════════════════════════════════════
-
-  /** Get version history for an entity */
-  getVersionHistory(entityType: string, entityId: string): Promise<{ success: boolean; data: any[] }> {
-    return request(`/api/versions/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`);
-  },
-
-  /** Get a single version snapshot */
-  getVersion(versionId: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/versions/${encodeURIComponent(versionId)}`);
-  },
-
-  /** Restore a previous version */
-  restoreVersion(versionId: string, createdBy?: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/versions/${encodeURIComponent(versionId)}/restore`, {
-      method: 'POST',
-      body: JSON.stringify({ createdBy: createdBy || 'system' }),
-    });
-  },
-
-  /** Diff two versions */
-  diffVersions(idA: string, idB: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/versions/${encodeURIComponent(idA)}/diff/${encodeURIComponent(idB)}`);
   },
 };

@@ -44,7 +44,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
   const navigate = useNavigate();
 
   const kpis = useMemo(() => {
-    const list = stocks || [];
+    const list = Array.isArray(stocks) ? stocks : [];
     const totalValue = list.reduce((sum, s) => sum + (s.totalValue || 0), 0);
     const totalCarats = list.reduce((sum, s) => sum + (s.caratWeight || 0), 0);
     const activeParcels = list.filter((s) => s.status === 'ACTIVE').length;
@@ -56,7 +56,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
     const topStocks = [...list].sort((a, b) => b.totalValue - a.totalValue).slice(0, 5);
 
     const recentActivity = [...list]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
       .slice(0, 8);
 
     return { totalValue, totalCarats, activeParcels, avgRate, byStatus, topStocks, recentActivity };
@@ -178,7 +178,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
             Stock Distribution
           </h3>
           <div className="flex flex-col md:flex-row gap-xl items-center justify-center p-md">
-            {totalStocks > 0 ? (
+            {loading ? (
+              <div className="flex flex-col md:flex-row gap-xl items-center justify-center p-md w-full">
+                <div className="w-44 h-44 rounded-full skeleton" />
+                <div className="flex flex-col gap-sm w-40">
+                  <div className="h-4 skeleton rounded w-full" />
+                  <div className="h-4 skeleton rounded w-3/4" />
+                  <div className="h-4 skeleton rounded w-5/6" />
+                </div>
+              </div>
+            ) : totalStocks > 0 ? (
               <>
                 {/* Donut Chart */}
                 <div 
@@ -222,29 +231,41 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
             Top Stocks by Value
           </h3>
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-outline-variant">
-                  <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-left py-sm">#</th>
-                  <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-left py-sm">Name</th>
-                  <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-right py-sm">Carats</th>
-                  <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-right py-sm">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {kpis.topStocks.map((stock, i) => (
-                  <tr key={stock.id} className="border-b border-surface-container last:border-0 hover:bg-surface-container-low transition-colors">
-                    <td className="py-sm font-body-md text-body-md text-on-surface-variant">{i + 1}</td>
-                    <td className="py-sm font-body-md text-body-md text-on-surface font-semibold">{stock.stockName}</td>
-                    <td className="py-sm font-body-md text-body-md text-on-surface text-right tabular-nums">{(stock.caratWeight || 0).toFixed(2)}</td>
-                    <td className="py-sm font-body-md text-body-md text-on-surface text-right tabular-nums font-semibold">{fmtShort(stock.totalValue || 0)}</td>
-                  </tr>
+            {loading ? (
+              <div className="p-sm flex flex-col gap-sm">
+                {[1, 2, 3, 4, 5].map((idx) => (
+                  <div key={idx} className="flex items-center justify-between py-2 border-b border-surface-container">
+                    <div className="h-4 skeleton rounded w-28" />
+                    <div className="h-4 skeleton rounded w-16" />
+                    <div className="h-4 skeleton rounded w-20" />
+                  </div>
                 ))}
-                {kpis.topStocks.length === 0 && (
-                  <tr><td colSpan={4} className="py-lg text-center font-body-md text-on-surface-variant">No data</td></tr>
-                )}
-              </tbody>
-            </table>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-outline-variant">
+                    <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-left py-sm">#</th>
+                    <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-left py-sm">Name</th>
+                    <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-right py-sm">Carats</th>
+                    <th className="font-caption text-caption text-on-surface-variant uppercase tracking-wider text-right py-sm">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {kpis.topStocks.map((stock, i) => (
+                    <tr key={stock.id} className="border-b border-surface-container last:border-0 hover:bg-surface-container-low transition-colors">
+                      <td className="py-sm font-body-md text-body-md text-on-surface-variant">{i + 1}</td>
+                      <td className="py-sm font-body-md text-body-md text-on-surface font-semibold">{stock.stockName}</td>
+                      <td className="py-sm font-body-md text-body-md text-on-surface text-right tabular-nums">{(stock.caratWeight || 0).toFixed(2)}</td>
+                      <td className="py-sm font-body-md text-body-md text-on-surface text-right tabular-nums font-semibold">{fmtShort(stock.totalValue || 0)}</td>
+                    </tr>
+                  ))}
+                  {kpis.topStocks.length === 0 && (
+                    <tr><td colSpan={4} className="py-lg text-center font-body-md text-on-surface-variant">No data</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
@@ -256,30 +277,46 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
           Recent Activity
         </h3>
         <div className="flex flex-col gap-sm">
-          {kpis.recentActivity.map((stock) => (
-            <div key={stock.id} className="flex items-center gap-md px-md py-sm rounded-lg hover:bg-surface-container-low transition-colors border-b border-surface-container last:border-0">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                stock.version === 1 ? 'bg-transaction-add/10' : 'bg-primary-fixed'
-              }`}>
-                <span className={`material-symbols-outlined text-[16px] ${
-                  stock.version === 1 ? 'text-transaction-add' : 'text-primary'
-                }`}>
-                  {stock.version === 1 ? 'add_circle' : 'edit'}
-                </span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-body-md text-body-md text-on-surface font-semibold truncate">{stock.stockName}</p>
-                <p className="font-caption text-caption text-on-surface-variant">
-                  {stock.version === 1 ? 'Created' : `Updated (v${stock.version})`} • {stock.location?.split(' - ')[0]}
-                </p>
-              </div>
-              <span className="font-caption text-caption text-outline shrink-0">
-                {stock.updatedAt ? new Date(stock.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
-              </span>
+          {loading ? (
+            <div className="flex flex-col gap-sm">
+              {[1, 2, 3].map((idx) => (
+                <div key={idx} className="flex items-center gap-md px-md py-sm border-b border-surface-container">
+                  <div className="w-8 h-8 rounded-full skeleton shrink-0" />
+                  <div className="flex-1 flex flex-col gap-1">
+                    <div className="h-4 skeleton rounded w-1/3" />
+                    <div className="h-3 skeleton rounded w-1/4" />
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-          {kpis.recentActivity.length === 0 && (
-            <p className="font-body-md text-body-md text-on-surface-variant text-center py-lg">No activity yet</p>
+          ) : (
+            <>
+              {kpis.recentActivity.map((stock) => (
+                <div key={stock.id} className="flex items-center gap-md px-md py-sm rounded-lg hover:bg-surface-container-low transition-colors border-b border-surface-container last:border-0">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                    stock.version === 1 ? 'bg-transaction-add/10' : 'bg-primary-fixed'
+                  }`}>
+                    <span className={`material-symbols-outlined text-[16px] ${
+                      stock.version === 1 ? 'text-transaction-add' : 'text-primary'
+                    }`}>
+                      {stock.version === 1 ? 'add_circle' : 'edit'}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-body-md text-body-md text-on-surface font-semibold truncate">{stock.stockName}</p>
+                    <p className="font-caption text-caption text-on-surface-variant">
+                      {stock.version === 1 ? 'Created' : `Updated (v${stock.version})`} • {stock.location?.split(' - ')[0]}
+                    </p>
+                  </div>
+                  <span className="font-caption text-caption text-outline shrink-0">
+                    {stock.updatedAt ? new Date(stock.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                  </span>
+                </div>
+              ))}
+              {kpis.recentActivity.length === 0 && (
+                <p className="font-body-md text-body-md text-on-surface-variant text-center py-lg">No activity yet</p>
+              )}
+            </>
           )}
         </div>
       </div>

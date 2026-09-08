@@ -83,3 +83,41 @@ body {
   transform: translateX(0);
   transition: opacity 200ms ease-out, transform 200ms ease-out;
 }
+
+/* Print optimizations for Reports & Audits */
+@media print {
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  aside, header, nav, .no-print {
+    display: none !important;
+  }
+  main {
+    overflow: visible !important;
+    height: auto !important;
+    display: block !important;
+  }
+  .print-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .page-break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}

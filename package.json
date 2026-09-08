@@ -1,0 +1,18 @@
+{
+  "name": "diamond-erp-monorepo",
+  "version": "3.0.0",
+  "private": true,
+  "description": "DiamondERP V3.0 Monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=@diamond-erp/api",
+    "dev:web": "npm run dev --workspace=@diamond-erp/web",
+    "build:contracts": "npm run build --workspace=@diamond-erp/contracts",
+    "build:utils": "npm run build --workspace=@diamond-erp/shared-utils",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

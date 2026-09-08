@@ -1,0 +1,244 @@
+import React, { useState, useEffect } from 'react';
+import { BaseModal } from '../../common/components/BaseModal';
+import { PARTY_TYPES, isBrokerType } from '../types/partyTypes';
+
+interface PartyModalProps {
+  open: boolean;
+  party: any | null;
+  onClose: () => void;
+  onSubmit: (data: any, id?: string) => Promise<void>;
+}
+
+export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, onSubmit }) => {
+  const [saving, setSaving] = useState(false);
+  const [partyName, setPartyName] = useState('');
+  const [type, setType] = useState('CUSTOMER');
+  const [brokeragePercentage, setBrokeragePercentage] = useState('');
+  const [outstandingBalance, setOutstandingBalance] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      if (party) {
+        setPartyName(party.partyName || party.name || '');
+        setType(party.type || party.partyType || 'CUSTOMER');
+        setBrokeragePercentage(
+          party.brokeragePercentage != null && Number(party.brokeragePercentage) > 0
+            ? String(party.brokeragePercentage)
+            : ''
+        );
+        setOutstandingBalance(
+          party.outstandingBalance !== undefined && party.outstandingBalance !== null
+            ? String(party.outstandingBalance)
+            : '0'
+        );
+        setPhone(party.phone || '');
+        setEmail(party.email || '');
+        setAddress(party.address || '');
+        setNotes(party.notes || '');
+      } else {
+        setPartyName('');
+        setType('CUSTOMER');
+        setBrokeragePercentage('');
+        setOutstandingBalance('0');
+        setPhone('');
+        setEmail('');
+        setAddress('');
+        setNotes('');
+      }
+      setError(null);
+    }
+  }, [open, party]);
+
+  if (!open) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!partyName.trim()) {
+      setError('Party name is required.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError(null);
+      await onSubmit(
+        {
+          partyName: partyName.trim(),
+          name: partyName.trim(),
+          type,
+          partyType: type,
+          brokeragePercentage: isBrokerType(type) && brokeragePercentage ? parseFloat(brokeragePercentage) : 0,
+          outstandingBalance: parseFloat(outstandingBalance || '0'),
+          phone: phone.trim() || undefined,
+          email: email.trim() || undefined,
+          address: address.trim() || undefined,
+          notes: notes.trim() || undefined,
+        },
+        party?.partyId || party?.id
+      );
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to save party record');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const footer = (
+    <>
+      <button
+        type="button"
+        onClick={onClose}
+        disabled={saving}
+        className="px-md py-sm rounded-lg font-body-md font-semibold text-on-surface-variant hover:bg-surface-container transition-colors disabled:opacity-50"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={saving}
+        className="flex items-center gap-xs px-lg py-sm rounded-lg font-body-md font-semibold bg-primary text-on-primary hover:bg-surface-tint shadow-xs transition-all disabled:opacity-50"
+      >
+        {saving && <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>}
+        {party ? 'Update Party' : 'Create Party'}
+      </button>
+    </>
+  );
+
+  return (
+    <BaseModal
+      open={open}
+      onClose={onClose}
+      title={party ? 'Edit Party' : 'Add Party'}
+      subtitle={party ? `Manage profile for ${party.partyName || party.name}` : 'Register a new customer, vendor, or workshop.'}
+      icon="domain"
+      maxWidth="lg"
+      footer={footer}
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-md">
+        {error && (
+          <div className="bg-error-container text-on-error-container px-md py-sm rounded-lg text-sm flex items-center gap-2 border border-error/20">
+            <span className="material-symbols-outlined text-[18px]">error</span>
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+          <div className="flex flex-col gap-xs col-span-1 md:col-span-2">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Party Name *
+            </label>
+            <input
+              type="text"
+              value={partyName}
+              onChange={(e) => setPartyName(e.target.value)}
+              placeholder="e.g. Acme Gems Co. / Harshil Jewels"
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-xs">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Party Type
+            </label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            >
+              {PARTY_TYPES.map((pt) => (
+                <option key={pt.value} value={pt.value}>
+                  {pt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {isBrokerType(type) && (
+            <div className="flex flex-col gap-xs col-span-1 md:col-span-2 bg-purple-50/80 border border-purple-200 p-md rounded-xl animate-fade-in">
+              <label className="font-caption text-caption font-bold text-purple-900 uppercase tracking-wider flex items-center gap-1">
+                <span className="material-symbols-outlined text-[16px] text-purple-600">percent</span>
+                Default Brokerage Commission (%)
+              </label>
+              <div className="flex items-center gap-sm">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={brokeragePercentage}
+                  onChange={(e) => setBrokeragePercentage(e.target.value)}
+                  placeholder="e.g. 1.0 or 2.0"
+                  className="w-full px-md py-sm border border-purple-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-500 text-on-surface font-body-md"
+                />
+                <span className="text-sm font-bold text-purple-800">%</span>
+              </div>
+              <p className="text-[11px] text-purple-700">
+                This rate will automatically pre-fill brokerage calculations whenever this party is selected in transactions.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-xs">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Outstanding Balance (₹)
+            </label>
+            <input
+              type="number"
+              value={outstandingBalance}
+              onChange={(e) => setOutstandingBalance(e.target.value)}
+              placeholder="0.00"
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            />
+          </div>
+
+          <div className="flex flex-col gap-xs">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Contact Phone
+            </label>
+            <input
+              type="text"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 98765 43210"
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            />
+          </div>
+
+          <div className="flex flex-col gap-xs">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Email Address
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="contact@company.com"
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            />
+          </div>
+
+          <div className="flex flex-col gap-xs col-span-1 md:col-span-2">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              Notes / Warnings (Optional)
+            </label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. VIP client, requires net-30 terms"
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            />
+          </div>
+        </div>
+      </form>
+    </BaseModal>
+  );
+};

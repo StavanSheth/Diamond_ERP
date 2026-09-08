@@ -1,5 +1,5 @@
 {
-  "name": "diamond-erp-v3-frontend",
+  "name": "@diamond-erp/web",
   "private": true,
   "version": "3.0.0",
   "type": "module",
@@ -12,9 +12,10 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@diamond-erp/contracts": "*",
+    "@diamond-erp/shared-utils": "*",
     "dexie": "^4.4.5",
     "i18next": "^26.4.0",
-    "puppeteer": "^25.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-i18next": "^17.0.12",

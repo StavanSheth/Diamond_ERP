@@ -1,15 +1,15 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { DraftSyncStatus } from '../drafts/DraftSyncStatus';
+import { useAppLock } from '../../contexts/AppLockContext';
 
 const navItems = [
   { to: '/', icon: 'dashboard', label: 'Dashboard' },
   { to: '/inventory', icon: 'inventory_2', label: 'Inventory', fill: true },
+  { to: '/ledger', icon: 'receipt_long', label: 'Ledger' },
   { to: '/certificates', icon: 'verified', label: 'Certificates' },
   { to: '/repairs', icon: 'build', label: 'Repairs' },
   { to: '/parties', icon: 'domain', label: 'Parties' },
-  { to: '/drafts', icon: 'draft', label: 'Drafts' },
   { to: '/reports', icon: 'analytics', label: 'Reports' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
@@ -21,6 +21,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ syncStatus, lastSyncedAt }) => {
   const { t } = useTranslation();
+  const { isAppLockEnabled, lockNow } = useAppLock();
   const syncTime = lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : 'Never';
 
   return (
@@ -61,13 +62,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ syncStatus, lastSyncedAt }) =>
         ))}
       </div>
 
-      {/* Sync Status */}
-      <div className="mt-auto border-t border-outline-variant pt-md px-md pb-md">
-        <DraftSyncStatus 
-          syncState={(syncStatus as any) || 'IDLE'} 
-          lastSavedAgo={null} 
-        />
+      {/* Sidebar Footer Controls */}
+      <div className="pt-sm border-t border-outline-variant flex flex-col gap-2">
+        {isAppLockEnabled && (
+          <button
+            type="button"
+            onClick={lockNow}
+            className="flex items-center justify-center gap-2 w-full py-2 px-3 bg-surface-container hover:bg-surface-container-high border border-outline-variant rounded-lg text-xs font-bold text-on-surface transition-colors"
+            title={t('Lock App Screen')}
+          >
+            <span className="material-symbols-outlined text-[16px] text-primary">lock</span>
+            <span>{t('Lock App Screen')}</span>
+          </button>
+        )}
+        <div className="px-2 text-[10px] text-on-surface-variant flex items-center justify-between">
+          <span>Sync: {syncStatus}</span>
+          <span>{syncTime}</span>
+        </div>
       </div>
     </nav>
   );
 };
+

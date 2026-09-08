@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { LedgerView } from '../components/ledger/LedgerView';
+import { LedgerView } from '../domains/ledger/components/LedgerView';
 
 export const LedgerPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -10,6 +10,8 @@ export const LedgerPage: React.FC = () => {
   const [selectedStock, setSelectedStock] = useState<string>(searchParams.get('stock') || '');
   const [selectedParty, setSelectedParty] = useState<string>(searchParams.get('party') || '');
   const [selectedItemCode, setSelectedItemCode] = useState<string>(searchParams.get('itemCode') || '');
+  const [selectedCertificateId, setSelectedCertificateId] = useState<string>(searchParams.get('certificateId') || '');
+  const [selectedRepairId, setSelectedRepairId] = useState<string>(searchParams.get('repairId') || '');
 
   useEffect(() => {
     const stockParam = searchParams.get('stock');
@@ -18,6 +20,10 @@ export const LedgerPage: React.FC = () => {
     if (partyParam !== null && partyParam !== selectedParty) setSelectedParty(partyParam);
     const itemCodeParam = searchParams.get('itemCode');
     if (itemCodeParam !== null && itemCodeParam !== selectedItemCode) setSelectedItemCode(itemCodeParam);
+    const certParam = searchParams.get('certificateId');
+    if (certParam !== null && certParam !== selectedCertificateId) setSelectedCertificateId(certParam);
+    const repairParam = searchParams.get('repairId');
+    if (repairParam !== null && repairParam !== selectedRepairId) setSelectedRepairId(repairParam);
   }, [searchParams]);
 
   const handleStockChange = (newStock: string) => {
@@ -33,6 +39,8 @@ export const LedgerPage: React.FC = () => {
       stockId={selectedStock}
       partyId={selectedParty}
       itemCode={selectedItemCode}
+      certificateId={selectedCertificateId}
+      repairId={selectedRepairId}
       onStockChange={handleStockChange}
       resumeDraft={resumeDraft}
     />

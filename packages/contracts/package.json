@@ -1,0 +1,14 @@
+{
+  "name": "@diamond-erp/contracts",
+  "version": "3.0.0",
+  "description": "Canonical contracts, enums, DTOs and constants for DiamondERP",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

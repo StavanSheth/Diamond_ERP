@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+build/
+**/build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.profile-config.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak*
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/*.db.bak*
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
+
+# Uploads (user content)
+uploads/
+**/uploads/
+storage/
+**/storage/

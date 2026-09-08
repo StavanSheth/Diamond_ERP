@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { saveLocalDraft, markDraftSynced, type LocalDraft } from '../services/draftDb';
-import { api } from '../services/api';
+import { saveLocalDraft, type LocalDraft } from '../services/draftDb';
 
-export type SyncState = 'IDLE' | 'SAVING_LOCAL' | 'SYNCING' | 'SYNCED' | 'OFFLINE' | 'SYNC_FAILED';
+export type SyncState = 'IDLE' | 'SAVING_LOCAL' | 'SYNCED' | 'OFFLINE';
 
 interface UseDraftAutoSaveOptions {
   entityType: string;
   entityId?: string;
   ledgerId?: string;
   createdBy?: string;
+  /** Whether auto-save is enabled (manual toggle) */
+  enabled?: boolean;
   /** Debounce for local autosave (Level A), default 1000ms */
   localDebounceMs?: number;
   /** Interval for server draft sync (Level B), default 10000ms */
@@ -53,7 +54,8 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
     serverSyncIntervalMs = 10000,
     initialDraftId = null,
     initialDraftNumber = null,
-    initialLocalId = undefined
+    initialLocalId = undefined,
+    enabled = true
   } = options;
 
   const [syncState, setSyncState] = useState<SyncState>('IDLE');
@@ -82,6 +84,7 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
 
   // ── Level A: Local AutoSave ──
   const saveLocally = useCallback(async (payload: Record<string, unknown>) => {
+    if (!enabled) return;
     setSyncState('SAVING_LOCAL');
 
     const nextRevision = (localDraftRef.current?.localRevision ?? 0) + 1;
@@ -112,71 +115,18 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
     if (!draftId) {
       setSyncState('IDLE');
     }
-  }, [entityType, entityId, ledgerId, createdBy, draftId]);
+  }, [enabled, entityType, entityId, ledgerId, createdBy, draftId]);
 
   // ── Level B: Server Draft Sync ──
-  const syncToServer = useCallback(async () => {
-    if (!hasUnsyncedChanges.current || !localDraftRef.current) return;
-
-    const payload = localDraftRef.current.payload;
-    setSyncState('SYNCING');
-
-    try {
-      if (!draftId) {
-        // First sync: create draft on server
-        const res = await api.createDraft({
-          entityType,
-          entityId,
-          ledgerId,
-          payload,
-          createdBy,
-        });
-        const serverDraft = res.data;
-        setDraftId(serverDraft.id);
-        setDraftNumber(serverDraft.draftNumber);
-        if (localDraftRef.current?.id) {
-          await markDraftSynced(localDraftRef.current.id, serverDraft.id, serverDraft.draftNumber);
-        }
-      } else {
-        // Subsequent syncs: save revision
-        await api.saveDraftRevision(draftId, {
-          payload,
-          changeSummary: pendingSummaryRef.current,
-          updatedBy: createdBy,
-        });
-        if (localDraftRef.current?.id) {
-          await markDraftSynced(localDraftRef.current.id, draftId, draftNumber || '');
-        }
-      }
-
-      hasUnsyncedChanges.current = false;
-      pendingSummaryRef.current = undefined;
-      setSyncState('SYNCED');
-    } catch (err) {
-      console.error('Server sync failed:', err);
-      // Check if it's a network error
-      if (err instanceof TypeError && err.message.includes('fetch')) {
-        setSyncState('OFFLINE');
-      } else {
-        setSyncState('SYNC_FAILED');
-      }
-    }
-  }, [draftId, draftNumber, entityType, entityId, ledgerId, createdBy]);
-
-  // Server sync interval
-  useEffect(() => {
-    serverSyncTimer.current = setInterval(() => {
-      syncToServer();
-    }, serverSyncIntervalMs);
-
-    return () => {
-      if (serverSyncTimer.current) clearInterval(serverSyncTimer.current);
-    };
-  }, [syncToServer, serverSyncIntervalMs]);
+  // Server sync has been disabled as drafts are now entirely local.
 
   // ── Public: onPayloadChange ──
   const onPayloadChange = useCallback(
     (payload: Record<string, unknown>, changeSummary?: string) => {
+      if (!enabled) {
+        if (localDebounceTimer.current) clearTimeout(localDebounceTimer.current);
+        return;
+      }
       pendingPayloadRef.current = payload;
       if (changeSummary) pendingSummaryRef.current = changeSummary;
 
@@ -186,17 +136,17 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
         saveLocally(payload);
       }, localDebounceMs);
     },
-    [saveLocally, localDebounceMs],
+    [enabled, saveLocally, localDebounceMs],
   );
 
   // ── Public: forceServerSync ──
   const forceServerSync = useCallback(async () => {
+    if (!enabled) return;
     // First save locally if there's pending data
     if (pendingPayloadRef.current) {
       await saveLocally(pendingPayloadRef.current);
     }
-    await syncToServer();
-  }, [saveLocally, syncToServer]);
+  }, [enabled, saveLocally]);
 
   // Cleanup on unmount and listen to network status
   useEffect(() => {
@@ -221,7 +171,7 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
 
   return {
     syncState,
-    draftId,
+    draftId: localDraftRef.current?.id?.toString() || null,
     draftNumber,
     localRevision,
     lastSavedAgo,

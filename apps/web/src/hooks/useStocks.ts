@@ -32,10 +32,10 @@ export function useStocks(): UseStocksReturn {
       if (showLoading) setLoading(true);
       setSyncStatus('syncing');
       const result = await api.getStocks();
-      setStocks(result.data);
-      setLastSyncedAt(result.lastSyncedAt);
-      setPerformance(result.performance);
-      setSyncStatus(result.syncStatus);
+      setStocks(Array.isArray(result?.data) ? result.data : []);
+      setLastSyncedAt(result.lastSyncedAt ?? null);
+      setPerformance(result.performance ?? null);
+      setSyncStatus(result.syncStatus ?? 'success');
       setError(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to fetch stocks';
@@ -46,7 +46,8 @@ export function useStocks(): UseStocksReturn {
     }
   }, []);
 
-  // Initial fetch + 30s polling (Google Sheets API allows 60 reads/min/user)
+  // Initial fetch + periodic refresh (30s interval)
+  // TODO: Consider reducing interval or switching to event-driven updates now that we use a local DB
   useEffect(() => {
     fetchStocks(true);
     intervalRef.current = window.setInterval(() => fetchStocks(false), 30000);
@@ -58,10 +59,8 @@ export function useStocks(): UseStocksReturn {
   const createStock = useCallback(async (dto: CreateStockDTO) => {
     setLoading(true);
     try {
-      const result = await api.createStock(dto);
-      setStocks(result.data);
-      setLastSyncedAt(result.lastSyncedAt);
-      setPerformance(result.performance);
+      await api.createStock(dto);
+      await fetchStocks(false);
       setError(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to create stock';
@@ -70,15 +69,13 @@ export function useStocks(): UseStocksReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchStocks]);
 
   const updateStock = useCallback(async (id: string, dto: UpdateStockDTO) => {
     setLoading(true);
     try {
-      const result = await api.updateStock(id, dto);
-      setStocks(result.data);
-      setLastSyncedAt(result.lastSyncedAt);
-      setPerformance(result.performance);
+      await api.updateStock(id, dto);
+      await fetchStocks(false);
       setError(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to update stock';
@@ -87,15 +84,13 @@ export function useStocks(): UseStocksReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchStocks]);
 
   const deleteStock = useCallback(async (id: string) => {
     setLoading(true);
     try {
-      const result = await api.deleteStock(id);
-      setStocks(result.data);
-      setLastSyncedAt(result.lastSyncedAt);
-      setPerformance(result.performance);
+      await api.deleteStock(id);
+      await fetchStocks(false);
       setError(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to delete stock';
@@ -104,7 +99,7 @@ export function useStocks(): UseStocksReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchStocks]);
 
   return {
     stocks,

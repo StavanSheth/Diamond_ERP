@@ -1,0 +1,14 @@
+{
+  "name": "@diamond-erp/shared-utils",
+  "version": "3.0.0",
+  "description": "Pure shared domain calculations, Indian currency formatters, and query filter parsers",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

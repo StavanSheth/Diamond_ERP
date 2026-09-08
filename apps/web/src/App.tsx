@@ -9,10 +9,11 @@ import { PartiesPage } from './pages/PartiesPage';
 import { RepairsPage } from './pages/RepairsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportsPage } from './pages/ReportsPage';
-import DraftsPage from './pages/DraftsPage';
 import { useStocks } from './hooks/useStocks';
+import { AppLockProvider } from './contexts/AppLockContext';
+import { AppLockOverlay } from './components/security/AppLockOverlay';
 
-function App() {
+function AppContent() {
   const {
     stocks,
     loading,
@@ -27,6 +28,9 @@ function App() {
 
   return (
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">
+      {/* App Lock Fullscreen Overlay */}
+      <AppLockOverlay />
+
       {/* Sidebar (desktop) */}
       <Sidebar syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} />
 
@@ -64,7 +68,6 @@ function App() {
           <Route path="/certificates" element={<CertificatesPage />} />
           <Route path="/parties" element={<PartiesPage />} />
           <Route path="/repairs" element={<RepairsPage />} />
-          <Route path="/drafts" element={<DraftsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -74,4 +77,13 @@ function App() {
   );
 }
 
+function App() {
+  return (
+    <AppLockProvider>
+      <AppContent />
+    </AppLockProvider>
+  );
+}
+
 export default App;
+

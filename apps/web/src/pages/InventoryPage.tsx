@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { StockItem, CreateStockDTO, UpdateStockDTO } from '../types/stock';
+import { StockItem, CreateStockDTO, UpdateStockDTO, SHAPES, CUTS, CLARITIES, COLORS, SYMMETRIES, POLISHES } from '../types/stock';
 import { api } from '../services/api';
-import { StockCard } from '../components/inventory/StockCard';
-import { StockModal } from '../components/inventory/StockModal';
-import { ConfirmDialog } from '../components/common/ConfirmDialog';
-import { StatusBadge } from '../components/common/StatusBadge';
-import { StockActionDialog } from '../components/inventory/StockActionDialog';
+import { StockCard } from '../domains/inventory/components/StockCard';
+import { StockModal } from '../domains/inventory/components/StockModal';
+import { ConfirmDialog } from '../domains/common/components/ConfirmDialog';
+import { StatusBadge } from '../domains/common/components/StatusBadge';
+import { StockActionDialog } from '../domains/inventory/components/StockActionDialog';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { PaymentSummaryBanner } from '../components/common/PaymentSummaryBanner';
+import { PaymentSummaryBanner } from '../domains/common/components/PaymentSummaryBanner';
 import { formatCurrency, formatNumber } from '../utils/format';
+import { EntityReportModal } from '../components/reports/EntityReportModal';
+import { EntityPreloader } from '../domains/common/components/EntityPreloader';
 
 interface InventoryPageProps {
   stocks: StockItem[];
@@ -18,6 +20,14 @@ interface InventoryPageProps {
   updateStock: (id: string, dto: UpdateStockDTO) => Promise<void>;
   deleteStock: (id: string) => Promise<void>;
 }
+
+// Aliases for backward compatibility within this file
+const SHAPE_OPTIONS = SHAPES;
+const COLOR_OPTIONS = COLORS;
+const CLARITY_OPTIONS = CLARITIES;
+const CUT_OPTIONS = CUTS;
+const SYMMETRY_OPTIONS = SYMMETRIES;
+const POLISH_OPTIONS = POLISHES;
 
 export const InventoryPage: React.FC<InventoryPageProps> = ({
   stocks,
@@ -29,6 +39,10 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
 }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
+
+  // Report Modal State
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [selectedStockForReport, setSelectedStockForReport] = useState<any>(null);
   
   // Initialize status from URL if present
   const initialStatus = searchParams.get('status');
@@ -44,22 +58,29 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
   const [hasRepairs, setHasRepairs] = useState<boolean>(false);
   const [hasCertificates, setHasCertificates] = useState<boolean>(false);
   
-  // New backend filters
+  // Multi-select specs
+  const [selectedShapes, setSelectedShapes] = useState<string[]>([]);
+  const [selectedColors, setSelectedColors] = useState<string[]>([]);
+  const [selectedClarities, setSelectedClarities] = useState<string[]>([]);
+  const [selectedCuts, setSelectedCuts] = useState<string[]>([]);
+  const [selectedSymmetries, setSelectedSymmetries] = useState<string[]>([]);
+  const [selectedPolishes, setSelectedPolishes] = useState<string[]>([]);
+
+  // Payment Aging filter
+  const [paymentDirection, setPaymentDirection] = useState<string>('All');
+  const [agingDays, setAgingDays] = useState<string>('All');
+
+  // Classification & Transaction
   const [category, setCategory] = useState<string>('All');
   const [transactionType, setTransactionType] = useState<string>('All');
-  const [shape, setShape] = useState<string>('All');
-  const [color, setColor] = useState<string>('All');
-  const [clarity, setClarity] = useState<string>('All');
-  const [cut, setCut] = useState<string>('All');
-  const [symmetry, setSymmetry] = useState<string>('All');
-  const [polish, setPolish] = useState<string>('All');
 
   // Staged filters for 'Apply Filters' button
   const [appliedFilters, setAppliedFilters] = useState({
     minCarat: '', maxCarat: '', minPrice: '', maxPrice: '', locationFilter: '',
     hasRepairs: false, hasCertificates: false,
-    category: 'All', transactionType: 'All', shape: 'All', color: 'All', 
-    clarity: 'All', cut: 'All', symmetry: 'All', polish: 'All'
+    category: 'All', transactionType: 'All',
+    shape: 'All', color: 'All', clarity: 'All', cut: 'All', symmetry: 'All', polish: 'All',
+    paymentDirection: 'All', agingDays: 'All',
   });
 
   // Local state for backend filtered stocks
@@ -67,14 +88,16 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
   const [isFiltering, setIsFiltering] = useState(false);
 
   useEffect(() => {
-    const hasAdvanced = appliedFilters.category !== 'All' || 
-                        appliedFilters.transactionType !== 'All' || 
-                        appliedFilters.shape !== 'All' || 
-                        appliedFilters.color !== 'All' || 
-                        appliedFilters.clarity !== 'All' || 
-                        appliedFilters.cut !== 'All' || 
-                        appliedFilters.symmetry !== 'All' || 
-                        appliedFilters.polish !== 'All' || 
+    const hasAdvanced = (appliedFilters.category && appliedFilters.category !== 'All') || 
+                        (appliedFilters.transactionType && appliedFilters.transactionType !== 'All') || 
+                        (appliedFilters.shape && appliedFilters.shape !== 'All') || 
+                        (appliedFilters.color && appliedFilters.color !== 'All') || 
+                        (appliedFilters.clarity && appliedFilters.clarity !== 'All') || 
+                        (appliedFilters.cut && appliedFilters.cut !== 'All') || 
+                        (appliedFilters.symmetry && appliedFilters.symmetry !== 'All') || 
+                        (appliedFilters.polish && appliedFilters.polish !== 'All') || 
+                        (appliedFilters.paymentDirection && appliedFilters.paymentDirection !== 'All') ||
+                        (appliedFilters.agingDays && appliedFilters.agingDays !== 'All') ||
                         appliedFilters.minCarat !== '' || 
                         appliedFilters.maxCarat !== '' || 
                         appliedFilters.minPrice !== '' || 
@@ -91,6 +114,49 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
     }
   }, [appliedFilters]);
 
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (selectedShapes.length > 0) count++;
+    if (selectedColors.length > 0) count++;
+    if (selectedClarities.length > 0) count++;
+    if (selectedCuts.length > 0) count++;
+    if (selectedSymmetries.length > 0) count++;
+    if (selectedPolishes.length > 0) count++;
+    if (paymentDirection !== 'All') count++;
+    if (agingDays !== 'All') count++;
+    if (category !== 'All') count++;
+    if (transactionType !== 'All') count++;
+    if (minCarat || maxCarat) count++;
+    if (minPrice || maxPrice) count++;
+    if (locationFilter) count++;
+    if (hasRepairs) count++;
+    if (hasCertificates) count++;
+    return count;
+  }, [
+    selectedShapes, selectedColors, selectedClarities, selectedCuts, selectedSymmetries, selectedPolishes,
+    paymentDirection, agingDays, category, transactionType, minCarat, maxCarat, minPrice, maxPrice,
+    locationFilter, hasRepairs, hasCertificates
+  ]);
+
+  const toggleMultiSelect = (item: string, current: string[], setter: (val: string[]) => void) => {
+    setter(current.includes(item) ? current.filter((x) => x !== item) : [...current, item]);
+  };
+
+  const applyAdvancedFilters = () => {
+    setAppliedFilters({
+      minCarat, maxCarat, minPrice, maxPrice, locationFilter, hasRepairs, hasCertificates,
+      category, transactionType,
+      shape: selectedShapes.length > 0 ? selectedShapes.join(',') : 'All',
+      color: selectedColors.length > 0 ? selectedColors.join(',') : 'All',
+      clarity: selectedClarities.length > 0 ? selectedClarities.join(',') : 'All',
+      cut: selectedCuts.length > 0 ? selectedCuts.join(',') : 'All',
+      symmetry: selectedSymmetries.length > 0 ? selectedSymmetries.join(',') : 'All',
+      polish: selectedPolishes.length > 0 ? selectedPolishes.join(',') : 'All',
+      paymentDirection,
+      agingDays,
+    });
+  };
+
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [modalOpen, setModalOpen] = useState(false);
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
@@ -101,8 +167,9 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
 
   // Filtered stocks (client side applied on top of backend)
   const filteredStocks = useMemo(() => {
-    const baseStocks = localStocks !== null ? localStocks : stocks;
-    return (baseStocks || []).filter((s) => {
+    const rawStocks = localStocks !== null ? localStocks : stocks;
+    const baseStocks = Array.isArray(rawStocks) ? rawStocks : [];
+    return baseStocks.filter((s) => {
       const matchesSearch = !search || 
         s.stockName.toLowerCase().includes(search.toLowerCase()) ||
         s.id.toLowerCase().includes(search.toLowerCase()) ||
@@ -116,13 +183,6 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
       return matchesSearch && matchesStatus && matchesLocation && meetsRepairs && meetsCertificates;
     });
   }, [stocks, localStocks, search, statusFilter, appliedFilters]);
-
-  const applyAdvancedFilters = () => {
-    setAppliedFilters({
-      minCarat, maxCarat, minPrice, maxPrice, locationFilter, hasRepairs, hasCertificates,
-      category, transactionType, shape, color, clarity, cut, symmetry, polish
-    });
-  };
 
   const toggleStatusFilter = (status: string) => {
     setStatusFilter((prev) => {
@@ -164,7 +224,8 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    (stocks || []).forEach((s) => { counts[s.status] = (counts[s.status] || 0) + 1; });
+    const list = Array.isArray(stocks) ? stocks : [];
+    list.forEach((s) => { counts[s.status] = (counts[s.status] || 0) + 1; });
     return counts;
   }, [stocks]);
 
@@ -195,10 +256,19 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
           
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className={`flex items-center gap-xs px-md py-sm rounded-lg border transition-colors font-headline-sm text-headline-sm ${showAdvanced ? 'bg-primary-container border-primary-container text-on-primary-container' : 'bg-surface-container-low border-outline-variant text-on-surface hover:bg-surface-container-high'}`}
+            className={`flex items-center gap-xs px-md py-sm rounded-lg border transition-all font-headline-sm text-headline-sm ${
+              showAdvanced || activeFilterCount > 0
+                ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-xs'
+                : 'bg-surface-container-low border-outline-variant text-on-surface hover:bg-surface-container-high'
+            }`}
           >
             <span className="material-symbols-outlined text-[20px]">tune</span>
             Filters
+            {activeFilterCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold bg-emerald-600 text-white leading-none">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
 
           <div className="h-8 w-px bg-outline-variant mx-sm hidden md:block" />
@@ -218,6 +288,20 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
               <span className="material-symbols-outlined">table_rows</span>
             </button>
           </div>
+
+          {/* Report button */}
+          <button
+            id="btn-inventory-report"
+            onClick={() => {
+              setSelectedStockForReport(null);
+              setReportModalOpen(true);
+            }}
+            className="flex items-center gap-xs px-md py-sm bg-white border border-outline-variant text-on-surface hover:bg-surface-container-high rounded-lg transition-colors font-headline-sm text-headline-sm shadow-xs"
+            title="Generate Inventory Valuation & Stock Report"
+          >
+            <span className="material-symbols-outlined text-[20px] text-indigo-600">summarize</span>
+            Report
+          </button>
 
           {/* Add Stock button */}
           <button
@@ -258,215 +342,514 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
       
       {/* Advanced Filters Panel */}
       {showAdvanced && (
-        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg mb-xl shadow-sm animate-in fade-in slide-in-from-top-4 duration-200">
-          <h3 className="font-headline-sm text-headline-sm text-on-surface mb-md">Advanced Filters</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Location</label>
-              <input
-                type="text"
-                value={locationFilter}
-                onChange={(e) => setLocationFilter(e.target.value)}
-                placeholder="e.g. Vault"
-                className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md"
-              />
-            </div>
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Min Carat</label>
-              <input
-                type="number"
-                value={minCarat}
-                onChange={(e) => setMinCarat(e.target.value)}
-                placeholder="e.g. 10.5"
-                className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md"
-              />
-            </div>
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Max Carat</label>
-              <input
-                type="number"
-                value={maxCarat}
-                onChange={(e) => setMaxCarat(e.target.value)}
-                placeholder="e.g. 50.0"
-                className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md"
-              />
-            </div>
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Min Price (₹)</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0"
-                  max="10000000"
-                  step="10000"
-                  value={minPrice || 0}
-                  onChange={(e) => setMinPrice(e.target.value)}
-                  className="flex-1"
-                />
-                <input
-                  type="number"
-                  value={minPrice}
-                  onChange={(e) => setMinPrice(e.target.value)}
-                  placeholder="Min"
-                  className="w-24 px-sm py-xs bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md text-right"
-                />
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-lg mb-xl shadow-sm animate-in fade-in slide-in-from-top-4 duration-200 space-y-5">
+          {/* Header */}
+          <div className="flex flex-wrap items-center justify-between gap-sm border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <span className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
+                <span className="material-symbols-outlined text-[20px]">tune</span>
+              </span>
+              <div>
+                <h3 className="font-headline-sm text-headline-sm text-slate-900 font-bold">
+                  Advanced Filters & Diamond Specs
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Select multiple specifications, aging periods, or price and carat ranges
+                </p>
               </div>
             </div>
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Max Price (₹)</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0"
-                  max="100000000"
-                  step="100000"
-                  value={maxPrice || 100000000}
-                  onChange={(e) => setMaxPrice(e.target.value)}
-                  className="flex-1"
-                />
-                <input
-                  type="number"
-                  value={maxPrice}
-                  onChange={(e) => setMaxPrice(e.target.value)}
-                  placeholder="Max"
-                  className="w-24 px-sm py-xs bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md text-right"
-                />
-              </div>
-            </div>
-            <div className="flex flex-col gap-sm justify-center pt-md">
-              <label className="flex items-center gap-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={hasRepairs}
-                  onChange={(e) => setHasRepairs(e.target.checked)}
-                  className="w-4 h-4 text-primary rounded border-outline-variant focus:ring-primary"
-                />
-                <span className="font-body-md text-body-md text-on-surface">Has Items in Repair</span>
-              </label>
-              <label className="flex items-center gap-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={hasCertificates}
-                  onChange={(e) => setHasCertificates(e.target.checked)}
-                  className="w-4 h-4 text-primary rounded border-outline-variant focus:ring-primary"
-                />
-                <span className="font-body-md text-body-md text-on-surface">Has Certified Items</span>
-              </label>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Category</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md"
+            <div className="flex items-center gap-2">
+              {activeFilterCount > 0 && (
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                  {activeFilterCount} Active {activeFilterCount === 1 ? 'Filter' : 'Filters'}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedShapes([]);
+                  setSelectedColors([]);
+                  setSelectedClarities([]);
+                  setSelectedCuts([]);
+                  setSelectedSymmetries([]);
+                  setSelectedPolishes([]);
+                  setPaymentDirection('All');
+                  setAgingDays('All');
+                  setLocationFilter('');
+                  setMinCarat('');
+                  setMaxCarat('');
+                  setMinPrice('');
+                  setMaxPrice('');
+                  setHasRepairs(false);
+                  setHasCertificates(false);
+                  setCategory('All');
+                  setTransactionType('All');
+                  setAppliedFilters({
+                    minCarat: '', maxCarat: '', minPrice: '', maxPrice: '', locationFilter: '',
+                    hasRepairs: false, hasCertificates: false, category: 'All', transactionType: 'All',
+                    shape: 'All', color: 'All', clarity: 'All', cut: 'All', symmetry: 'All', polish: 'All',
+                    paymentDirection: 'All', agingDays: 'All'
+                  });
+                }}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
               >
-                <option value="All">All Categories</option>
-                <option value="SINGLE">Single</option>
-                <option value="PARCEL">Parcel / Mix</option>
-                <option value="ROUGH">Rough</option>
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Type of Transaction</label>
-              <select
-                value={transactionType}
-                onChange={(e) => setTransactionType(e.target.value)}
-                className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md"
-              >
-                <option value="All">Any Transaction</option>
-                <option value="PURCHASE">Purchase</option>
-                <option value="SALE">Sale</option>
-                <option value="REPAIR_OUT">Repair Sent</option>
-                <option value="REPAIR_IN">Repair Receive</option>
-                <option value="CERTIFICATION">Certificate Sent</option>
-                <option value="CERTIFICATION_IN">Certificate Receive</option>
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Shape</label>
-              <select value={shape} onChange={(e) => setShape(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any Shape</option>
-                {['Round', 'Princess', 'Cushion', 'Emerald', 'Oval', 'Pear'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Color</label>
-              <select value={color} onChange={(e) => setColor(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any Color</option>
-                {['D', 'E', 'F', 'G', 'H', 'I', 'J'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Clarity</label>
-              <select value={clarity} onChange={(e) => setClarity(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any Clarity</option>
-                {['FL', 'IF', 'VVS1', 'VVS2', 'VS1', 'VS2', 'SI1'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Cut</label>
-              <select value={cut} onChange={(e) => setCut(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any</option>
-                {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Sym.</label>
-              <select value={symmetry} onChange={(e) => setSymmetry(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any</option>
-                {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block font-caption text-caption text-on-surface-variant mb-xs">Pol.</label>
-              <select value={polish} onChange={(e) => setPolish(e.target.value)} className="w-full px-md py-sm bg-surface border border-outline-variant rounded text-on-surface focus:ring-1 focus:ring-primary focus:border-primary font-body-md text-body-md">
-                <option value="All">Any</option>
-                {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+                Reset All
+              </button>
             </div>
           </div>
-          <div className="flex justify-end gap-sm mt-md">
-             <button
-               onClick={() => {
-                 setLocationFilter('');
-                 setMinCarat('');
-                 setMaxCarat('');
-                 setMinPrice('');
-                 setMaxPrice('');
-                 setHasRepairs(false);
-                 setHasCertificates(false);
-                 setCategory('All');
-                 setTransactionType('All');
-                 setShape('All');
-                 setColor('All');
-                 setClarity('All');
-                 setCut('All');
-                 setSymmetry('All');
-                 setPolish('All');
-                 setAppliedFilters({
-                   minCarat: '', maxCarat: '', minPrice: '', maxPrice: '', locationFilter: '',
-                   hasRepairs: false, hasCertificates: false, category: 'All', transactionType: 'All',
-                   shape: 'All', color: 'All', clarity: 'All', cut: 'All', symmetry: 'All', polish: 'All'
-                 });
-               }}
-               className="px-md py-sm text-primary font-headline-sm text-headline-sm hover:bg-surface-container-low rounded-lg transition-colors"
-             >
-               Clear Filters
-             </button>
-             <button
-               onClick={applyAdvancedFilters}
-               className="px-md py-sm bg-primary text-on-primary font-headline-sm text-headline-sm rounded-lg hover:bg-surface-tint transition-colors shadow-sm"
-             >
-               Apply Filters
-             </button>
+
+          {/* Section 1: Multi-Select Diamond Specs */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="material-symbols-outlined text-[18px] text-emerald-600">diamond</span>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Diamond Grading Specifications (Multi-Select)
+              </h4>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50/60 p-3.5 rounded-xl border border-slate-100">
+              {/* Shape Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Shape {selectedShapes.length > 0 && <span className="text-emerald-600">({selectedShapes.length})</span>}
+                  </span>
+                  {selectedShapes.length > 0 && (
+                    <button type="button" onClick={() => setSelectedShapes([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {SHAPE_OPTIONS.map((s) => {
+                    const active = selectedShapes.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => toggleMultiSelect(s, selectedShapes, setSelectedShapes)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Color Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Color {selectedColors.length > 0 && <span className="text-emerald-600">({selectedColors.length})</span>}
+                  </span>
+                  {selectedColors.length > 0 && (
+                    <button type="button" onClick={() => setSelectedColors([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {COLOR_OPTIONS.map((c) => {
+                    const active = selectedColors.includes(c);
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => toggleMultiSelect(c, selectedColors, setSelectedColors)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Clarity Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Clarity {selectedClarities.length > 0 && <span className="text-emerald-600">({selectedClarities.length})</span>}
+                  </span>
+                  {selectedClarities.length > 0 && (
+                    <button type="button" onClick={() => setSelectedClarities([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {CLARITY_OPTIONS.map((cl) => {
+                    const active = selectedClarities.includes(cl);
+                    return (
+                      <button
+                        key={cl}
+                        type="button"
+                        onClick={() => toggleMultiSelect(cl, selectedClarities, setSelectedClarities)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {cl}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Cut Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Cut {selectedCuts.length > 0 && <span className="text-emerald-600">({selectedCuts.length})</span>}
+                  </span>
+                  {selectedCuts.length > 0 && (
+                    <button type="button" onClick={() => setSelectedCuts([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {CUT_OPTIONS.map((ct) => {
+                    const active = selectedCuts.includes(ct);
+                    return (
+                      <button
+                        key={ct}
+                        type="button"
+                        onClick={() => toggleMultiSelect(ct, selectedCuts, setSelectedCuts)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {ct}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Symmetry Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Symmetry {selectedSymmetries.length > 0 && <span className="text-emerald-600">({selectedSymmetries.length})</span>}
+                  </span>
+                  {selectedSymmetries.length > 0 && (
+                    <button type="button" onClick={() => setSelectedSymmetries([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {SYMMETRY_OPTIONS.map((sym) => {
+                    const active = selectedSymmetries.includes(sym);
+                    return (
+                      <button
+                        key={sym}
+                        type="button"
+                        onClick={() => toggleMultiSelect(sym, selectedSymmetries, setSelectedSymmetries)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {sym}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Polish Multi-Select */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Polish {selectedPolishes.length > 0 && <span className="text-emerald-600">({selectedPolishes.length})</span>}
+                  </span>
+                  {selectedPolishes.length > 0 && (
+                    <button type="button" onClick={() => setSelectedPolishes([])} className="text-[11px] font-semibold text-emerald-600 hover:underline">Clear</button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {POLISH_OPTIONS.map((p) => {
+                    const active = selectedPolishes.includes(p);
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => toggleMultiSelect(p, selectedPolishes, setSelectedPolishes)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-all ${
+                          active
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-500 font-semibold shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded flex items-center justify-center text-[9px] border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                          {active && '✓'}
+                        </span>
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 2: Payment Due & Aging Filter */}
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="material-symbols-outlined text-[18px] text-amber-600">payments</span>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Payment Due & Aging Filter
+              </h4>
+              <span className="text-xs text-slate-400 font-normal">
+                (Filter client balances to receive or vendor balances to pay across aging buckets)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-amber-50/40 p-3.5 rounded-xl border border-amber-100/80">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Payment Direction
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { id: 'All', label: 'All Directions' },
+                    { id: 'RECEIVABLE', label: 'Clients Due (To Receive)' },
+                    { id: 'PAYABLE', label: 'Vendors Due (To Pay)' },
+                  ].map((dir) => (
+                    <button
+                      key={dir.id}
+                      type="button"
+                      onClick={() => setPaymentDirection(dir.id)}
+                      className={`px-2 py-1.5 rounded-lg text-xs font-semibold border transition-all text-center ${
+                        paymentDirection === dir.id
+                          ? 'bg-amber-100 text-amber-900 border-amber-400 shadow-2xs font-bold'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {dir.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Overdue Aging Period
+                </label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[
+                    { id: 'All', label: 'Any Due' },
+                    { id: '15', label: '> 15d' },
+                    { id: '30', label: '> 30d' },
+                    { id: '45', label: '> 45d' },
+                    { id: '60', label: '> 60d' },
+                  ].map((age) => (
+                    <button
+                      key={age.id}
+                      type="button"
+                      onClick={() => setAgingDays(age.id)}
+                      className={`py-1.5 px-1 rounded-lg text-xs font-semibold border transition-all text-center ${
+                        agingDays === age.id
+                          ? 'bg-amber-100 text-amber-900 border-amber-400 shadow-2xs font-bold'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {age.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Ranges & Categories */}
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="material-symbols-outlined text-[18px] text-slate-500">category</span>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Classification & Price / Weight Ranges
+              </h4>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Category</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="All">All Categories</option>
+                  <option value="SINGLE">Single Stone</option>
+                  <option value="PARCEL">Parcel / Mix</option>
+                  <option value="ROUGH">Rough</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Transaction Type</label>
+                <select
+                  value={transactionType}
+                  onChange={(e) => setTransactionType(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="All">Any Transaction</option>
+                  <option value="PURCHASE">Purchase</option>
+                  <option value="SALE">Sale</option>
+                  <option value="REPAIR_OUT">Repair Sent</option>
+                  <option value="REPAIR_IN">Repair Receive</option>
+                  <option value="CERTIFICATION">Certificate Sent</option>
+                  <option value="CERTIFICATION_IN">Certificate Receive</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Location</label>
+                <input
+                  type="text"
+                  value={locationFilter}
+                  onChange={(e) => setLocationFilter(e.target.value)}
+                  placeholder="e.g. Vault, Mumbai"
+                  className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Carat Weight</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    value={minCarat}
+                    onChange={(e) => setMinCarat(e.target.value)}
+                    placeholder="Min"
+                    className="w-1/2 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm"
+                  />
+                  <span className="text-slate-400">–</span>
+                  <input
+                    type="number"
+                    value={maxCarat}
+                    onChange={(e) => setMaxCarat(e.target.value)}
+                    placeholder="Max"
+                    className="w-1/2 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="lg:col-span-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Price Range (₹)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={minPrice}
+                    onChange={(e) => setMinPrice(e.target.value)}
+                    placeholder="Min ₹"
+                    className="w-1/2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm"
+                  />
+                  <span className="text-slate-400">–</span>
+                  <input
+                    type="number"
+                    value={maxPrice}
+                    onChange={(e) => setMaxPrice(e.target.value)}
+                    placeholder="Max ₹"
+                    className="w-1/2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="lg:col-span-2 flex items-center gap-4 pt-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasRepairs}
+                    onChange={(e) => setHasRepairs(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">Has Items in Repair</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasCertificates}
+                    onChange={(e) => setHasCertificates(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">Has Certified Items</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Footer */}
+          <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedShapes([]);
+                setSelectedColors([]);
+                setSelectedClarities([]);
+                setSelectedCuts([]);
+                setSelectedSymmetries([]);
+                setSelectedPolishes([]);
+                setPaymentDirection('All');
+                setAgingDays('All');
+                setLocationFilter('');
+                setMinCarat('');
+                setMaxCarat('');
+                setMinPrice('');
+                setMaxPrice('');
+                setHasRepairs(false);
+                setHasCertificates(false);
+                setCategory('All');
+                setTransactionType('All');
+                setAppliedFilters({
+                  minCarat: '', maxCarat: '', minPrice: '', maxPrice: '', locationFilter: '',
+                  hasRepairs: false, hasCertificates: false, category: 'All', transactionType: 'All',
+                  shape: 'All', color: 'All', clarity: 'All', cut: 'All', symmetry: 'All', polish: 'All',
+                  paymentDirection: 'All', agingDays: 'All'
+                });
+              }}
+              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+            >
+              Clear All Filters
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-700 rounded-lg"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={applyAdvancedFilters}
+                className="px-5 py-2 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 shadow-sm transition-colors flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-[16px]">check</span>
+                Apply Filters
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -481,20 +864,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
 
       {/* Loading state */}
       {(loading || isFiltering) && (stocks || []).length === 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-gutter">
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-            <div key={i} className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm h-[220px] flex flex-col">
-              <div className="h-1 skeleton rounded-t-xl" />
-              <div className="p-md flex-1 flex flex-col gap-md">
-                <div className="h-5 skeleton rounded w-2/3" />
-                <div className="h-3 skeleton rounded w-1/2" />
-                <div className="flex-1" />
-                <div className="h-8 skeleton rounded w-full" />
-                <div className="h-6 skeleton rounded w-3/4" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <EntityPreloader viewMode={viewMode} count={8} tableColumns={8} />
       )}
 
       {/* Empty state */}
@@ -566,7 +936,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
                     <td className="px-md py-sm">
                       <div>
                         <p className="font-body-md text-body-md text-on-surface font-semibold">{stock.stockName}</p>
-                        <p className="font-caption text-caption text-outline">ID: {stock.id}</p>
+                        <p className="font-caption text-caption text-outline">{stock.reportGroup || 'PARCEL'}</p>
                       </div>
                     </td>
                     <td className="px-md py-sm font-body-md text-body-md text-on-surface-variant">
@@ -633,6 +1003,24 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
             navigate(`/ledger?${qs || `stock=${editStock.id}`}`);
           }
         }}
+        onToggleArchive={async (stockToToggle) => {
+          const isCurrentlyArchived = stockToToggle.status === 'ARCHIVED';
+          await updateStock(stockToToggle.id, {
+            ...stockToToggle,
+            isActive: isCurrentlyArchived,
+            status: isCurrentlyArchived ? 'ACTIVE' : 'ARCHIVED',
+            version: stockToToggle.version || 1,
+          });
+        }}
+      />
+
+      {/* Dedicated Stock & Inventory Valuation Report Modal */}
+      <EntityReportModal
+        isOpen={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+        entityType="STOCK"
+        entityId={selectedStockForReport?.id}
+        entityTitle={selectedStockForReport ? `Stock Valuation Report: ${selectedStockForReport.name}` : 'Comprehensive Inventory Valuation & Stock Master'}
       />
     </div>
   );
