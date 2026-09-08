@@ -580,9 +580,16 @@ namespace DiamondERP.Setup
             {
                 try
                 {
-                    AppendLog("[1/4] Checking environment and database...");
+                    AppendLog("[1/4] Checking environment and clean database...");
                     UpdateProgress(20, "Configuring runtime environment...");
-                    Thread.Sleep(400);
+                    string apiDir = Path.Combine(appDir, "apps", "api");
+                    string schemaFile = Path.Combine(apiDir, "prisma", "schema.prisma");
+                    if (File.Exists(schemaFile))
+                    {
+                        AppendLog("Preparing clean database schema...");
+                        RunProcess("cmd.exe", "/c npx prisma db push --skip-generate", apiDir);
+                    }
+                    Thread.Sleep(300);
 
                     // Compile DiamondERP.exe if missing
                     string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
@@ -685,13 +692,13 @@ namespace DiamondERP.Setup
             }
         }
 
-        private void RunProcess(string fileName, string arguments)
+        private void RunProcess(string fileName, string arguments, string workingDirectory = null)
         {
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = fileName,
                 Arguments = arguments,
-                WorkingDirectory = appDir,
+                WorkingDirectory = workingDirectory ?? appDir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
