@@ -17,6 +17,7 @@ import { SettingsController } from './modules/settings/settings.controller';
 import { createSettingsRouter } from './modules/settings/settings.routes';
 import diamondRouter from './modules/diamonds/diamond.routes';
 import reportsRoutes from './modules/reports/reports.routes';
+import systemRoutes from './modules/system/system.routes';
 
 /**
  * Route aggregator — registers all application routes.
@@ -42,6 +43,7 @@ export function createRoutes(
   router.use('/api/settings', createSettingsRouter(settingsController));
   router.use('/api/diamonds', diamondRouter);
   router.use('/api/reports', reportsRoutes);
+  router.use('/api/system', systemRoutes);
   router.use('/health', createHealthRouter(healthController));
 
   return router;

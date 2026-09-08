@@ -13,6 +13,7 @@ build/
 .env.local
 .env.*.local
 .profile-config.json
+.app-activation.json
 
 # IDE
 .vscode/

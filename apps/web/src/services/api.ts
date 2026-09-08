@@ -387,4 +387,17 @@ export const api = {
       return res.json();
     });
   },
+
+  /** Get lifetime activation / master lock status */
+  getActivationStatus(): Promise<{ success: boolean; isActivated: boolean }> {
+    return request<{ success: boolean; isActivated: boolean }>('/api/system/activation-status');
+  },
+
+  /** Activate application with master password */
+  activateApp(password: string): Promise<{ success: boolean; message?: string }> {
+    return request<{ success: boolean; message?: string }>('/api/system/activate', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    });
+  },
 };

@@ -12,6 +12,7 @@ import { ReportsPage } from './pages/ReportsPage';
 import { useStocks } from './hooks/useStocks';
 import { AppLockProvider } from './contexts/AppLockContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
+import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
 
 function AppContent() {
   const {
@@ -28,6 +29,9 @@ function AppContent() {
 
   return (
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">
+      {/* First-Run Master Lifetime Activation Lock */}
+      <FirstRunActivationOverlay />
+
       {/* App Lock Fullscreen Overlay */}
       <AppLockOverlay />
 
