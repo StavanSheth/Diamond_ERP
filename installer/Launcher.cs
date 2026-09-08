@@ -31,7 +31,15 @@ namespace DiamondERP.Launcher
                     return;
                 }
 
-                _appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
+                {
+                    _appDir = Directory.GetParent(baseDir).FullName;
+                }
+                else
+                {
+                    _appDir = baseDir;
+                }
 
                 SetupTray();
 
@@ -53,7 +61,12 @@ namespace DiamondERP.Launcher
             _trayMenu.Items.Add("Exit & Stop App", null, (s, e) => Shutdown());
 
             Icon appIcon = null;
-            string iconPath = Path.Combine(_appDir, "app.ico");
+            string iconPath = Path.Combine(_appDir, "installer", "app.ico");
+            if (!File.Exists(iconPath))
+            {
+                iconPath = Path.Combine(_appDir, "app.ico");
+            }
+
             if (File.Exists(iconPath))
             {
                 try { appIcon = new Icon(iconPath); } catch { }

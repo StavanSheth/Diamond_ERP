@@ -58,7 +58,16 @@ namespace DiamondERP.Setup
 
         public SetupForm()
         {
-            appDir = AppDomain.CurrentDomain.BaseDirectory;
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
+            {
+                appDir = Directory.GetParent(baseDir).FullName;
+            }
+            else
+            {
+                appDir = baseDir;
+            }
+
             InitializeComponent();
             CheckPrerequisites();
         }
@@ -74,7 +83,11 @@ namespace DiamondERP.Setup
             this.BackColor = Color.FromArgb(248, 250, 252);
             this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
 
-            string iconPath = Path.Combine(appDir, "app.ico");
+            string iconPath = Path.Combine(appDir, "installer", "app.ico");
+            if (!File.Exists(iconPath))
+            {
+                iconPath = Path.Combine(appDir, "app.ico");
+            }
             if (File.Exists(iconPath))
             {
                 try { this.Icon = new Icon(iconPath); } catch { }
@@ -436,6 +449,7 @@ namespace DiamondERP.Setup
 
         private void CheckPrerequisites()
         {
+            // Check Node
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -458,6 +472,7 @@ namespace DiamondERP.Setup
             }
             catch { }
 
+            // Check NPM
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -583,9 +598,23 @@ namespace DiamondERP.Setup
                     Thread.Sleep(400);
 
                     // Compile DiamondERP.exe if missing
-                    string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
-                    string launcherCs = Path.Combine(appDir, "Launcher.cs");
-                    string iconPath = Path.Combine(appDir, "app.ico");
+                    string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
+                    if (!File.Exists(launcherExe))
+                    {
+                        launcherExe = Path.Combine(appDir, "DiamondERP.exe");
+                    }
+
+                    string launcherCs = Path.Combine(appDir, "installer", "Launcher.cs");
+                    if (!File.Exists(launcherCs))
+                    {
+                        launcherCs = Path.Combine(appDir, "Launcher.cs");
+                    }
+
+                    string iconPath = Path.Combine(appDir, "installer", "app.ico");
+                    if (!File.Exists(iconPath))
+                    {
+                        iconPath = Path.Combine(appDir, "app.ico");
+                    }
 
                     if (!File.Exists(launcherExe) && File.Exists(launcherCs))
                     {
@@ -668,7 +697,12 @@ namespace DiamondERP.Setup
 
         private void LaunchApp()
         {
-            string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
+            string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
+            if (!File.Exists(launcherExe))
+            {
+                launcherExe = Path.Combine(appDir, "DiamondERP.exe");
+            }
+
             if (File.Exists(launcherExe))
             {
                 Process.Start(new ProcessStartInfo(launcherExe) { WorkingDirectory = appDir });

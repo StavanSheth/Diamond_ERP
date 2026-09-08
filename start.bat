@@ -1,6 +1,10 @@
 @echo off
 title DiamondERP V3.0
 cd /d "%~dp0"
+if exist "%~dp0installer\DiamondERP.exe" (
+    start "" "%~dp0installer\DiamondERP.exe"
+    exit /b
+)
 if exist "%~dp0DiamondERP.exe" (
     start "" "%~dp0DiamondERP.exe"
     exit /b
