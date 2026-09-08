@@ -10,24 +10,22 @@ namespace DiamondERP.Setup
 {
     public class SetupWizardForm : Form
     {
-        // Dimensions & Navigation
         private int currentPage = 0;
         private const int TOTAL_PAGES = 7;
 
         // Container Panels
-        private Panel leftSidebarPanel;
+        private Panel bottomNavPanel;
+        private Button btnBack;
+        private Button btnNext;
+        private Button btnCancel;
+
         private Panel topBannerPanel;
         private Label lblTopBannerTitle;
         private Label lblTopBannerSubtitle;
         private PictureBox picTopBannerIcon;
 
-        private Panel mainAreaPanel;
+        private Panel wizardBodyPanel;
         private Panel[] pages = new Panel[TOTAL_PAGES];
-
-        private Panel bottomNavPanel;
-        private Button btnBack;
-        private Button btnNext;
-        private Button btnCancel;
 
         // Page 1: License Controls
         private RadioButton rbAccept;
@@ -88,7 +86,7 @@ namespace DiamondERP.Setup
         private void InitializeComponent()
         {
             this.Text = "Setup — DiamondERP V3.0";
-            this.Size = new Size(540, 410);
+            this.ClientSize = new Size(500, 360);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -107,42 +105,25 @@ namespace DiamondERP.Setup
             bottomNavPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 48,
+                Height = 46,
                 BackColor = SystemColors.Control
             };
             bottomNavPanel.Paint += (s, e) =>
             {
                 using (Pen p = new Pen(SystemColors.ControlDark))
                 {
-                    e.Graphics.DrawLine(p, 0, 0, bottomNavPanel.Width, 0);
+                    e.Graphics.DrawLine(p, 0, 0, bottomNavPanel.ClientSize.Width, 0);
                 }
             };
+            bottomNavPanel.Resize += (s, e) => PositionButtons();
 
-            btnCancel = new Button
-            {
-                Text = "Cancel",
-                Size = new Size(76, 24),
-                Location = new Point(444, 12),
-                FlatStyle = FlatStyle.System
-            };
+            btnCancel = new Button { Text = "Cancel", Size = new Size(78, 24), FlatStyle = FlatStyle.System };
             btnCancel.Click += (s, e) => this.Close();
 
-            btnNext = new Button
-            {
-                Text = "Next >",
-                Size = new Size(76, 24),
-                Location = new Point(360, 12),
-                FlatStyle = FlatStyle.System
-            };
+            btnNext = new Button { Text = "Next >", Size = new Size(78, 24), FlatStyle = FlatStyle.System };
             btnNext.Click += BtnNext_Click;
 
-            btnBack = new Button
-            {
-                Text = "< Back",
-                Size = new Size(76, 24),
-                Location = new Point(280, 12),
-                FlatStyle = FlatStyle.System
-            };
+            btnBack = new Button { Text = "< Back", Size = new Size(78, 24), FlatStyle = FlatStyle.System };
             btnBack.Click += BtnBack_Click;
 
             bottomNavPanel.Controls.Add(btnBack);
@@ -150,11 +131,11 @@ namespace DiamondERP.Setup
             bottomNavPanel.Controls.Add(btnCancel);
             this.Controls.Add(bottomNavPanel);
 
-            // --- Top Banner (for interior pages 1 through 5) ---
+            // --- Top Banner Panel (for interior pages 1-5) ---
             topBannerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 60,
+                Height = 58,
                 BackColor = Color.White,
                 Visible = false
             };
@@ -168,24 +149,25 @@ namespace DiamondERP.Setup
 
             lblTopBannerTitle = new Label
             {
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                Location = new Point(22, 10),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Location = new Point(20, 9),
                 AutoSize = true,
                 ForeColor = Color.Black
             };
             lblTopBannerSubtitle = new Label
             {
-                Font = new Font("Segoe UI", 8.5f),
-                Location = new Point(36, 30),
+                Font = new Font("Segoe UI", 8.25f),
+                Location = new Point(34, 28),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(70, 70, 70)
             };
 
             picTopBannerIcon = new PictureBox
             {
-                Size = new Size(36, 36),
-                Location = new Point(478, 12),
-                SizeMode = PictureBoxSizeMode.StretchImage
+                Size = new Size(34, 34),
+                Location = new Point(452, 10),
+                SizeMode = PictureBoxSizeMode.StretchImage,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
             if (File.Exists(iconPath))
             {
@@ -197,49 +179,13 @@ namespace DiamondERP.Setup
             topBannerPanel.Controls.Add(picTopBannerIcon);
             this.Controls.Add(topBannerPanel);
 
-            // --- Left Sidebar Panel (for Welcome & Finish pages) ---
-            leftSidebarPanel = new Panel
-            {
-                Dock = DockStyle.Left,
-                Width = 164,
-                BackColor = Color.FromArgb(15, 23, 42)
-            };
-            leftSidebarPanel.Paint += (s, e) =>
-            {
-                Rectangle rect = new Rectangle(0, 0, leftSidebarPanel.Width, leftSidebarPanel.Height);
-                using (LinearGradientBrush br = new LinearGradientBrush(rect, Color.FromArgb(15, 23, 42), Color.FromArgb(30, 41, 59), 90f))
-                {
-                    e.Graphics.FillRectangle(br, rect);
-                }
-
-                // Draw diamond symbol
-                using (Font symFont = new Font("Segoe UI Symbol", 36f))
-                using (SolidBrush symBrush = new SolidBrush(Color.FromArgb(96, 165, 250)))
-                {
-                    e.Graphics.DrawString("💎", symFont, symBrush, 45, 110);
-                }
-
-                using (Font brandFont = new Font("Segoe UI", 12f, FontStyle.Bold))
-                using (SolidBrush textBrush = new SolidBrush(Color.White))
-                {
-                    e.Graphics.DrawString("DiamondERP", brandFont, textBrush, 28, 185);
-                }
-
-                using (Font subFont = new Font("Segoe UI", 8f))
-                using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
-                {
-                    e.Graphics.DrawString("Enterprise Version 3.0", subFont, textBrush, 24, 210);
-                }
-            };
-            this.Controls.Add(leftSidebarPanel);
-
-            // --- Central Main Area ---
-            mainAreaPanel = new Panel
+            // --- Wizard Body Panel (Fills area between top banner and bottom nav) ---
+            wizardBodyPanel = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = SystemColors.Control
             };
-            this.Controls.Add(mainAreaPanel);
+            this.Controls.Add(wizardBodyPanel);
 
             // Build all pages
             BuildPage0_Welcome();
@@ -249,46 +195,117 @@ namespace DiamondERP.Setup
             BuildPage4_Ready();
             BuildPage5_Installing();
             BuildPage6_Finish();
+
+            PositionButtons();
+        }
+
+        private void PositionButtons()
+        {
+            int pad = 12;
+            int btnW = 78;
+            int btnH = 24;
+            int y = 10;
+            int clientW = bottomNavPanel.ClientSize.Width;
+
+            btnCancel.Size = new Size(btnW, btnH);
+            btnCancel.Location = new Point(clientW - pad - btnW, y);
+
+            btnNext.Size = new Size(btnW, btnH);
+            btnNext.Location = new Point(btnCancel.Left - 8 - btnW, y);
+
+            btnBack.Size = new Size(btnW, btnH);
+            btnBack.Location = new Point(btnNext.Left - 8 - btnW, y);
+        }
+
+        private Panel CreateSidebarPanel()
+        {
+            Panel sidebar = new Panel
+            {
+                Dock = DockStyle.Left,
+                Width = 164,
+                BackColor = Color.FromArgb(15, 23, 42)
+            };
+            sidebar.Paint += (s, e) =>
+            {
+                Rectangle rect = new Rectangle(0, 0, sidebar.Width, sidebar.Height);
+                using (LinearGradientBrush br = new LinearGradientBrush(rect, Color.FromArgb(15, 23, 42), Color.FromArgb(30, 41, 59), 90f))
+                {
+                    e.Graphics.FillRectangle(br, rect);
+                }
+
+                // Draw diamond symbol
+                using (Font symFont = new Font("Segoe UI Symbol", 34f))
+                using (SolidBrush symBrush = new SolidBrush(Color.FromArgb(96, 165, 250)))
+                {
+                    e.Graphics.DrawString("💎", symFont, symBrush, 46, 85);
+                }
+
+                using (Font brandFont = new Font("Segoe UI", 11.5f, FontStyle.Bold))
+                using (SolidBrush textBrush = new SolidBrush(Color.White))
+                {
+                    e.Graphics.DrawString("DiamondERP", brandFont, textBrush, 32, 155);
+                }
+
+                using (Font subFont = new Font("Segoe UI", 8f))
+                using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
+                {
+                    e.Graphics.DrawString("Enterprise Version 3.0", subFont, textBrush, 24, 178);
+                }
+            };
+            return sidebar;
         }
 
         private void BuildPage0_Welcome()
         {
-            pages[0] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(22, 20, 22, 20) };
+            pages[0] = new Panel { Dock = DockStyle.Fill, Visible = false };
+
+            Panel leftBar = CreateSidebarPanel();
+            Panel rightContent = new Panel { BackColor = SystemColors.Control };
+
+            pages[0].Resize += (s, e) =>
+            {
+                leftBar.Location = new Point(0, 0);
+                leftBar.Size = new Size(164, pages[0].ClientSize.Height);
+                rightContent.Location = new Point(164, 0);
+                rightContent.Size = new Size(Math.Max(0, pages[0].ClientSize.Width - 164), pages[0].ClientSize.Height);
+            };
 
             Label lblTitle = new Label
             {
                 Text = "Welcome to the DiamondERP\nSetup Wizard",
-                Font = new Font("Segoe UI", 12.5f, FontStyle.Bold),
-                Location = new Point(18, 16),
-                Size = new Size(320, 56),
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
+                Location = new Point(14, 12),
+                Size = new Size(300, 52),
                 ForeColor = Color.Black
             };
-            pages[0].Controls.Add(lblTitle);
+            rightContent.Controls.Add(lblTitle);
 
             Label lblDesc = new Label
             {
                 Text = "This will install DiamondERP V3.0 on your computer.\n\n" +
-                       "DiamondERP is an enterprise management system providing parcel inventory tracking, 4Cs diamond categorization, and dual-entry accounting ledgers.\n\n" +
+                       "DiamondERP provides diamond trading management, parcel inventory tracking, and dual-entry accounting ledgers.\n\n" +
                        "It is recommended that you close all other applications before continuing.\n\n" +
                        "Click Next to continue, or Cancel to exit Setup.",
-                Location = new Point(20, 85),
-                Size = new Size(320, 190),
-                ForeColor = Color.FromArgb(50, 50, 50)
+                Location = new Point(16, 74),
+                Size = new Size(295, 220),
+                ForeColor = Color.FromArgb(40, 40, 40)
             };
-            pages[0].Controls.Add(lblDesc);
+            rightContent.Controls.Add(lblDesc);
 
-            mainAreaPanel.Controls.Add(pages[0]);
+            pages[0].Controls.Add(leftBar);
+            pages[0].Controls.Add(rightContent);
+            wizardBodyPanel.Controls.Add(pages[0]);
         }
 
         private void BuildPage1_License()
         {
-            pages[1] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+            pages[1] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(18, 8, 18, 8) };
 
             Label lblIntro = new Label
             {
                 Text = "Please read the following License Agreement. You must accept the terms of this agreement before continuing with the installation.",
-                Location = new Point(16, 6),
-                Size = new Size(490, 30)
+                Location = new Point(14, 4),
+                Size = new Size(468, 28)
             };
             pages[1].Controls.Add(lblIntro);
 
@@ -297,10 +314,10 @@ namespace DiamondERP.Setup
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
-                Location = new Point(18, 38),
-                Size = new Size(486, 150),
+                Location = new Point(16, 34),
+                Size = new Size(464, 140),
                 BackColor = Color.White,
-                Font = new Font("Segoe UI", 8.5f),
+                Font = new Font("Segoe UI", 8.25f),
                 Text = "DiamondERP V3.0 — Enterprise Software License Agreement\r\n\r\n" +
                        "Copyright (c) 2026 DiamondERP Enterprise Systems. All rights reserved.\r\n\r\n" +
                        "1. GRANT OF LICENSE\r\n" +
@@ -317,7 +334,7 @@ namespace DiamondERP.Setup
             rbAccept = new RadioButton
             {
                 Text = "I accept the agreement",
-                Location = new Point(20, 196),
+                Location = new Point(18, 182),
                 AutoSize = true,
                 Checked = true
             };
@@ -327,39 +344,39 @@ namespace DiamondERP.Setup
             rbDoNotAccept = new RadioButton
             {
                 Text = "I do not accept the agreement",
-                Location = new Point(20, 220),
+                Location = new Point(18, 204),
                 AutoSize = true
             };
             pages[1].Controls.Add(rbDoNotAccept);
 
-            mainAreaPanel.Controls.Add(pages[1]);
+            wizardBodyPanel.Controls.Add(pages[1]);
         }
 
         private void BuildPage2_Destination()
         {
-            pages[2] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+            pages[2] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(18, 8, 18, 8) };
 
             Label lblIntro = new Label
             {
                 Text = "Setup will install DiamondERP into the following folder.\nTo continue, click Next. If you would like to select a different folder, click Browse.",
-                Location = new Point(16, 10),
-                Size = new Size(490, 36)
+                Location = new Point(14, 8),
+                Size = new Size(468, 32)
             };
             pages[2].Controls.Add(lblIntro);
 
             GroupBox grpPath = new GroupBox
             {
                 Text = "Destination Location",
-                Location = new Point(16, 56),
-                Size = new Size(488, 70),
+                Location = new Point(14, 50),
+                Size = new Size(466, 68),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
             };
 
             txtDestPath = new TextBox
             {
                 Text = appDir,
-                Location = new Point(16, 26),
-                Size = new Size(365, 23),
+                Location = new Point(14, 25),
+                Size = new Size(350, 23),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ReadOnly = true,
                 BackColor = Color.White
@@ -369,8 +386,8 @@ namespace DiamondERP.Setup
             btnBrowse = new Button
             {
                 Text = "Browse...",
-                Location = new Point(390, 25),
-                Size = new Size(82, 25),
+                Location = new Point(374, 24),
+                Size = new Size(78, 25),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 FlatStyle = FlatStyle.System
             };
@@ -393,52 +410,52 @@ namespace DiamondERP.Setup
             Label lblSpace = new Label
             {
                 Text = "At least 250 MB of free disk space is required on this drive.",
-                Location = new Point(18, 140),
+                Location = new Point(16, 130),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(70, 70, 70)
             };
             pages[2].Controls.Add(lblSpace);
 
-            mainAreaPanel.Controls.Add(pages[2]);
+            wizardBodyPanel.Controls.Add(pages[2]);
         }
 
         private void BuildPage3_Tasks()
         {
-            pages[3] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+            pages[3] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(18, 8, 18, 8) };
 
             Label lblIntro = new Label
             {
                 Text = "Select the additional tasks you would like Setup to perform while installing DiamondERP, then click Next.",
-                Location = new Point(16, 10),
-                Size = new Size(490, 32)
+                Location = new Point(14, 8),
+                Size = new Size(468, 30)
             };
             pages[3].Controls.Add(lblIntro);
 
             GroupBox grpShortcuts = new GroupBox
             {
                 Text = "Additional shortcuts:",
-                Location = new Point(16, 48),
-                Size = new Size(488, 80),
+                Location = new Point(14, 46),
+                Size = new Size(466, 76),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
             };
 
             chkDesktopShortcut = new CheckBox
             {
                 Text = "Create a desktop shortcut",
-                Location = new Point(20, 24),
+                Location = new Point(18, 22),
                 AutoSize = true,
                 Checked = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
             };
             grpShortcuts.Controls.Add(chkDesktopShortcut);
 
             chkStartMenuShortcut = new CheckBox
             {
                 Text = "Create a Start Menu shortcut",
-                Location = new Point(20, 48),
+                Location = new Point(18, 46),
                 AutoSize = true,
                 Checked = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
             };
             grpShortcuts.Controls.Add(chkStartMenuShortcut);
             pages[3].Controls.Add(grpShortcuts);
@@ -446,34 +463,34 @@ namespace DiamondERP.Setup
             GroupBox grpLaunch = new GroupBox
             {
                 Text = "Launch options:",
-                Location = new Point(16, 140),
-                Size = new Size(488, 60),
+                Location = new Point(14, 132),
+                Size = new Size(466, 56),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
             };
 
             chkLaunchAfter = new CheckBox
             {
                 Text = "Launch DiamondERP after setup completes",
-                Location = new Point(20, 24),
+                Location = new Point(18, 22),
                 AutoSize = true,
                 Checked = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
             };
             grpLaunch.Controls.Add(chkLaunchAfter);
             pages[3].Controls.Add(grpLaunch);
 
-            mainAreaPanel.Controls.Add(pages[3]);
+            wizardBodyPanel.Controls.Add(pages[3]);
         }
 
         private void BuildPage4_Ready()
         {
-            pages[4] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+            pages[4] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(18, 8, 18, 8) };
 
             Label lblIntro = new Label
             {
                 Text = "Click Install to continue with the installation, or click Back if you want to review or change any settings.",
-                Location = new Point(16, 10),
-                Size = new Size(490, 26)
+                Location = new Point(14, 8),
+                Size = new Size(468, 24)
             };
             pages[4].Controls.Add(lblIntro);
 
@@ -482,33 +499,33 @@ namespace DiamondERP.Setup
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
-                Location = new Point(18, 38),
-                Size = new Size(486, 190),
+                Location = new Point(16, 34),
+                Size = new Size(464, 175),
                 BackColor = Color.White,
-                Font = new Font("Segoe UI", 8.5f)
+                Font = new Font("Segoe UI", 8.25f)
             };
             pages[4].Controls.Add(txtSummary);
 
-            mainAreaPanel.Controls.Add(pages[4]);
+            wizardBodyPanel.Controls.Add(pages[4]);
         }
 
         private void BuildPage5_Installing()
         {
-            pages[5] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(20, 10, 20, 10) };
+            pages[5] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(18, 8, 18, 8) };
 
             lblInstallStatus = new Label
             {
                 Text = "Preparing installation...",
-                Location = new Point(16, 12),
-                Size = new Size(490, 20),
+                Location = new Point(14, 10),
+                Size = new Size(468, 18),
                 AutoEllipsis = true
             };
             pages[5].Controls.Add(lblInstallStatus);
 
             progressBar = new ProgressBar
             {
-                Location = new Point(18, 36),
-                Size = new Size(486, 20),
+                Location = new Point(16, 32),
+                Size = new Size(464, 20),
                 Style = ProgressBarStyle.Continuous,
                 Value = 10
             };
@@ -519,44 +536,55 @@ namespace DiamondERP.Setup
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
-                Location = new Point(18, 70),
-                Size = new Size(486, 155),
+                Location = new Point(16, 62),
+                Size = new Size(464, 145),
                 BackColor = Color.FromArgb(248, 250, 252),
                 Font = new Font("Consolas", 8f)
             };
             pages[5].Controls.Add(txtInstallLog);
 
-            mainAreaPanel.Controls.Add(pages[5]);
+            wizardBodyPanel.Controls.Add(pages[5]);
         }
 
         private void BuildPage6_Finish()
         {
-            pages[6] = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(22, 20, 22, 20) };
+            pages[6] = new Panel { Dock = DockStyle.Fill, Visible = false };
+
+            Panel leftBar = CreateSidebarPanel();
+            Panel rightContent = new Panel { BackColor = SystemColors.Control };
+
+            pages[6].Resize += (s, e) =>
+            {
+                leftBar.Location = new Point(0, 0);
+                leftBar.Size = new Size(164, pages[6].ClientSize.Height);
+                rightContent.Location = new Point(164, 0);
+                rightContent.Size = new Size(Math.Max(0, pages[6].ClientSize.Width - 164), pages[6].ClientSize.Height);
+            };
 
             Label lblTitle = new Label
             {
                 Text = "Completing the DiamondERP\nSetup Wizard",
-                Font = new Font("Segoe UI", 12.5f, FontStyle.Bold),
-                Location = new Point(18, 16),
-                Size = new Size(320, 56),
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
+                Location = new Point(14, 12),
+                Size = new Size(300, 52),
                 ForeColor = Color.Black
             };
-            pages[6].Controls.Add(lblTitle);
+            rightContent.Controls.Add(lblTitle);
 
             Label lblDesc = new Label
             {
                 Text = "Setup has finished installing DiamondERP on your computer. The application may be launched by selecting the installed shortcuts.\n\n" +
                        "Click Finish to exit Setup.",
-                Location = new Point(20, 85),
-                Size = new Size(320, 70),
-                ForeColor = Color.FromArgb(50, 50, 50)
+                Location = new Point(16, 72),
+                Size = new Size(295, 66),
+                ForeColor = Color.FromArgb(40, 40, 40)
             };
-            pages[6].Controls.Add(lblDesc);
+            rightContent.Controls.Add(lblDesc);
 
             Panel securityBox = new Panel
             {
-                Location = new Point(20, 160),
-                Size = new Size(310, 65),
+                Location = new Point(16, 148),
+                Size = new Size(295, 60),
                 BackColor = Color.FromArgb(240, 245, 255)
             };
             securityBox.Paint += (s, e) =>
@@ -569,25 +597,27 @@ namespace DiamondERP.Setup
             Label lblSecNote = new Label
             {
                 Text = "Security Note: On first start, you will be prompted once for your master password to activate this computer for its lifetime.",
-                Font = new Font("Segoe UI", 8f),
+                Font = new Font("Segoe UI", 7.75f),
                 ForeColor = Color.FromArgb(55, 48, 163),
-                Location = new Point(8, 8),
-                Size = new Size(294, 48)
+                Location = new Point(6, 6),
+                Size = new Size(280, 46)
             };
             securityBox.Controls.Add(lblSecNote);
-            pages[6].Controls.Add(securityBox);
+            rightContent.Controls.Add(securityBox);
 
             chkFinishLaunch = new CheckBox
             {
                 Text = "Launch DiamondERP",
-                Location = new Point(22, 235),
+                Location = new Point(18, 222),
                 AutoSize = true,
                 Checked = true,
-                Font = new Font("Segoe UI", 9f)
+                Font = new Font("Segoe UI", 8.5f)
             };
-            pages[6].Controls.Add(chkFinishLaunch);
+            rightContent.Controls.Add(chkFinishLaunch);
 
-            mainAreaPanel.Controls.Add(pages[6]);
+            pages[6].Controls.Add(leftBar);
+            pages[6].Controls.Add(rightContent);
+            wizardBodyPanel.Controls.Add(pages[6]);
         }
 
         private void CheckPrerequisites()
@@ -627,9 +657,8 @@ namespace DiamondERP.Setup
             // Top banner is only visible for interior pages (1 through 5)
             bool isInterior = (pageIndex >= 1 && pageIndex <= 5);
             topBannerPanel.Visible = isInterior;
-            leftSidebarPanel.Visible = !isInterior;
 
-            // Configure headers & buttons
+            // Configure navigation buttons
             btnBack.Visible = (pageIndex > 0 && pageIndex < 6);
             btnBack.Enabled = (pageIndex > 0 && pageIndex != 5);
             btnCancel.Visible = (pageIndex < 6);
@@ -684,6 +713,8 @@ namespace DiamondERP.Setup
                     btnNext.Enabled = true;
                     break;
             }
+
+            PositionButtons();
         }
 
         private void UpdateSummary()
@@ -696,8 +727,8 @@ namespace DiamondERP.Setup
             if (chkLaunchAfter.Checked) summary += "      Launch DiamondERP after installation\r\n";
 
             summary += "\r\nSystem Prerequisites:\r\n";
-            summary += isNodeInstalled ? "      Node.js: " + nodeVersion + " (OK)\r\n" : "      Node.js: Not detected in PATH (Warning)\r\n";
-            summary += isNpmInstalled ? "      NPM: v" + npmVersion + " (OK)\r\n" : "      NPM: Not detected in PATH (Warning)\r\n";
+            summary += isNodeInstalled ? "      Node.js: " + nodeVersion + " (Detected)\r\n" : "      Node.js: Not detected in PATH (Warning)\r\n";
+            summary += isNpmInstalled ? "      NPM: v" + npmVersion + " (Detected)\r\n" : "      NPM: Not detected in PATH (Warning)\r\n";
 
             txtSummary.Text = summary;
         }
@@ -755,55 +786,72 @@ namespace DiamondERP.Setup
                 {
                     SetInstallStatus("Validating environment...", 20);
                     AppendLog("[1/4] Checking environment runtime...");
-                    Thread.Sleep(300);
+                    Thread.Sleep(250);
 
-                    // Compile DiamondERP.exe launcher if missing
-                    string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-                    if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "DiamondERP.exe"); }
-
+                    // Ensure DiamondERP.exe is ready in appDir
+                    string targetLauncherExe = Path.Combine(appDir, "DiamondERP.exe");
+                    string installerLauncherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
                     string launcherCs = Path.Combine(appDir, "installer", "Launcher.cs");
-                    if (!File.Exists(launcherCs)) { launcherCs = Path.Combine(appDir, "Launcher.cs"); }
-
                     string iconPath = Path.Combine(appDir, "installer", "app.ico");
-                    if (!File.Exists(iconPath)) { iconPath = Path.Combine(appDir, "app.ico"); }
 
-                    if (!File.Exists(launcherExe) && File.Exists(launcherCs))
+                    SetInstallStatus("Preparing desktop launcher executable...", 45);
+                    AppendLog("[2/4] Verifying DiamondERP.exe launcher...");
+
+                    // If DiamondERP.exe is in installer folder, copy to root as well
+                    if (!File.Exists(targetLauncherExe) && File.Exists(installerLauncherExe))
                     {
-                        SetInstallStatus("Compiling application launcher...", 40);
-                        AppendLog("[2/4] Generating native DiamondERP.exe launcher...");
+                        try { File.Copy(installerLauncherExe, targetLauncherExe, true); } catch { }
+                    }
+
+                    // If neither exists, compile from Launcher.cs
+                    if (!File.Exists(targetLauncherExe) && !File.Exists(installerLauncherExe) && File.Exists(launcherCs))
+                    {
                         string csc = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe";
                         if (File.Exists(csc))
                         {
-                            string args = string.Format("/out:\"{0}\" /target:winexe /win32icon:\"{1}\" \"{2}\"", launcherExe, iconPath, launcherCs);
+                            string args = string.Format("/out:\"{0}\" /target:winexe /win32icon:\"{1}\" \"{2}\"", targetLauncherExe, iconPath, launcherCs);
                             RunProcess(csc, args);
                         }
                     }
 
-                    SetInstallStatus("Configuring application shortcuts...", 70);
-                    AppendLog("[3/4] Creating application shortcuts...");
-                    Thread.Sleep(300);
+                    // Choose primary executable for shortcut
+                    string shortcutTarget = File.Exists(targetLauncherExe) ? targetLauncherExe : (File.Exists(installerLauncherExe) ? installerLauncherExe : null);
 
-                    string targetExe = File.Exists(launcherExe) ? launcherExe : Path.Combine(appDir, "start.bat");
+                    if (string.IsNullOrEmpty(shortcutTarget) || !File.Exists(shortcutTarget))
+                    {
+                        throw new FileNotFoundException("Could not locate or compile DiamondERP.exe launcher.");
+                    }
+
+                    SetInstallStatus("Creating application shortcuts...", 75);
+                    AppendLog("[3/4] Creating application shortcuts pointing to: " + Path.GetFileName(shortcutTarget));
+                    Thread.Sleep(250);
 
                     if (chkDesktopShortcut.Checked)
                     {
+                        // Create in user's special desktop directory (works with OneDrive redirection)
                         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                        string lnkPath = Path.Combine(desktopPath, "DiamondERP.lnk");
-                        CreateShortcut(lnkPath, targetExe, appDir, iconPath, "DiamondERP Enterprise Management");
-                        AppendLog("✔ Created Desktop shortcut: " + lnkPath);
+                        CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
+                        AppendLog("✔ Created Desktop shortcut: " + Path.Combine(desktopPath, "DiamondERP.lnk"));
+
+                        // Also create in local desktop if different from OneDrive desktop
+                        string localDesktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
+                        if (!localDesktop.Equals(desktopPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(localDesktop))
+                        {
+                            CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
+                        }
                     }
 
                     if (chkStartMenuShortcut.Checked)
                     {
                         string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
                         string lnkPath = Path.Combine(startMenu, "DiamondERP.lnk");
-                        CreateShortcut(lnkPath, targetExe, appDir, iconPath, "DiamondERP Enterprise Management");
+                        CreateShortcut(lnkPath, shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
                         AppendLog("✔ Created Start Menu shortcut: " + lnkPath);
                     }
 
-                    SetInstallStatus("Installation complete!", 100);
+                    SetInstallStatus("Installation completed!", 100);
                     AppendLog("[4/4] Installation finished successfully.");
-                    Thread.Sleep(500);
+                    Thread.Sleep(400);
 
                     this.Invoke(new Action(() => ShowPage(6)));
                 }
@@ -843,20 +891,12 @@ namespace DiamondERP.Setup
 
         private void LaunchApp()
         {
-            string launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-            if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "DiamondERP.exe"); }
+            string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
+            if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe"); }
 
             if (File.Exists(launcherExe))
             {
                 Process.Start(new ProcessStartInfo(launcherExe) { WorkingDirectory = appDir });
-            }
-            else
-            {
-                string startBat = Path.Combine(appDir, "start.bat");
-                if (File.Exists(startBat))
-                {
-                    Process.Start(new ProcessStartInfo(startBat) { WorkingDirectory = appDir });
-                }
             }
         }
 
