@@ -13,7 +13,7 @@
     "build:contracts": "npm run build --workspace=@diamond-erp/contracts",
     "build:utils": "npm run build --workspace=@diamond-erp/shared-utils",
     "build": "npm run build --workspaces --if-present",
-    "build:installer": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:DiamondERP-Setup.exe /target:winexe /win32icon:installer\\app.ico installer\\Installer.cs && copy /y DiamondERP-Setup.exe Installer.exe && C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:DiamondERP.exe /target:winexe /win32icon:installer\\app.ico installer\\Launcher.cs",
+    "build:installer": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:DiamondERP-Setup.exe /target:winexe /win32icon:installer\\app.ico installer\\Installer.cs && C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /out:DiamondERP.exe /target:winexe /win32icon:installer\\app.ico installer\\Launcher.cs",
     "test": "npm run test --workspaces --if-present"
   }
 }

@@ -20,10 +20,7 @@ function readConfig(): ProfileConfig {
   } catch {
     // Corrupted config file, fall back to default
   }
-  if (fs.existsSync(path.resolve(DB_DIR, 'Stavan.db'))) {
-    return { activeProfile: 'Stavan' };
-  }
-  return { activeProfile: 'Default' };
+  return { activeProfile: 'Stavan' };
 }
 
 function writeConfig(cfg: ProfileConfig) {
@@ -59,28 +56,9 @@ function createClientForProfile(profileName: string): PrismaClient {
   return client;
 }
 
-function ensureDatabaseExists(profileName: string): void {
-  const dbPath = getDbPathForProfile(profileName);
-  if (!fs.existsSync(dbPath)) {
-    console.log(`[Profile] Initializing fresh database for profile: ${profileName} at ${dbPath}`);
-    try {
-      const schemaPath = path.resolve(DB_DIR, 'prisma', 'schema.prisma');
-      const env = { ...process.env, DATABASE_URL: getDbUrlForProfile(profileName) };
-      execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate`, {
-        env,
-        stdio: 'inherit',
-        cwd: DB_DIR,
-      });
-    } catch (err) {
-      console.error('[Profile] Failed to create database:', err);
-    }
-  }
-}
-
 // ── State ───────────────────────────────────────────────────────────────
 const config = readConfig();
 let currentProfile = config.activeProfile;
-ensureDatabaseExists(currentProfile);
 let activeClient = createClientForProfile(currentProfile);
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -91,12 +69,11 @@ export function getActiveProfile(): string {
 export function getAllProfiles(): string[] {
   try {
     const files = fs.readdirSync(DB_DIR);
-    const dbs = files
-      .filter(f => f.endsWith('.db') && !f.includes('journal') && !f.includes('test'))
+    return files
+      .filter(f => f.endsWith('.db') && !f.includes('journal'))
       .map(f => f.replace('.db', ''));
-    return dbs.length > 0 ? dbs : [currentProfile || 'Default'];
   } catch {
-    return [currentProfile || 'Default'];
+    return ['Stavan'];
   }
 }
 
@@ -117,10 +94,26 @@ export async function switchProfile(profileName: string): Promise<void> {
   currentProfile = sanitized;
   writeConfig({ activeProfile: sanitized });
 
-  ensureDatabaseExists(sanitized);
+  const dbPath = getDbPathForProfile(sanitized);
+
+  // If the database file doesn't exist, create it with prisma db push
+  if (!fs.existsSync(dbPath)) {
+    console.log(`[Profile] Creating new database for profile: ${sanitized} at ${dbPath}`);
+    try {
+      const schemaPath = path.resolve(DB_DIR, 'prisma', 'schema.prisma');
+      const env = { ...process.env, DATABASE_URL: getDbUrlForProfile(sanitized) };
+      execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate`, {
+        env,
+        stdio: 'inherit',
+        cwd: DB_DIR,
+      });
+    } catch (err) {
+      console.error('[Profile] Failed to create database:', err);
+    }
+  }
 
   activeClient = createClientForProfile(sanitized);
-  console.log(`[Profile] Switched to profile: ${sanitized} (${getDbPathForProfile(sanitized)})`);
+  console.log(`[Profile] Switched to profile: ${sanitized} (${dbPath})`);
 }
 
 // ── Proxy ───────────────────────────────────────────────────────────────
