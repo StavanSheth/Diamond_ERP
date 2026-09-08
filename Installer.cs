@@ -74,7 +74,7 @@ namespace DiamondERP.Setup
             this.BackColor = Color.FromArgb(248, 250, 252);
             this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
 
-            string iconPath = Path.Combine(appDir, "installer", "app.ico");
+            string iconPath = Path.Combine(appDir, "app.ico");
             if (File.Exists(iconPath))
             {
                 try { this.Icon = new Icon(iconPath); } catch { }
@@ -436,7 +436,6 @@ namespace DiamondERP.Setup
 
         private void CheckPrerequisites()
         {
-            // Check Node
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -459,7 +458,6 @@ namespace DiamondERP.Setup
             }
             catch { }
 
-            // Check NPM
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -586,8 +584,8 @@ namespace DiamondERP.Setup
 
                     // Compile DiamondERP.exe if missing
                     string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
-                    string launcherCs = Path.Combine(appDir, "installer", "Launcher.cs");
-                    string iconPath = Path.Combine(appDir, "installer", "app.ico");
+                    string launcherCs = Path.Combine(appDir, "Launcher.cs");
+                    string iconPath = Path.Combine(appDir, "app.ico");
 
                     if (!File.Exists(launcherExe) && File.Exists(launcherCs))
                     {

@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
-using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -23,23 +22,19 @@ namespace DiamondERP.Launcher
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            // Single instance check via named mutex
             bool createdNew;
             using (Mutex mutex = new Mutex(true, "DiamondERP_Singleton_Mutex", out createdNew))
             {
                 if (!createdNew)
                 {
-                    // Already running - just open the browser
                     OpenBrowser("http://localhost:5175/");
                     return;
                 }
 
                 _appDir = AppDomain.CurrentDomain.BaseDirectory;
 
-                // Configure system tray
                 SetupTray();
 
-                // Start background services
                 ThreadPool.QueueUserWorkItem(state =>
                 {
                     StartServices();
@@ -58,7 +53,7 @@ namespace DiamondERP.Launcher
             _trayMenu.Items.Add("Exit & Stop App", null, (s, e) => Shutdown());
 
             Icon appIcon = null;
-            string iconPath = Path.Combine(_appDir, "installer", "app.ico");
+            string iconPath = Path.Combine(_appDir, "app.ico");
             if (File.Exists(iconPath))
             {
                 try { appIcon = new Icon(iconPath); } catch { }
@@ -85,7 +80,6 @@ namespace DiamondERP.Launcher
         {
             try
             {
-                // Check if API port 3002 is already open
                 if (!IsPortActive("http://localhost:3002/api/health") && !IsPortActive("http://localhost:3002/"))
                 {
                     ProcessStartInfo apiInfo = new ProcessStartInfo
@@ -100,7 +94,6 @@ namespace DiamondERP.Launcher
                     _apiProcess = Process.Start(apiInfo);
                 }
 
-                // Check if Web port 5175 is already open
                 if (!IsPortActive("http://localhost:5175/"))
                 {
                     ProcessStartInfo webInfo = new ProcessStartInfo
@@ -136,7 +129,6 @@ namespace DiamondERP.Launcher
                 attempts++;
             }
 
-            // Fallback open
             OpenBrowser("http://localhost:5175/");
         }
 
@@ -182,7 +174,6 @@ namespace DiamondERP.Launcher
                 _trayIcon.Dispose();
             }
 
-            // Kill child processes if started by this launcher
             try
             {
                 if (_apiProcess != null && !_apiProcess.HasExited)
