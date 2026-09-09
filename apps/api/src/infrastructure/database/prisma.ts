@@ -6,17 +6,21 @@ import fs from 'fs';
 // ── Profile Context ─────────────────────────────────────────────────────
 export interface ProfileContext {
   profileId: string;
+  profileCode?: string;
+  userId?: string;
 }
 
 export const requestContext = new AsyncLocalStorage<ProfileContext>();
 
-// ── Profile Config Persistence ──────────────────────────────────────────
-// We persist a default fallback profile name.
+// ── Constants & Paths ───────────────────────────────────────────────────
 const DB_DIR = path.resolve(__dirname, '../../../'); // backend root where .db files live
 const CONFIG_PATH = path.join(DB_DIR, '.profile-config.json');
+const MAX_CLIENTS = 10;
+const PROFILE_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
 
 interface ProfileConfig {
   activeProfile: string;
+  allowedProfiles?: string[];
 }
 
 function readConfig(): ProfileConfig {
@@ -25,86 +29,273 @@ function readConfig(): ProfileConfig {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
     }
   } catch {
-    // Ignore read errors
+    // Ignore read errors, fall back to default
   }
-  return { activeProfile: 'Stavan' };
+  return { activeProfile: 'Stavan', allowedProfiles: ['Stavan', 'Stuti'] };
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────
-function getDbPathForProfile(profileName: string): string {
-  return path.resolve(DB_DIR, `${profileName}.db`);
+const config = readConfig();
+export const defaultProfile = config.activeProfile || 'Stavan';
+
+// Canonical in-memory profile definition
+export interface CanonicalProfile {
+  id: string;
+  code: string;
+  name: string;
+  dbPath: string;
 }
 
-function getDbUrlForProfile(profileName: string): string {
-  // Must be an absolute file: URL so Prisma's engine resolves it correctly
-  return `file:${getDbPathForProfile(profileName)}`;
-}
+// ── Canonical Profile Registry ──────────────────────────────────────────
+// Server controls all known profiles. Arbitrary client inputs CANNOT open unconfigured DBs.
+const configuredProfiles = new Map<string, CanonicalProfile>();
 
-function createClientForProfile(profileName: string): PrismaClient {
-  const dbPath = getDbPathForProfile(profileName);
-  
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`[Profile] Database for profile "${profileName}" does not exist at ${dbPath}.`);
+function initConfiguredProfiles() {
+  const allowed = new Set<string>([
+    defaultProfile,
+    'Stavan',
+    'Stuti',
+    ...(config.allowedProfiles || []),
+  ]);
+
+  if (process.env.CONFIGURED_PROFILES) {
+    process.env.CONFIGURED_PROFILES.split(',').forEach((p) => allowed.add(p.trim()));
   }
 
+  for (const code of allowed) {
+    if (PROFILE_REGEX.test(code)) {
+      const dbPath = path.resolve(DB_DIR, `${code}.db`);
+      configuredProfiles.set(code.toLowerCase(), {
+        id: code.toLowerCase(),
+        code,
+        name: code,
+        dbPath,
+      });
+    }
+  }
+}
+
+initConfiguredProfiles();
+
+/**
+ * Register a canonical profile programmatically (e.g. for testing or dynamic tenant provisioning).
+ */
+export function registerProfile(profile: { code: string; name?: string; dbPath?: string }): CanonicalProfile {
+  if (!PROFILE_REGEX.test(profile.code)) {
+    throw new Error(`Invalid profile code format: "${profile.code}". Must match ${PROFILE_REGEX}`);
+  }
+
+  const key = profile.code.toLowerCase();
+  const canonicalDbPath = profile.dbPath
+    ? path.resolve(DB_DIR, path.basename(profile.dbPath))
+    : path.resolve(DB_DIR, `${profile.code}.db`);
+
+  // Ensure DB path remains strictly under DB_DIR to prevent path traversal
+  if (!canonicalDbPath.startsWith(DB_DIR)) {
+    throw new Error(`Invalid database path outside allowed directory: ${canonicalDbPath}`);
+  }
+
+  const canonical: CanonicalProfile = {
+    id: key,
+    code: profile.code,
+    name: profile.name || profile.code,
+    dbPath: canonicalDbPath,
+  };
+
+  configuredProfiles.set(key, canonical);
+  return canonical;
+}
+
+/**
+ * Check if a profile is configured on the server.
+ */
+export function isConfiguredProfile(code: string): boolean {
+  if (!code || !PROFILE_REGEX.test(code)) return false;
+  return configuredProfiles.has(code.toLowerCase());
+}
+
+/**
+ * Get canonical profile metadata by code.
+ */
+export function getCanonicalProfile(code: string): CanonicalProfile | undefined {
+  if (!code || !PROFILE_REGEX.test(code)) return undefined;
+  return configuredProfiles.get(code.toLowerCase());
+}
+
+/**
+ * Return all registered canonical profile codes.
+ */
+export function getAllProfiles(): string[] {
+  return Array.from(configuredProfiles.values()).map((p) => p.code);
+}
+
+// ── Prisma Client Factory ───────────────────────────────────────────────
+async function configureSqlitePragmas(client: PrismaClient): Promise<void> {
+  try {
+    await client.$connect();
+    await client.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
+    await client.$queryRawUnsafe('PRAGMA synchronous = NORMAL;');
+    await client.$queryRawUnsafe('PRAGMA busy_timeout = 10000;');
+    await client.$queryRawUnsafe('PRAGMA foreign_keys = ON;');
+  } catch (err) {
+    // If running in test with mocked client or in-memory DB, log and proceed
+    console.warn('[Prisma] Note applying PRAGMAs:', (err as Error).message);
+  }
+}
+
+function createPrismaClient(dbUrl: string): PrismaClient {
   const client = new PrismaClient({
     datasources: {
       db: {
-        url: getDbUrlForProfile(profileName),
+        url: dbUrl,
       },
     },
   });
-
-  // Optimize SQLite: Enable WAL mode, normal synchronous, and busy timeout to prevent lock delays
-  client.$connect().then(() => {
-    client.$executeRawUnsafe('PRAGMA journal_mode = WAL;').catch(() => null);
-    client.$executeRawUnsafe('PRAGMA synchronous = NORMAL;').catch(() => null);
-    client.$executeRawUnsafe('PRAGMA busy_timeout = 5000;').catch(() => null);
-  }).catch(() => null);
-
   return client;
 }
 
-// ── State ───────────────────────────────────────────────────────────────
-const config = readConfig();
-const defaultProfile = config.activeProfile || 'Stavan';
-const clientRegistry = new Map<string, PrismaClient>();
+// ── System Client ───────────────────────────────────────────────────────
+// Dedicated client for system/tenant metadata, user auth, and sessions
+const systemDbUrl = process.env.DATABASE_URL || `file:${path.resolve(DB_DIR, `${defaultProfile}.db`)}`;
+export const systemPrisma = createPrismaClient(systemDbUrl);
+configureSqlitePragmas(systemPrisma).catch(() => {});
 
-function getClientForProfile(profileName: string): PrismaClient {
-  const sanitized = profileName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  if (!sanitized) throw new Error('Invalid profile name');
+// ── Client Registry with Bounded Cache & Mutex ─────────────────────────
+interface ClientRegistryEntry {
+  client: PrismaClient;
+  lastUsedAt: number;
+}
 
-  if (!clientRegistry.has(sanitized)) {
-    clientRegistry.set(sanitized, createClientForProfile(sanitized));
+const clientRegistry = new Map<string, ClientRegistryEntry>();
+const clientInitLocks = new Map<string, Promise<PrismaClient>>();
+
+/**
+ * Get or create a PrismaClient for an authorized canonical profile.
+ * Thread-safe: uses promises to prevent racing client initializations.
+ */
+export async function getClientForProfileAsync(profileCode: string): Promise<PrismaClient> {
+  if (!PROFILE_REGEX.test(profileCode)) {
+    throw new Error(`Invalid profile format: ${profileCode}`);
   }
-  return clientRegistry.get(sanitized)!;
+
+  const key = profileCode.toLowerCase();
+  const canonical = configuredProfiles.get(key);
+  if (!canonical) {
+    throw new Error(`Profile "${profileCode}" is not a configured canonical profile.`);
+  }
+
+  // Check existing cached client
+  const existing = clientRegistry.get(key);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
+    return existing.client;
+  }
+
+  // Mutex lock for concurrent requests
+  if (clientInitLocks.has(key)) {
+    return clientInitLocks.get(key)!;
+  }
+
+  const initPromise = (async () => {
+    try {
+      // Evict LRU client if cache limit reached
+      if (clientRegistry.size >= MAX_CLIENTS) {
+        let oldestKey: string | null = null;
+        let oldestTime = Infinity;
+        for (const [k, entry] of clientRegistry.entries()) {
+          if (entry.lastUsedAt < oldestTime) {
+            oldestTime = entry.lastUsedAt;
+            oldestKey = k;
+          }
+        }
+        if (oldestKey) {
+          const evicted = clientRegistry.get(oldestKey);
+          clientRegistry.delete(oldestKey);
+          if (evicted) {
+            evicted.client.$disconnect().catch(() => {});
+          }
+        }
+      }
+
+      // Check if DB file exists or create it if in development/test
+      if (!fs.existsSync(canonical.dbPath)) {
+        // In testing, ensure file exists or copy from base
+        if (process.env.NODE_ENV === 'test') {
+          fs.writeFileSync(canonical.dbPath, '');
+        } else {
+          throw new Error(`[Profile] Database for profile "${canonical.code}" does not exist at ${canonical.dbPath}.`);
+        }
+      }
+
+      const client = createPrismaClient(`file:${canonical.dbPath}`);
+      await configureSqlitePragmas(client);
+
+      clientRegistry.set(key, { client, lastUsedAt: Date.now() });
+      return client;
+    } finally {
+      clientInitLocks.delete(key);
+    }
+  })();
+
+  clientInitLocks.set(key, initPromise);
+  return initPromise;
+}
+
+export function getClientForProfile(profileCode: string): PrismaClient {
+  const key = profileCode.toLowerCase();
+  const existing = clientRegistry.get(key);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
+    return existing.client;
+  }
+
+  // Synchronous fallback (initializes immediately if not cached)
+  const canonical = configuredProfiles.get(key);
+  if (!canonical) {
+    // If not configured, fall back to systemPrisma rather than throwing or creating arbitrary file
+    return systemPrisma;
+  }
+
+  const client = createPrismaClient(`file:${canonical.dbPath}`);
+  configureSqlitePragmas(client).catch(() => {});
+  clientRegistry.set(key, { client, lastUsedAt: Date.now() });
+  return client;
+}
+
+/**
+ * Disconnect all open clients and cleanly shutdown database connections.
+ */
+export async function disconnectAllClients(): Promise<void> {
+  const disconnectPromises: Promise<unknown>[] = [];
+
+  for (const entry of clientRegistry.values()) {
+    disconnectPromises.push(entry.client.$disconnect().catch(() => {}));
+  }
+  clientRegistry.clear();
+
+  disconnectPromises.push(systemPrisma.$disconnect().catch(() => {}));
+
+  await Promise.allSettled(disconnectPromises);
 }
 
 // ── Public API ──────────────────────────────────────────────────────────
-export function getActiveProfile(): string {
-  const store = requestContext.getStore();
-  return store?.profileId || defaultProfile;
+export function runWithProfile<T>(profileCode: string, fn: () => T | Promise<T>): Promise<T> {
+  return requestContext.run({ profileId: profileCode, profileCode }, async () => {
+    return await fn();
+  });
 }
 
-export function getAllProfiles(): string[] {
-  try {
-    const files = fs.readdirSync(DB_DIR);
-    return files
-      .filter(f => f.endsWith('.db') && !f.includes('journal'))
-      .map(f => f.replace('.db', ''));
-  } catch {
-    return [defaultProfile];
-  }
+export function getActiveProfile(): string {
+  const store = requestContext.getStore();
+  return store?.profileCode || store?.profileId || defaultProfile;
 }
 
 // ── Proxy ───────────────────────────────────────────────────────────────
-// All modules import `prisma` (the default export). This proxy forwards
-// every property/method access to whichever PrismaClient is currently active
-// for the request context.
+// All business modules import `prisma` (the default export). This proxy forwards
+// every property/method access to whichever PrismaClient is active for the current request context.
 const prismaProxy = new Proxy({} as PrismaClient, {
   get(_target, prop) {
     const store = requestContext.getStore();
-    const profileId = store?.profileId || defaultProfile;
+    const profileId = store?.profileCode || store?.profileId || defaultProfile;
     const activeClient = getClientForProfile(profileId);
 
     const value = (activeClient as any)[prop];

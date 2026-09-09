@@ -1,34 +1,37 @@
 import cors from 'cors';
+import { config } from '../config';
 
 /**
- * CORS configuration.
- * Restricts cross-origin requests to configured domains.
+ * Production-hardened CORS middleware.
+ * - Enforces explicit origins for browser clients.
+ * - Allows non-browser / internal desktop clients (e.g. WebView2 standalone launcher) where Origin is absent.
+ * - Allows all required ERP headers (X-Profile-Id, Idempotency-Key, X-Bootstrap-Secret, X-Request-ID).
  */
-const allowedOrigins = process.env.CORS_ORIGIN 
-  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-  : [
-      'http://localhost:5173',
-      'http://localhost:3000',
-      'http://localhost:3001',
-    ];
+const allowedOrigins = config.corsOrigins;
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
-    // Task 23: Strict CORS Policies
-    // Allow requests with no origin ONLY in development (like curl), or explicitly allow in production
+    // Non-browser or desktop requests (like WebView2 local app, curl, server-to-server) do not provide an Origin header
     if (!origin) {
-      if (process.env.NODE_ENV !== 'production') return callback(null, true);
-      return callback(new Error('Strict CORS: Origin missing'));
+      return callback(null, true);
     }
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
+
+    callback(new Error(`CORS policy violation: Origin "${origin}" is not authorized.`));
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Request-ID',
+    'X-Profile-Id',
+    'Idempotency-Key',
+    'X-Bootstrap-Secret',
+  ],
   exposedHeaders: ['X-Request-ID', 'X-Response-Time'],
   credentials: true,
+  maxAge: 86400, // 24 hour preflight cache
 });

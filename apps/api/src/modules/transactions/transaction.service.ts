@@ -1,13 +1,13 @@
 import { Prisma, DiamondItem } from '@prisma/client';
 import prisma from '../../infrastructure/database/prisma';
 import { validateTransition } from '../../models/inventory-state-machine';
+import { ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { 
   TransactionType, 
   ItemEventType, 
   MovementType, 
   FinancialEntryType, 
   ItemStatus,
-  
   CertificateState
 } from '../../types/enums';
 
@@ -81,7 +81,7 @@ class TransactionService {
       where: { id: ledgerId },
       include: { stock: true }
     });
-    if (!ledger) throw new Error('Ledger not found');
+    if (!ledger) throw new NotFoundError('Ledger not found');
 
     // 17. TRANSACTION TOTAL RECONCILIATION (Phase 11: Financial Invariants)
     let sumCarat = new Prisma.Decimal(0);
@@ -95,10 +95,10 @@ class TransactionService {
     const diffValue = sumValue.minus(new Prisma.Decimal(payload.totalValue)).abs();
     
     if (diffCarat.gt(new Prisma.Decimal('0.001'))) {
-      throw new Error(`Transaction carat reconciliation failed: Items sum ${sumCarat.toString()} != Transaction total ${payload.totalCarat}`);
+      throw new ValidationError(`Transaction carat reconciliation failed: Items sum ${sumCarat.toString()} != Transaction total ${payload.totalCarat}`);
     }
     if (diffValue.gt(new Prisma.Decimal('0.01'))) {
-      throw new Error(`Transaction value reconciliation failed: Items sum ${sumValue.toString()} != Transaction total ${payload.totalValue}`);
+      throw new ValidationError(`Transaction value reconciliation failed: Items sum ${sumValue.toString()} != Transaction total ${payload.totalValue}`);
     }
 
     // Phase 7 & 8: Atomic Database-Backed Sequences
@@ -149,7 +149,7 @@ class TransactionService {
       let existingDiamond: DiamondItem | null = null;
 
       if (!diamondItemId) {
-        if (!item.itemCode) throw new Error('Item code is required for new items');
+        if (!item.itemCode) throw new ValidationError('Item code is required for new items');
         
         existingDiamond = await tx.diamondItem.create({
           data: {
@@ -173,7 +173,7 @@ class TransactionService {
         diamondItemId = existingDiamond.id;
       } else {
         existingDiamond = await tx.diamondItem.findUnique({ where: { id: diamondItemId }});
-        if (!existingDiamond) throw new Error(`Diamond ${diamondItemId} not found`);
+        if (!existingDiamond) throw new NotFoundError(`Diamond ${diamondItemId} not found`);
       }
 
       const stockBeforeId = existingDiamond.stockId;
@@ -200,7 +200,7 @@ class TransactionService {
       // Phase 9: State Machine Validation
       const transition = validateTransition(transactionType, statusBefore);
       if (!transition.valid) {
-        throw new Error(transition.error);
+        throw new ValidationError(transition.error);
       }
       let statusAfter = transition.targetStatus as ItemStatus;
       
@@ -237,7 +237,7 @@ class TransactionService {
         });
 
       } else if (transactionType === TransactionType.SALE) {
-        if (statusBefore === ItemStatus.SOLD) throw new Error(`Diamond ${diamondItemId} already sold`);
+        if (statusBefore === ItemStatus.SOLD) throw new ConflictError(`Diamond ${diamondItemId} already sold`);
         statusAfter = ItemStatus.SOLD;
         eventType = ItemEventType.SOLD;
 
@@ -473,12 +473,12 @@ class TransactionService {
           where: { id: item.linkedCertificateId },
           data: { diamondItemId: diamondItemId as string }
         });
-      } else if (item.labType && item.labType !== 'None' && item.labType !== '') {
+        const normalizedReportNumber = (item.internalNotes && item.internalNotes.trim() !== '') ? item.internalNotes.trim() : null;
         const newCert = await tx.certification.create({
           data: {
             diamondItemId: diamondItemId as string,
             labType: item.labType,
-            reportNumber: item.internalNotes || '',
+            reportNumber: normalizedReportNumber,
             certificateStatus: 'PENDING',
             cost: item.certCost || 0,
             laserInscription: item.internalNotes || '',
@@ -487,13 +487,6 @@ class TransactionService {
           }
         });
         currentCertificateId = newCert.id;
-      }
-
-      if (currentCertificateId) {
-        await tx.diamondItem.update({
-          where: { id: diamondItemId as string },
-          data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId }
-        });
       }
 
       if (transactionType === TransactionType.REPAIR_IN && item.linkedRepairId) {
@@ -509,7 +502,7 @@ class TransactionService {
         });
       } else if (item.repairType && item.repairType !== 'No Repair' && item.repairType !== '') {
         if (!item.repairVendorId) {
-          throw new Error('Repair vendor is required when a repair is linked.');
+          throw new ValidationError('Repair vendor is required when a repair is linked.');
         }
         await tx.repair.create({
           data: {
@@ -527,14 +520,33 @@ class TransactionService {
         });
       }
 
-      await tx.diamondItem.update({
-        where: { id: diamondItemId as string },
-        data: { 
-          status: statusAfter,
-          stockId: stockAfterId,
-          locationId: locationAfterId
+      const updateData = { 
+        status: statusAfter,
+        stockId: stockAfterId,
+        locationId: locationAfterId,
+        ...(currentCertificateId ? { certificateStatus: CertificateState.RECEIVED, currentCertificateId } : {})
+      };
+
+      const isExistingItem = Boolean(item.diamondItemId || item.existingDiamondId);
+      if (isExistingItem) {
+        // Optimistic concurrency locking to prevent double movement / double sale
+        const updated = await tx.diamondItem.updateMany({
+          where: { 
+            id: diamondItemId as string,
+            status: statusBefore
+          },
+          data: updateData
+        });
+
+        if (updated.count === 0) {
+          throw new ConflictError(`Concurrent modification detected for diamond ${diamondItemId}. Status changed from ${statusBefore} by another transaction.`);
         }
-      });
+      } else {
+        await tx.diamondItem.update({
+          where: { id: diamondItemId as string },
+          data: updateData
+        });
+      }
 
       await tx.itemEvent.create({
         data: {
@@ -601,7 +613,7 @@ class TransactionService {
       }
 
       if (payload.expectedVersion !== undefined && oldTxn.version !== payload.expectedVersion) {
-        throw new Error('Concurrency conflict: Transaction has been modified by another process.');
+        throw new ConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, payload.expectedVersion);
       }
 
       for (const item of oldTxn.items) {
@@ -612,7 +624,7 @@ class TransactionService {
           }
         });
         if (futureEvents > 0) {
-          throw new Error('Cannot edit transaction. Some items have been modified in subsequent transactions.');
+          throw new ConflictError('Cannot edit transaction. Some items have been modified in subsequent transactions.');
         }
       }
 
@@ -663,19 +675,19 @@ class TransactionService {
   }
 
   async deleteTransaction(_id: string): Promise<never> {
-    throw new Error('Historical transactions cannot be deleted. They are permanently recorded in the ledger.');
+    throw new ValidationError('Historical transactions cannot be deleted. They are permanently recorded in the ledger.');
   }
 
   async authorizeTransaction(id: string, authorizedBy: string, authorizationReason?: string, expectedVersion?: number) {
     return await prisma.$transaction(async (tx) => {
       const oldTxn = await tx.transaction.findUnique({ where: { id } });
-      if (!oldTxn) throw new Error('Transaction not found');
+      if (!oldTxn) throw new NotFoundError('Transaction not found');
       if (oldTxn.status === 'AUTHORIZED' || oldTxn.status === 'POSTED') {
-        throw new Error('Transaction is already authorized');
+        throw new ConflictError('Transaction is already authorized');
       }
       
       if (expectedVersion !== undefined && oldTxn.version !== expectedVersion) {
-        throw new Error('Concurrency conflict: Transaction has been modified by another process.');
+        throw new ConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, expectedVersion);
       }
 
       return await tx.transaction.update({

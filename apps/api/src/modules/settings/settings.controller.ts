@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import prisma from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
+import { ValidationError, AuthenticationError } from '../../errors';
 
 export class SettingsController {
   
@@ -23,6 +24,9 @@ export class SettingsController {
   updateSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const settingsToUpdate: Record<string, string> = req.body;
+      if (!settingsToUpdate || typeof settingsToUpdate !== 'object' || Array.isArray(settingsToUpdate)) {
+        throw new ValidationError('Settings payload must be a valid key-value object');
+      }
       
       // Task 17: Settings Allowlist
       const ALLOWED_SETTINGS = [
@@ -31,18 +35,26 @@ export class SettingsController {
         'FINANCIAL_YEAR_START', 'INVOICE_PREFIX', 'THEME_PREFERENCE'
       ];
 
+      // 1. Validate ALL settings before performing any DB operations
       for (const [key, value] of Object.entries(settingsToUpdate)) {
         if (!ALLOWED_SETTINGS.includes(key)) {
-          res.status(400).json({ success: false, error: `Setting key '${key}' is not allowed` });
-          return;
+          throw new ValidationError(`Setting key '${key}' is not allowed`);
         }
-
-        await prisma.setting.upsert({
-          where: { key },
-          update: { value },
-          create: { key, value }
-        });
+        if (typeof value !== 'string') {
+          throw new ValidationError(`Setting value for '${key}' must be a string`);
+        }
       }
+
+      // 2. Perform atomic database transaction - all or nothing
+      await prisma.$transaction(async (tx) => {
+        for (const [key, value] of Object.entries(settingsToUpdate)) {
+          await tx.setting.upsert({
+            where: { key },
+            update: { value },
+            create: { key, value }
+          });
+        }
+      });
 
       res.json({ success: true, message: 'Settings updated successfully' });
     } catch (error) {
@@ -651,32 +663,24 @@ export class SettingsController {
       // 2. Require re-authentication: user must provide their password
       const { confirmPassword } = req.body;
       if (!confirmPassword || typeof confirmPassword !== 'string') {
-        res.status(400).json({
-          success: false,
-          error: 'Password confirmation required. Send { confirmPassword: "your-password" } to confirm this destructive operation.',
-        });
-        return;
+        throw new ValidationError('Password confirmation required. Send { confirmPassword: "your-password" } to confirm this destructive operation.');
       }
 
       // 3. Verify the password matches the authenticated user
-      // Note: req.user is attached by the authenticate middleware
       const authenticatedUser = (req as any).user;
       if (!authenticatedUser) {
-        res.status(401).json({ success: false, error: 'Authentication required.' });
-        return;
+        throw new AuthenticationError('Authentication required.');
       }
 
-      // Verify re-authentication password
+      // Verify re-authentication password against authoritative system user store
       const { authService } = await import('../auth/auth.service');
-      const user = await prisma.user.findUnique({ where: { id: authenticatedUser.id } });
+      const user = await systemPrisma.user.findUnique({ where: { id: authenticatedUser.id } });
       if (!user) {
-        res.status(401).json({ success: false, error: 'User not found.' });
-        return;
+        throw new AuthenticationError('User not found.');
       }
       const passwordValid = await authService.verifyPassword(confirmPassword, user.passwordHash);
       if (!passwordValid) {
-        res.status(401).json({ success: false, error: 'Incorrect password. Factory reset aborted.' });
-        return;
+        throw new AuthenticationError('Incorrect password. Factory reset aborted.');
       }
 
       // 4. Create audit event BEFORE the reset

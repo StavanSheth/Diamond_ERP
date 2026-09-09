@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import prisma from '../../infrastructure/database/prisma';
 import { repairService } from '../repairs/repair.service';
 import { buildDiamondWhereClause } from '../../utils/filter.utils';
+import { ValidationError, NotFoundError } from '../../errors';
 
 export class RepairController {
   getRepairs = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -127,85 +128,88 @@ export class RepairController {
       const id = req.params.id as string;
       const { status, repairType, vendor, estCost, dueDate, completedOn, remarks, caratAfter } = req.body;
       
-      const currentRepair = await prisma.repair.findUnique({ where: { id } });
-      if (!currentRepair) {
-        res.status(404).json({ success: false, error: 'Repair record not found' });
-        return;
-      }
-
-      let vendorId = vendor;
-      if (vendor) {
-        const partyById = await prisma.party.findUnique({ where: { id: vendor } });
-        if (partyById) {
-          vendorId = partyById.id;
-        } else {
-          const partyByName = await prisma.party.findFirst({ where: { name: vendor } });
-          if (partyByName) vendorId = partyByName.id;
-        }
-      }
-
-      let normalizedStatus = status;
-      if (normalizedStatus === 'IN PROGRESS') normalizedStatus = 'IN_PROGRESS';
-
-      const updateData: any = {};
-      if (normalizedStatus !== undefined) updateData.status = normalizedStatus;
-      if (repairType !== undefined) updateData.repairType = repairType;
-      if (vendorId !== undefined) updateData.vendorPartyId = vendorId;
-      if (estCost !== undefined) updateData.cost = parseFloat(estCost);
-      if (dueDate !== undefined) updateData.dateSent = new Date(dueDate);
-      if (completedOn !== undefined) updateData.dateCompleted = new Date(completedOn);
-      if (remarks !== undefined) updateData.remarks = remarks;
-      if (caratAfter !== undefined) updateData.caratAfter = parseFloat(caratAfter);
-
-      const updated = await prisma.repair.update({
-        where: { id },
-        data: updateData
-      });
-
-      // Status transition handling for linked diamond
-      if (normalizedStatus === 'COMPLETED' || normalizedStatus === 'CANCELLED') {
-        const diamondUpdateData: any = { status: 'AVAILABLE' };
-        if (normalizedStatus === 'COMPLETED' && caratAfter) {
-          diamondUpdateData.carat = parseFloat(caratAfter);
+      const updated = await prisma.$transaction(async (tx) => {
+        const currentRepair = await tx.repair.findUnique({ where: { id } });
+        if (!currentRepair) {
+          throw new NotFoundError('Repair record not found');
         }
 
-        await prisma.diamondItem.update({
-          where: { id: currentRepair.diamondItemId },
-          data: diamondUpdateData
+        let vendorId = vendor;
+        if (vendor) {
+          const partyById = await tx.party.findUnique({ where: { id: vendor } });
+          if (partyById) {
+            vendorId = partyById.id;
+          } else {
+            const partyByName = await tx.party.findFirst({ where: { name: vendor } });
+            if (partyByName) vendorId = partyByName.id;
+          }
+        }
+
+        let normalizedStatus = status;
+        if (normalizedStatus === 'IN PROGRESS') normalizedStatus = 'IN_PROGRESS';
+
+        const updateData: any = {};
+        if (normalizedStatus !== undefined) updateData.status = normalizedStatus;
+        if (repairType !== undefined) updateData.repairType = repairType;
+        if (vendorId !== undefined) updateData.vendorPartyId = vendorId;
+        if (estCost !== undefined) updateData.cost = parseFloat(estCost);
+        if (dueDate !== undefined) updateData.dateSent = new Date(dueDate);
+        if (completedOn !== undefined) updateData.dateCompleted = new Date(completedOn);
+        if (remarks !== undefined) updateData.remarks = remarks;
+        if (caratAfter !== undefined) updateData.caratAfter = parseFloat(caratAfter);
+
+        const repairRecord = await tx.repair.update({
+          where: { id },
+          data: updateData
         });
 
-        if (normalizedStatus === 'COMPLETED') {
-          const diamond = await prisma.diamondItem.findUnique({ where: { id: currentRepair.diamondItemId } });
-          await prisma.inventoryMovement.create({
-            data: {
-              diamondItemId: currentRepair.diamondItemId,
-              movementType: 'REPAIR_IN',
-              toStockId: diamond?.stockId,
-              toLocationId: diamond?.locationId,
-              caratMoved: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
-              quantity: 1,
-              movementDate: completedOn ? new Date(completedOn) : new Date(),
-              reason: remarks || 'Completed repair returned to available inventory',
-              createdBy: 'SYSTEM'
-            }
+        // Status transition handling for linked diamond atomically
+        if (normalizedStatus === 'COMPLETED' || normalizedStatus === 'CANCELLED') {
+          const diamondUpdateData: any = { status: 'AVAILABLE' };
+          if (normalizedStatus === 'COMPLETED' && caratAfter) {
+            diamondUpdateData.carat = parseFloat(caratAfter);
+          }
+
+          await tx.diamondItem.update({
+            where: { id: currentRepair.diamondItemId },
+            data: diamondUpdateData
           });
 
-          await prisma.itemEvent.create({
-            data: {
-              diamondItemId: currentRepair.diamondItemId,
-              eventType: 'REPAIRED',
-              eventDate: completedOn ? new Date(completedOn) : new Date(),
-              partyId: currentRepair.vendorPartyId,
-              caratBefore: currentRepair.caratBefore,
-              caratAfter: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
-              statusBefore: 'IN_REPAIR',
-              statusAfter: 'AVAILABLE',
-              createdBy: 'SYSTEM',
-              remarks: remarks || `Completed repair: ${currentRepair.repairType}`
-            }
-          });
+          if (normalizedStatus === 'COMPLETED') {
+            const diamond = await tx.diamondItem.findUnique({ where: { id: currentRepair.diamondItemId } });
+            await tx.inventoryMovement.create({
+              data: {
+                diamondItemId: currentRepair.diamondItemId,
+                movementType: 'REPAIR_IN',
+                toStockId: diamond?.stockId,
+                toLocationId: diamond?.locationId,
+                caratMoved: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
+                quantity: 1,
+                movementDate: completedOn ? new Date(completedOn) : new Date(),
+                reason: remarks || 'Completed repair returned to available inventory',
+                createdBy: 'SYSTEM'
+              }
+            });
+
+            await tx.itemEvent.create({
+              data: {
+                diamondItemId: currentRepair.diamondItemId,
+                eventType: 'REPAIRED',
+                eventDate: completedOn ? new Date(completedOn) : new Date(),
+                partyId: currentRepair.vendorPartyId,
+                caratBefore: currentRepair.caratBefore,
+                caratAfter: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
+                statusBefore: 'IN_REPAIR',
+                statusAfter: 'AVAILABLE',
+                createdBy: 'SYSTEM',
+                remarks: remarks || `Completed repair: ${currentRepair.repairType}`
+              }
+            });
+          }
         }
-      }
+
+        return repairRecord;
+      });
 
       res.json({ success: true, message: 'Repair updated successfully', data: updated });
     } catch (error) {
@@ -216,31 +220,28 @@ export class RepairController {
   deleteRepair = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const id = req.params.id as string;
-      const currentRepair = await prisma.repair.findUnique({ where: { id } });
+      await prisma.$transaction(async (tx) => {
+        const currentRepair = await tx.repair.findUnique({ where: { id } });
 
-      if (!currentRepair) {
-        res.status(404).json({ success: false, error: 'Repair not found' });
-        return;
-      }
+        if (!currentRepair) {
+          throw new NotFoundError('Repair not found');
+        }
 
-      // Task 15: Deletion semantics
-      if (currentRepair.status === 'COMPLETED') {
-        res.status(400).json({
-          success: false,
-          error: 'Cannot delete a COMPLETED repair. It has already affected inventory and financial ledgers. Please create a reversing entry instead.'
+        // Deletion semantics: COMPLETED repairs cannot be physically deleted
+        if (currentRepair.status === 'COMPLETED') {
+          throw new ValidationError('Cannot delete a COMPLETED repair. It has already affected inventory and financial ledgers. Please create a reversing entry instead.');
+        }
+
+        if (currentRepair.status === 'IN_PROGRESS') {
+          await tx.diamondItem.update({
+            where: { id: currentRepair.diamondItemId },
+            data: { status: 'AVAILABLE' }
+          });
+        }
+
+        await tx.repair.delete({
+          where: { id }
         });
-        return;
-      }
-
-      if (currentRepair.status === 'IN_PROGRESS') {
-        await prisma.diamondItem.update({
-          where: { id: currentRepair.diamondItemId },
-          data: { status: 'AVAILABLE' }
-        });
-      }
-
-      await prisma.repair.delete({
-        where: { id }
       });
 
       res.json({ success: true, message: 'Repair deleted successfully' });

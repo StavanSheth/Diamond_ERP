@@ -23,7 +23,7 @@ import { errorHandler } from './middleware/error-handler';
 import { corsMiddleware } from './middleware/cors';
 import { profileMiddleware } from './middleware/profile';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
-import prisma from './infrastructure/database/prisma';
+import prisma, { disconnectAllClients } from './infrastructure/database/prisma';
 
 /**
  * Bootstrap and start the application.
@@ -31,19 +31,19 @@ import prisma from './infrastructure/database/prisma';
 async function bootstrap(): Promise<void> {
   logger.info('Starting DiamondERP V3.0 Backend...');
 
-  // 1. Validate configuration (including auth secrets)
-  validateConfig();
+  // 1. Fail fast on missing or insecure production configuration
   try {
+    validateConfig();
     validateAuthConfig();
   } catch (err) {
-    if (err instanceof Error) {
-      logger.error(err.message);
+    if (process.env.NODE_ENV === 'production') {
+      logger.error('FATAL: Startup configuration validation failed in production', undefined, err);
+      process.exit(1);
+    } else {
+      logger.warn('Non-production configuration warning: ' + (err as Error).message);
     }
-    logger.warn(
-      'JWT_SECRET not set. Authentication will not work. ' +
-      'Set JWT_SECRET in your .env file for production use.'
-    );
   }
+
   logger.info(`Port: ${config.port} | Retry: ${config.retry.maxAttempts} attempts, ${config.retry.baseDelayMs}ms base delay`);
 
   // 2. Database connection check
@@ -54,11 +54,11 @@ async function bootstrap(): Promise<void> {
     logger.error('Failed to connect to database', undefined, err);
   }
 
-  // 3. Seed default admin user if needed
+  // 3. Seed default admin user and default profile if database is uninitialized
   try {
     await authService.seedDefaultAdmin();
   } catch (err) {
-    logger.warn('Failed to seed default admin (this is OK on first run if User table does not exist yet)');
+    logger.warn(`Failed to seed default admin: ${err}`);
   }
 
   // 4. Controllers
@@ -79,47 +79,68 @@ async function bootstrap(): Promise<void> {
   app.use(corsMiddleware);
   app.use(profileMiddleware);
 
-  // Task 23: Strict CORS/CSRF headers
-  app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'none'"],
-        scriptSrc: ["'self'"],
-        connectSrc: ["'self'"],
-        imgSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+  // Security Headers via Helmet
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'none'"],
+          scriptSrc: ["'self'"],
+          connectSrc: ["'self'"],
+          imgSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+        },
       },
-    },
-    crossOriginEmbedderPolicy: true,
-    crossOriginOpenerPolicy: { policy: 'same-origin' },
-    crossOriginResourcePolicy: { policy: 'same-origin' },
-    frameguard: { action: 'deny' },
-    noSniff: true,
-    xssFilter: true,
-  }));
+      crossOriginEmbedderPolicy: true,
+      crossOriginOpenerPolicy: { policy: 'same-origin' },
+      crossOriginResourcePolicy: { policy: 'same-origin' },
+      frameguard: { action: 'deny' },
+      noSniff: true,
+      xssFilter: true,
+      hsts: config.isProduction ? { maxAge: 31536000, includeSubDomains: true } : false,
+    })
+  );
 
   app.use(express.json({ limit: '10mb' }));
   app.use(performanceMiddleware);
-  
-  // Phase 19: Rate limiting
+
+  // ── Layered Rate Limiting ──────────────────────────────────────────────
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 300, // limit each IP to 300 requests per windowMs
+    max: 600, // Reasonable ERP limit
     standardHeaders: true,
     legacyHeaders: false,
-    message: { success: false, error: 'Too many requests from this IP, please try again after 15 minutes' }
+    message: { success: false, error: 'Too many requests, please try again after 15 minutes' },
   });
   app.use('/api/', apiLimiter);
 
   const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20, // limit each IP to 20 auth requests per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 30, // 30 login attempts per 15 minutes
     standardHeaders: true,
     legacyHeaders: false,
-    message: { success: false, error: 'Too many login attempts, please try again later' }
+    message: { success: false, error: 'Too many login attempts, please try again later' },
   });
-  app.use('/api/auth/', authLimiter);
-  
+  app.use('/api/auth/login', authLimiter);
+
+  const bootstrapLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5, // Strict 5 requests per 15 min for bootstrap
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many bootstrap attempts, access temporarily suspended' },
+  });
+  app.use('/api/auth/bootstrap', bootstrapLimiter);
+
+  const factoryResetLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many factory reset attempts' },
+  });
+  app.use('/api/settings/factory-reset', factoryResetLimiter);
+
   // Uploads directory setup (certificates, etc.)
   const uploadsDir = path.join(__dirname, '../uploads');
   const certsDir = path.join(uploadsDir, 'certs');
@@ -127,17 +148,12 @@ async function bootstrap(): Promise<void> {
     fs.mkdirSync(certsDir, { recursive: true });
   }
 
-  // ⚠️ SECURITY FIX: Removed public static file serving for /uploads
-  // Certificates are now served through authenticated API endpoint:
-  //   GET /api/certificates/:id/file
-  // This prevents unauthorized access to sensitive certificate documents.
-
   // 7. Swagger UI (only in development)
   if (process.env.NODE_ENV !== 'production') {
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   }
 
-  // 8. Register routes (auth is handled per-route in createRoutes)
+  // 8. Register routes
   app.use(
     '/',
     createRoutes(
@@ -149,7 +165,7 @@ async function bootstrap(): Promise<void> {
       partyController,
       repairController,
       settingsController
-    ),
+    )
   );
 
   // 9. Error handler (must be last)
@@ -158,7 +174,7 @@ async function bootstrap(): Promise<void> {
   // 10. Start listening
   const server = app.listen(config.port, () => {
     logger.info(`✅ DiamondERP V3.0 Backend running on http://localhost:${config.port}`);
-    logger.info(`🔐 Authentication: ${process.env.JWT_SECRET ? 'ENABLED' : 'DISABLED (set JWT_SECRET)'}`);
+    logger.info(`🔐 Authentication: ${process.env.JWT_SECRET ? 'ENABLED' : 'DEVELOPMENT MODE'}`);
     if (process.env.NODE_ENV !== 'production') {
       logger.info(`📖 API docs at http://localhost:${config.port}/api-docs`);
     }
@@ -168,23 +184,23 @@ async function bootstrap(): Promise<void> {
   // 11. Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`${signal} received. Shutting down gracefully...`);
-    
+
     server.close(async () => {
-      logger.info('HTTP server closed');
-      
+      logger.info('HTTP server stopped accepting new requests.');
+
       try {
-        await prisma.$disconnect();
-        logger.info('Database disconnected');
+        await disconnectAllClients();
+        logger.info('All database clients cleanly disconnected.');
       } catch (err) {
-        logger.error('Error disconnecting database', undefined, err);
+        logger.error('Error disconnecting database clients', undefined, err);
       }
 
       process.exit(0);
     });
 
-    // Force exit after 10 seconds
+    // Force exit after 10 seconds if hanging
     setTimeout(() => {
-      logger.error('Forced shutdown after timeout');
+      logger.error('Forced shutdown after timeout.');
       process.exit(1);
     }, 10000);
   };

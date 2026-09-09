@@ -1,52 +1,122 @@
 import { Request, Response, NextFunction } from 'express';
+import { ZodError } from 'zod';
 import { logger } from '../infrastructure/logging';
 import { RequestWithId } from './request-id';
-import { AuthenticationError, AuthorizationError } from '../modules/auth/auth.service';
+import {
+  DomainError,
+  ValidationError,
+  AuthenticationError,
+  AuthorizationError,
+  NotFoundError,
+  ConflictError,
+  RateLimitError,
+  DatabaseError,
+} from '../errors';
 
-export class ConflictError extends Error {
-  constructor(
-    message: string,
-    public readonly currentVersion?: number,
-    public readonly clientVersion?: number
-  ) {
-    super(message);
-    this.name = 'ConflictError';
-  }
-}
-
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NotFoundError';
-  }
-}
+// Re-export error classes for backward compatibility
+export {
+  DomainError,
+  ValidationError,
+  AuthenticationError,
+  AuthorizationError,
+  NotFoundError,
+  ConflictError,
+  RateLimitError,
+  DatabaseError,
+};
 
 /**
- * Global error handler middleware.
- * Maps known error types to appropriate HTTP status codes.
+ * Production-hardened global error handler middleware.
+ * Maps typed domain errors to HTTP statuses and sanitizes internal details in production.
  */
 export function errorHandler(
   err: Error,
   req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ): void {
   const requestId = (req as RequestWithId).requestId || 'unknown';
 
-  // AuthenticationError → 401
-  if (err instanceof AuthenticationError) {
-    logger.warn(`Authentication failed: ${err.message}`, requestId);
-    res.status(401).json({
+  // 1. Domain Typed Errors
+  if (err instanceof DomainError) {
+    logger.warn(`[${err.name}] ${err.message} (status ${err.statusCode})`, requestId);
+    const body: Record<string, unknown> = {
       success: false,
       error: err.message,
+      requestId,
+    };
+    if (err.details !== undefined) {
+      body.details = err.details;
+    }
+    if (err instanceof ConflictError) {
+      if (err.currentVersion !== undefined) body.currentVersion = err.currentVersion;
+      if (err.clientVersion !== undefined) body.clientVersion = err.clientVersion;
+    }
+    res.status(err.statusCode).json(body);
+    return;
+  }
+
+  // 2. Zod Validation Errors
+  if (err instanceof ZodError) {
+    logger.warn(`Validation failed: ${err.message}`, requestId);
+    res.status(400).json({
+      success: false,
+      error: 'Validation failed',
+      details: err.flatten().fieldErrors,
       requestId,
     });
     return;
   }
 
-  // AuthorizationError → 403
-  if (err instanceof AuthorizationError) {
-    logger.warn(`Authorization denied: ${err.message}`, requestId);
+  // 3. Prisma Known Request Errors
+  const prismaCode = (err as any).code;
+  if (typeof prismaCode === 'string') {
+    if (prismaCode === 'P2025') {
+      logger.warn(`Prisma not found: ${err.message}`, requestId);
+      res.status(404).json({
+        success: false,
+        error: 'The requested resource was not found.',
+        requestId,
+      });
+      return;
+    }
+
+    if (prismaCode === 'P2002') {
+      const target = (err as any).meta?.target;
+      const field = Array.isArray(target) ? target.join(', ') : (target || 'field');
+      logger.warn(`Prisma unique constraint violation on ${field}: ${err.message}`, requestId);
+      res.status(409).json({
+        success: false,
+        error: `A record with this ${field} already exists.`,
+        requestId,
+      });
+      return;
+    }
+
+    if (prismaCode === 'P2003') {
+      logger.warn(`Prisma foreign key constraint violation: ${err.message}`, requestId);
+      res.status(400).json({
+        success: false,
+        error: 'Invalid reference: referenced entity does not exist or has dependent records.',
+        requestId,
+      });
+      return;
+    }
+
+    if (prismaCode === 'P2034') {
+      logger.warn(`Prisma transaction concurrency conflict: ${err.message}`, requestId);
+      res.status(409).json({
+        success: false,
+        error: 'Concurrent transaction conflict. Please retry the operation.',
+        requestId,
+      });
+      return;
+    }
+  }
+
+  // 4. CORS Policy Violations
+  if (err.message && err.message.startsWith('CORS policy violation')) {
+    logger.warn(`CORS rejected: ${err.message}`, requestId);
     res.status(403).json({
       success: false,
       error: err.message,
@@ -55,73 +125,10 @@ export function errorHandler(
     return;
   }
 
-  // ConflictError → 409
-  if (err instanceof ConflictError) {
-    logger.warn(`Conflict: ${err.message}`, requestId);
-    res.status(409).json({
-      success: false,
-      error: err.message,
-      requestId,
-      currentVersion: err.currentVersion,
-      clientVersion: err.clientVersion,
-    });
-    return;
-  }
-
-  // NotFoundError → 404
-  if (err instanceof NotFoundError) {
-    logger.warn(`Not found: ${err.message}`, requestId);
-    res.status(404).json({
-      success: false,
-      error: err.message,
-      requestId,
-    });
-    return;
-  }
-
-  // Prisma known error codes (P2025 = record not found, P2002 = unique constraint)
-  if ((err as any).code === 'P2025') {
-    logger.warn(`Prisma not found: ${err.message}`, requestId);
-    res.status(404).json({
-      success: false,
-      error: 'Record not found.',
-      requestId,
-    });
-    return;
-  }
-
-  if ((err as any).code === 'P2002') {
-    const target = (err as any).meta?.target || 'field';
-    logger.warn(`Prisma unique constraint: ${err.message}`, requestId);
-    res.status(409).json({
-      success: false,
-      error: `A record with this ${target} already exists.`,
-      requestId,
-    });
-    return;
-  }
-
-  // Validation errors (message starts with known patterns)
-  if (
-    err.message.includes('reconciliation failed') ||
-    err.message.includes('required') ||
-    err.message.includes('not found')
-  ) {
-    logger.warn(`Validation error: ${err.message}`, requestId);
-    res.status(400).json({
-      success: false,
-      error: err.message,
-      requestId,
-    });
-    return;
-  }
-
-  // Unknown errors → 500
+  // 5. Unhandled / Internal Server Errors
   logger.error(`Unhandled error: ${err.message}`, requestId, err);
-  
-  // Phase 21: Error details scrubbing (Do not leak stack traces or internal DB errors)
+
   const isProduction = process.env.NODE_ENV === 'production';
-  
   res.status(500).json({
     success: false,
     error: isProduction ? 'Internal server error.' : err.message,

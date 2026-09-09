@@ -55,3 +55,12 @@ uploads/
 **/uploads/
 storage/
 **/storage/
+
+# Compiled Binaries & Release Artifacts
+*.exe
+**/*.exe
+*.dll
+**/*.dll
+
+# AI Assistant configs
+.claude/

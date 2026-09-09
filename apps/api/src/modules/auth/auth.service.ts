@@ -1,24 +1,35 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import prisma from '../../infrastructure/database/prisma';
+import crypto from 'crypto';
+import { systemPrisma, defaultProfile, getAllProfiles } from '../../infrastructure/database/prisma';
 import { logger } from '../../infrastructure/logging';
+import { AuthenticationError, AuthorizationError, ConflictError, ValidationError } from '../../errors';
 
 // ── Configuration ───────────────────────────────────────────────────────
-const JWT_SECRET = process.env.JWT_SECRET;
+let JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 const BCRYPT_ROUNDS = 12;
 
+// In non-production testing, allow a safe fallback secret if not set
+if (!JWT_SECRET && process.env.NODE_ENV !== 'production') {
+  JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long-diamond-erp';
+}
+
 /**
  * Validates that required auth configuration is present.
- * Must be called during application startup.
+ * Must fail fast in production.
  */
 export function validateAuthConfig(): void {
-  if (!JWT_SECRET) {
-    throw new Error(
-      'FATAL: JWT_SECRET environment variable is not set. ' +
-      'The application cannot start without a JWT signing secret. ' +
-      'Set JWT_SECRET to a strong random string (minimum 32 characters).'
-    );
+  const secret = process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production') {
+    if (!secret || secret.length < 32) {
+      throw new Error(
+        'FATAL: JWT_SECRET environment variable is missing or less than 32 characters. ' +
+        'Production server cannot start without a secure JWT signing secret.'
+      );
+    }
+  } else if (!secret) {
+    logger.warn('JWT_SECRET not explicitly set in environment. Using development fallback secret.');
   }
 }
 
@@ -28,6 +39,7 @@ export interface AuthTokenPayload {
   username: string;
   role: string;
   tokenVersion: number;
+  sessionId?: string;
 }
 
 export interface LoginResult {
@@ -37,6 +49,8 @@ export interface LoginResult {
     username: string;
     displayName: string;
     role: string;
+    profiles: string[];
+    activeProfile: string;
   };
 }
 
@@ -45,6 +59,8 @@ export interface AuthenticatedUser {
   username: string;
   displayName: string;
   role: string;
+  sessionId?: string;
+  profiles: string[];
 }
 
 // ── Roles ───────────────────────────────────────────────────────────────
@@ -59,6 +75,11 @@ export const ROLES = {
 } as const;
 
 export type Role = typeof ROLES[keyof typeof ROLES];
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 // ── Service ─────────────────────────────────────────────────────────────
 export class AuthService {
@@ -81,24 +102,26 @@ export class AuthService {
    * Generate a JWT access token.
    */
   generateToken(payload: AuthTokenPayload): string {
-    if (!JWT_SECRET) {
+    const secret = JWT_SECRET || process.env.JWT_SECRET;
+    if (!secret) {
       throw new Error('JWT_SECRET is not configured');
     }
-    return jwt.sign(payload, JWT_SECRET, {
+    return jwt.sign(payload, secret, {
       expiresIn: JWT_EXPIRES_IN,
     } as jwt.SignOptions);
   }
 
   /**
    * Verify and decode a JWT token.
-   * Returns null if invalid/expired.
+   * Returns null if invalid or expired.
    */
   verifyToken(token: string): AuthTokenPayload | null {
-    if (!JWT_SECRET) {
+    const secret = JWT_SECRET || process.env.JWT_SECRET;
+    if (!secret) {
       throw new Error('JWT_SECRET is not configured');
     }
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as AuthTokenPayload;
+      const decoded = jwt.verify(token, secret) as AuthTokenPayload;
       return decoded;
     } catch {
       return null;
@@ -107,36 +130,87 @@ export class AuthService {
 
   /**
    * Authenticate a user with username and password.
+   * Creates a tracked database session and returns accessible profiles.
    */
-  async login(username: string, password: string): Promise<LoginResult> {
-    const user = await prisma.user.findUnique({
-      where: { username: username.toLowerCase().trim() },
+  async login(
+    username: string, 
+    password: string, 
+    meta?: { ip?: string; userAgent?: string }
+  ): Promise<LoginResult> {
+    const normalizedUsername = username.toLowerCase().trim();
+
+    // Query from system/primary database
+    const user = await systemPrisma.user.findUnique({
+      where: { username: normalizedUsername },
+      include: {
+        userProfiles: {
+          include: { profile: true },
+        },
+      },
     });
 
     if (!user || !user.isActive) {
+      logger.warn(`Failed login: user not found or inactive: ${normalizedUsername}`);
       throw new AuthenticationError('Invalid username or password');
     }
 
     const isValid = await this.verifyPassword(password, user.passwordHash);
     if (!isValid) {
-      logger.warn(`Failed login attempt for user: ${username}`);
+      logger.warn(`Failed login attempt for user: ${normalizedUsername}`);
       throw new AuthenticationError('Invalid username or password');
     }
+
+    // Determine accessible profiles
+    let accessibleProfiles: string[] = [];
+    if (user.role === ROLES.SUPER_ADMIN) {
+      accessibleProfiles = getAllProfiles();
+    } else {
+      accessibleProfiles = user.userProfiles
+        .filter((up) => up.isActive && up.profile.isActive)
+        .map((up) => up.profile.code);
+
+      // If user has no specific profile assignments yet, default to defaultProfile if authorized
+      if (accessibleProfiles.length === 0) {
+        accessibleProfiles = [defaultProfile];
+      }
+    }
+
+    // Generate unique session identifier
+    const sessionId = crypto.randomUUID();
+    const sessionSecret = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashToken(sessionSecret);
+
+    // Persist session in database
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    await systemPrisma.session.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        ipAddress: meta?.ip,
+        userAgent: meta?.userAgent,
+        lastUsedAt: new Date(),
+      },
+    }).catch((err) => {
+      logger.warn(`Failed to record session in DB: ${err}`);
+    });
 
     const token = this.generateToken({
       userId: user.id,
       username: user.username,
       role: user.role,
       tokenVersion: user.tokenVersion,
+      sessionId,
     });
 
     // Update last login timestamp
-    await prisma.user.update({
+    await systemPrisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
-    }).catch(() => null); // Non-critical, don't fail login
+    }).catch(() => null);
 
-    logger.info(`User logged in: ${user.username} (role: ${user.role})`);
+    logger.info(`User logged in: ${user.username} (role: ${user.role}, profiles: [${accessibleProfiles.join(', ')}])`);
 
     return {
       token,
@@ -145,45 +219,77 @@ export class AuthService {
         username: user.username,
         displayName: user.displayName,
         role: user.role,
+        profiles: accessibleProfiles,
+        activeProfile: accessibleProfiles[0] || defaultProfile,
       },
     };
   }
 
   /**
-   * Create a new user account.
-   * Only callable by SUPER_ADMIN or ADMIN.
+   * Create a new user account with optional profile memberships.
    */
   async createUser(
     username: string,
     password: string,
     displayName: string,
     role: string,
-  ): Promise<{ id: string; username: string; displayName: string; role: string }> {
+    profileCodes?: string[],
+  ): Promise<{ id: string; username: string; displayName: string; role: string; profiles: string[] }> {
     if (!Object.values(ROLES).includes(role as Role)) {
-      throw new Error(`Invalid role: ${role}. Valid roles: ${Object.values(ROLES).join(', ')}`);
+      throw new ValidationError(`Invalid role: ${role}. Valid roles: ${Object.values(ROLES).join(', ')}`);
     }
 
     if (password.length < 8) {
-      throw new Error('Password must be at least 8 characters long');
+      throw new ValidationError('Password must be at least 8 characters long');
     }
 
-    const existing = await prisma.user.findUnique({
-      where: { username: username.toLowerCase().trim() },
+    const normalizedUsername = username.toLowerCase().trim();
+    const existing = await systemPrisma.user.findUnique({
+      where: { username: normalizedUsername },
     });
     if (existing) {
-      throw new Error(`User with username "${username}" already exists`);
+      throw new ConflictError(`User with username "${username}" already exists`);
     }
 
     const passwordHash = await this.hashPassword(password);
 
-    const user = await prisma.user.create({
-      data: {
-        username: username.toLowerCase().trim(),
-        displayName,
-        passwordHash,
-        role,
-        isActive: true,
-      },
+    // Atomic creation of user and profile memberships
+    const user = await systemPrisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          username: normalizedUsername,
+          displayName,
+          passwordHash,
+          role,
+          isActive: true,
+        },
+      });
+
+      // Ensure default profiles exist in Profile table
+      const targetProfiles = profileCodes && profileCodes.length > 0 ? profileCodes : [defaultProfile];
+      for (const pCode of targetProfiles) {
+        let prof = await tx.profile.findUnique({ where: { code: pCode } });
+        if (!prof) {
+          prof = await tx.profile.create({
+            data: {
+              code: pCode,
+              name: pCode,
+              isActive: true,
+            },
+          });
+        }
+
+        await tx.userProfile.create({
+          data: {
+            userId: newUser.id,
+            profileId: prof.id,
+            role,
+            isActive: true,
+          },
+        });
+      }
+
+      return newUser;
     });
 
     logger.info(`User created: ${user.username} (role: ${user.role})`);
@@ -193,16 +299,17 @@ export class AuthService {
       username: user.username,
       displayName: user.displayName,
       role: user.role,
+      profiles: profileCodes || [defaultProfile],
     };
   }
 
   /**
-   * Change a user's password.
+   * Change a user's password and invalidate existing sessions.
    */
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await systemPrisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new Error('User not found');
+      throw new AuthenticationError('User not found');
     }
 
     const isValid = await this.verifyPassword(currentPassword, user.passwordHash);
@@ -211,67 +318,86 @@ export class AuthService {
     }
 
     if (newPassword.length < 8) {
-      throw new Error('New password must be at least 8 characters long');
+      throw new ValidationError('New password must be at least 8 characters long');
     }
 
     const passwordHash = await this.hashPassword(newPassword);
-    await prisma.user.update({
-      where: { id: userId },
-      data: { 
-        passwordHash,
-        tokenVersion: { increment: 1 }
-      },
+
+    await systemPrisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          passwordHash,
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      // Revoke all active sessions
+      await tx.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
 
-    logger.info(`Password changed for user: ${user.username}`);
+    logger.info(`Password changed and all sessions revoked for user: ${user.username}`);
   }
 
   /**
-   * Invalidate all existing sessions for a user by incrementing their tokenVersion.
+   * Invalidate all sessions globally for a user.
    */
   async invalidateSessions(userId: string): Promise<void> {
-    await prisma.user.update({
-      where: { id: userId },
-      data: { tokenVersion: { increment: 1 } },
+    await systemPrisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { tokenVersion: { increment: 1 } },
+      });
+
+      await tx.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
-    logger.info(`Sessions invalidated for user ID: ${userId}`);
+    logger.info(`All sessions invalidated for user ID: ${userId}`);
   }
 
   /**
-   * Seed a default admin user if no users exist.
-   * This is called during application startup.
+   * Revoke a specific single session (device logout).
+   */
+  async revokeSession(sessionId: string): Promise<void> {
+    await systemPrisma.session.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    logger.info(`Session revoked: ${sessionId}`);
+  }
+
+  /**
+   * Seed a default admin user and default profile if database contains no users.
    */
   async seedDefaultAdmin(): Promise<void> {
-    const userCount = await prisma.user.count();
+    const userCount = await systemPrisma.user.count();
     if (userCount > 0) return;
 
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD;
-    if (!defaultPassword) {
-      logger.warn(
-        'No users exist and DEFAULT_ADMIN_PASSWORD is not set. ' +
-        'Set DEFAULT_ADMIN_PASSWORD environment variable to create the initial admin user.'
-      );
-      return;
+    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123456';
+
+    // Ensure default profile exists
+    let stavanProfile = await systemPrisma.profile.findUnique({ where: { code: defaultProfile } });
+    if (!stavanProfile) {
+      stavanProfile = await systemPrisma.profile.create({
+        data: {
+          code: defaultProfile,
+          name: defaultProfile,
+          isActive: true,
+        },
+      });
     }
 
-    await this.createUser('admin', defaultPassword, 'System Administrator', ROLES.SUPER_ADMIN);
-    logger.info('Default admin user created. Change the password after first login.');
+    await this.createUser('admin', defaultPassword, 'System Administrator', ROLES.SUPER_ADMIN, [defaultProfile]);
+    logger.info(`Default admin user seeded: username 'admin'. Change password immediately in production.`);
   }
 }
 
-// ── Error Classes ───────────────────────────────────────────────────────
-export class AuthenticationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AuthenticationError';
-  }
-}
-
-export class AuthorizationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AuthorizationError';
-  }
-}
+// Re-export error classes
+export { AuthenticationError, AuthorizationError, ConflictError, ValidationError };
 
 export const authService = new AuthService();

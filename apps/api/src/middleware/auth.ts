@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { authService, AuthenticatedUser } from '../modules/auth/auth.service';
+import { authService, AuthenticatedUser, ROLES } from '../modules/auth/auth.service';
 import { RequestWithId } from './request-id';
-import prisma from '../infrastructure/database/prisma';
+import { systemPrisma, getAllProfiles, defaultProfile } from '../infrastructure/database/prisma';
 
 /**
  * Extends Express Request with authenticated user information.
@@ -12,11 +12,7 @@ export interface AuthenticatedRequest extends Request {
 
 /**
  * Authentication middleware.
- * 
- * Extracts the JWT token from the Authorization header,
- * verifies it, and attaches the authenticated user to the request.
- * 
- * Expected header format: Authorization: Bearer <token>
+ * Validates JWT, user active status, token version, and active session.
  */
 export async function authenticate(
   req: Request,
@@ -25,7 +21,6 @@ export async function authenticate(
 ): Promise<void> {
   const requestId = (req as RequestWithId).requestId || 'unknown';
 
-  // Extract token from Authorization header
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({
@@ -36,8 +31,7 @@ export async function authenticate(
     return;
   }
 
-  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-
+  const token = authHeader.substring(7);
   const payload = authService.verifyToken(token);
   if (!payload) {
     res.status(401).json({
@@ -49,8 +43,16 @@ export async function authenticate(
   }
 
   try {
-    // Session validation: ensure the user exists, is active, and token version matches
-    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    // Session and user validation against primary/system database
+    const user = await systemPrisma.user.findUnique({
+      where: { id: payload.userId },
+      include: {
+        userProfiles: {
+          include: { profile: true },
+        },
+      },
+    });
+
     if (!user || !user.isActive || user.tokenVersion !== payload.tokenVersion) {
       res.status(401).json({
         success: false,
@@ -60,12 +62,42 @@ export async function authenticate(
       return;
     }
 
-    // Attach authenticated user to request
+    // If session ID is present in token, ensure session was not individually revoked
+    if (payload.sessionId) {
+      const session = await systemPrisma.session.findUnique({
+        where: { id: payload.sessionId },
+      });
+      if (session && (session.revokedAt || session.expiresAt < new Date())) {
+        res.status(401).json({
+          success: false,
+          error: 'Session has been revoked or expired.',
+          requestId,
+        });
+        return;
+      }
+    }
+
+    // Determine profiles user is authorized to access
+    let authorizedProfiles: string[] = [];
+    if (user.role === ROLES.SUPER_ADMIN) {
+      authorizedProfiles = getAllProfiles();
+    } else {
+      authorizedProfiles = user.userProfiles
+        .filter((up) => up.isActive && up.profile.isActive)
+        .map((up) => up.profile.code);
+
+      if (authorizedProfiles.length === 0) {
+        authorizedProfiles = [defaultProfile];
+      }
+    }
+
     (req as AuthenticatedRequest).user = {
       id: user.id,
       username: user.username,
       displayName: user.displayName,
       role: user.role,
+      sessionId: payload.sessionId,
+      profiles: authorizedProfiles,
     };
 
     next();
@@ -76,11 +108,6 @@ export async function authenticate(
 
 /**
  * Optional authentication middleware.
- * 
- * If a token is present, verifies it and attaches the user.
- * If no token is present, allows the request to proceed without user info.
- * 
- * Useful for endpoints that behave differently for authenticated vs anonymous users.
  */
 export async function optionalAuthenticate(
   req: Request,
@@ -97,16 +124,39 @@ export async function optionalAuthenticate(
   const payload = authService.verifyToken(token);
   if (payload) {
     try {
-      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+      const user = await systemPrisma.user.findUnique({
+        where: { id: payload.userId },
+        include: {
+          userProfiles: {
+            include: { profile: true },
+          },
+        },
+      });
+
       if (user && user.isActive && user.tokenVersion === payload.tokenVersion) {
+        let authorizedProfiles: string[] = [];
+        if (user.role === ROLES.SUPER_ADMIN) {
+          authorizedProfiles = getAllProfiles();
+        } else {
+          authorizedProfiles = user.userProfiles
+            .filter((up) => up.isActive && up.profile.isActive)
+            .map((up) => up.profile.code);
+
+          if (authorizedProfiles.length === 0) {
+            authorizedProfiles = [defaultProfile];
+          }
+        }
+
         (req as AuthenticatedRequest).user = {
           id: user.id,
           username: user.username,
           displayName: user.displayName,
           role: user.role,
+          sessionId: payload.sessionId,
+          profiles: authorizedProfiles,
         };
       }
-    } catch (error) {
+    } catch {
       // Ignore DB errors for optional auth
     }
   }

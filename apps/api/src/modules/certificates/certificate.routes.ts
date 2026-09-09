@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { CertificateController } from '../../modules/certificates/certificate.controller';
+import { CertificateController } from './certificate.controller';
 import { authorize } from '../../middleware/authorize';
 
 const certsUploadDir = path.resolve(__dirname, '../../../uploads/certs');
@@ -18,11 +18,11 @@ const storage = multer.diskStorage({
     }
     cb(null, certsUploadDir);
   },
-  filename: function (_req, file, cb) {
-    // SECURITY: Randomized filename to prevent path traversal and guessing
+  filename: function (_req, _file, cb) {
+    // Randomized 32-character hex name with forced .pdf extension
     const randomName = crypto.randomBytes(16).toString('hex');
-    cb(null, randomName + path.extname(file.originalname));
-  }
+    cb(null, `${randomName}.pdf`);
+  },
 });
 
 const upload = multer({
@@ -31,15 +31,15 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB max for certificate PDFs
   },
   fileFilter: (_req, file, cb) => {
-    // Only allow PDF files
-    const allowedMimes = ['application/pdf'];
-    const allowedExts = ['.pdf'];
     const ext = path.extname(file.originalname).toLowerCase();
+    const isPdfExt = ext === '.pdf';
+    const isPdfMime = file.mimetype === 'application/pdf';
 
-    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+    // Must satisfy both extension and declared MIME
+    if (isPdfExt && isPdfMime) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF files are allowed for certificate uploads'));
+      cb(new Error('Only PDF files are allowed for certificate uploads. Both extension and MIME type must be PDF.'));
     }
   },
 });

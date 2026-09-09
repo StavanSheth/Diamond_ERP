@@ -1,7 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
+import path from 'path';
+import fs from 'fs';
 import prisma from '../../infrastructure/database/prisma';
 import { CertificateState, CertificationStatus } from '../../types/enums';
 import { buildDiamondWhereClause } from '../../utils/filter.utils';
+import { ConflictError, NotFoundError, ValidationError } from '../../errors';
+
+const UPLOADS_DIR = path.resolve(__dirname, '../../../uploads/certs');
 
 export class CertificateController {
   
@@ -9,7 +14,8 @@ export class CertificateController {
     try {
       const diamondWhere = buildDiamondWhereClause(req.query);
       const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
-      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+      const rawTake = req.query.take ? parseInt(req.query.take as string, 10) : 100;
+      const take = Math.min(Math.max(1, rawTake), 200);
 
       const [total, certificates] = await prisma.$transaction([
         prisma.certification.count({
@@ -23,6 +29,7 @@ export class CertificateController {
           } : undefined,
           skip,
           take,
+          orderBy: { createdAt: 'desc' },
           include: {
             diamondItem: {
               include: {
@@ -34,10 +41,10 @@ export class CertificateController {
       ]);
       
       const formatted = certificates.map(c => ({
-        id: c.id, // Added for UI compatibility
+        id: c.id,
         certificateId: c.id,
-        diamondItemId: c.diamondItemId, // Added for UI mapping
-        name: c.name, // Added for UI mapping
+        diamondItemId: c.diamondItemId,
+        name: c.name,
         stockItemId: c.diamondItem?.itemCode || c.diamondItemId,
         stockName: c.diamondItem?.stock?.name || (c.diamondItem ? 'Diamond Stock' : 'Standalone'),
         itemName: c.name || (c.diamondItem ? `${c.diamondItem.clarity || ''} ${c.diamondItem.shape || 'Unknown'}` : ''),
@@ -67,14 +74,16 @@ export class CertificateController {
   getUnlinkedCertificates = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
-      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+      const rawTake = req.query.take ? parseInt(req.query.take as string, 10) : 100;
+      const take = Math.min(Math.max(1, rawTake), 200);
 
       const [total, certificates] = await prisma.$transaction([
         prisma.certification.count({ where: { diamondItemId: null } }),
         prisma.certification.findMany({
           where: { diamondItemId: null },
           skip,
-          take
+          take,
+          orderBy: { createdAt: 'desc' },
         })
       ]);
       const formatted = certificates.map(c => ({
@@ -99,11 +108,32 @@ export class CertificateController {
     try {
       const id = req.params.id as string;
       const { diamondItemId } = req.body;
-      
+
+      if (!diamondItemId) {
+        throw new ValidationError('diamondItemId is required to link certificate');
+      }
+
       const updated = await prisma.$transaction(async (tx) => {
-        const cert = await tx.certification.update({
+        const cert = await tx.certification.findUnique({ where: { id } });
+        if (!cert) throw new NotFoundError('Certificate not found');
+
+        const targetDiamond = await tx.diamondItem.findUnique({ where: { id: diamondItemId } });
+        if (!targetDiamond) throw new NotFoundError('Target diamond not found');
+
+        // If certificate was previously linked to another diamond, unlink it cleanly
+        if (cert.diamondItemId && cert.diamondItemId !== diamondItemId) {
+          await tx.diamondItem.updateMany({
+            where: { currentCertificateId: id },
+            data: { currentCertificateId: null, certificateStatus: CertificateState.NONE },
+          });
+        }
+
+        const updatedCert = await tx.certification.update({
           where: { id },
-          data: { diamondItemId }
+          data: { 
+            diamondItemId,
+            certificateStatus: CertificationStatus.ISSUED 
+          }
         });
         
         await tx.diamondItem.update({
@@ -111,7 +141,7 @@ export class CertificateController {
           data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId: id }
         });
         
-        return cert;
+        return updatedCert;
       });
 
       res.json({ success: true, data: updated });
@@ -120,28 +150,30 @@ export class CertificateController {
     }
   };
 
-
   createCertificate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { diamondItemId, labType, reportNumber, cost, laserInscription, name } = req.body;
+      const normalizedReportNumber = reportNumber && typeof reportNumber === 'string' && reportNumber.trim() !== '' 
+        ? reportNumber.trim() 
+        : null;
       
-      // Task 16: Certificate uniqueness rules
-      if (reportNumber) {
-        const existing = await prisma.certification.findFirst({ where: { reportNumber } });
+      // Friendly pre-check before hitting DB constraint
+      if (normalizedReportNumber) {
+        const existing = await prisma.certification.findUnique({ where: { reportNumber: normalizedReportNumber } });
         if (existing) {
-          res.status(409).json({ success: false, error: `Certificate with report number ${reportNumber} already exists` });
-          return;
+          throw new ConflictError(`Certificate with report number "${normalizedReportNumber}" already exists`);
         }
       }
 
+      // Atomic transactional creation
       const newCert = await prisma.$transaction(async (tx) => {
         const cert = await tx.certification.create({
           data: {
             diamondItemId: diamondItemId || null,
             labType: labType || 'GIA',
-            reportNumber: reportNumber || '',
+            reportNumber: normalizedReportNumber,
             certificateStatus: CertificationStatus.PENDING,
-            cost: cost || 0,
+            cost: cost ? parseFloat(cost) : 0,
             laserInscription: laserInscription || '',
             name: name || '',
           }
@@ -150,8 +182,8 @@ export class CertificateController {
         if (diamondItemId) {
           await tx.diamondItem.update({
             where: { id: diamondItemId },
-            data: { certificateStatus: CertificateState.PENDING }
-          }).catch(() => null);
+            data: { certificateStatus: CertificateState.PENDING, currentCertificateId: cert.id }
+          });
         }
         
         return cert;
@@ -166,18 +198,20 @@ export class CertificateController {
   updateCertificate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const id = req.params.id as string;
-      
-      // Task 16: Certificate uniqueness rules
-      if (req.body.reportNumber) {
+      const rawReport = req.body.reportNumber;
+      const normalizedReportNumber = rawReport && typeof rawReport === 'string' && rawReport.trim() !== ''
+        ? rawReport.trim()
+        : null;
+
+      if (normalizedReportNumber) {
         const existing = await prisma.certification.findFirst({ 
           where: { 
-            reportNumber: req.body.reportNumber,
-            id: { not: id } // Exclude the current certificate being updated
+            reportNumber: normalizedReportNumber,
+            id: { not: id }
           } 
         });
         if (existing) {
-          res.status(409).json({ success: false, error: `Certificate with report number ${req.body.reportNumber} already exists` });
-          return;
+          throw new ConflictError(`Certificate with report number "${normalizedReportNumber}" already exists`);
         }
       }
 
@@ -186,8 +220,8 @@ export class CertificateController {
           where: { id },
           data: {
             labType: req.body.labType,
-            reportNumber: req.body.reportNumber,
-            cost: req.body.cost,
+            reportNumber: normalizedReportNumber,
+            cost: req.body.cost !== undefined ? parseFloat(req.body.cost) : undefined,
             measurements: req.body.measurements,
             polish: req.body.polish,
             symmetry: req.body.symmetry,
@@ -220,6 +254,9 @@ export class CertificateController {
       const id = req.params.id as string;
       
       await prisma.$transaction(async (tx) => {
+        const cert = await tx.certification.findUnique({ where: { id } });
+        if (!cert) throw new NotFoundError('Certificate not found');
+
         // Unlink any diamond items pointing to this certificate as currentCertificate
         await tx.diamondItem.updateMany({
           where: { currentCertificateId: id },
@@ -240,27 +277,33 @@ export class CertificateController {
   uploadPdf = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       if (!req.file) {
-        res.status(400).json({ success: false, error: 'No file uploaded' });
-        return;
+        throw new ValidationError('No file uploaded');
       }
 
       // Magic bytes validation for PDF (%PDF-)
-      const fs = require('fs');
       const buffer = Buffer.alloc(5);
-      const fd = fs.openSync(req.file.path, 'r');
-      fs.readSync(fd, buffer, 0, 5, 0);
-      fs.closeSync(fd);
+      let fd: number | null = null;
+      try {
+        fd = fs.openSync(req.file.path, 'r');
+        fs.readSync(fd, buffer, 0, 5, 0);
+      } finally {
+        if (fd !== null) fs.closeSync(fd);
+      }
       
       if (buffer.toString('utf8') !== '%PDF-') {
-        fs.unlinkSync(req.file.path);
-        res.status(400).json({ success: false, error: 'Invalid file format. Only valid PDFs are allowed.' });
-        return;
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        throw new ValidationError('Invalid file format. File is not a valid PDF document.');
       }
 
-      // Store just the filename, not the /uploads path
-      const filename = req.file.filename;
+      // Store just the randomized server filename, never trusting user input
+      const filename = path.basename(req.file.filename);
       res.json({ success: true, data: { path: filename } });
     } catch (error) {
+      if (req.file && fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch {}
+      }
       next(error);
     }
   };
@@ -271,22 +314,22 @@ export class CertificateController {
       const cert = await prisma.certification.findUnique({ where: { id } });
       
       if (!cert || !cert.pdfPath) {
-        res.status(404).json({ success: false, error: 'Certificate file not found' });
-        return;
+        throw new NotFoundError('Certificate file not found');
       }
 
-      const fs = require('fs');
-      const path = require('path');
-      const filePath = path.resolve(__dirname, '../../../../uploads/certs', cert.pdfPath);
+      // Strict path traversal prevention: ensure file stays strictly inside UPLOADS_DIR
+      const safeBasename = path.basename(cert.pdfPath);
+      const filePath = path.resolve(UPLOADS_DIR, safeBasename);
 
-      if (!fs.existsSync(filePath)) {
-        res.status(404).json({ success: false, error: 'File missing from storage' });
-        return;
+      if (!filePath.startsWith(UPLOADS_DIR) || !fs.existsSync(filePath)) {
+        throw new NotFoundError('File missing from storage');
       }
 
-      // Secure streaming
+      // Header sanitization against CRLF injection
+      const safeReportNumber = (cert.reportNumber || 'certificate').replace(/[^a-zA-Z0-9_-]/g, '_');
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${cert.reportNumber || 'certificate'}.pdf"`);
+      res.setHeader('Content-Disposition', `inline; filename="${safeReportNumber}.pdf"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       
       const stream = fs.createReadStream(filePath);
       stream.pipe(res);

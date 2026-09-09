@@ -43,11 +43,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hydrate();
   }, []);
 
+  const localLogout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+  };
+
   // Set the token state in api.ts listener
   useEffect(() => {
-    // Listen for 401 events dispatched from api.ts to clear auth
+    // Listen for 401 events dispatched from api.ts to clear auth locally without calling /logout
     const handleUnauthorized = () => {
-      logout();
+      localLogout();
     };
     window.addEventListener('unauthorized', handleUnauthorized);
     return () => window.removeEventListener('unauthorized', handleUnauthorized);
@@ -65,11 +71,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await api.logout();
       }
     } catch (e) {
-      console.error('Logout failed:', e);
+      console.error('Server logout failed (clearing local state anyway):', e);
     } finally {
-      localStorage.removeItem('token');
-      setToken(null);
-      setUser(null);
+      localLogout();
     }
   };
 

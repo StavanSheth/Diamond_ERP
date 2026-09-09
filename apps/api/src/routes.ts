@@ -20,14 +20,20 @@ import diamondRouter from './modules/diamonds/diamond.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import systemRoutes from './modules/system/system.routes';
 import { authenticate } from './middleware/auth';
+import { profileMiddleware } from './middleware/profile';
+import { idempotencyMiddleware } from './middleware/idempotency';
 
 /**
  * Route aggregator — registers all application routes.
  * 
  * Security architecture:
- *   - /health and /api/auth/login are PUBLIC (no auth required)
- *   - All other /api/* routes require authentication via JWT Bearer token
- *   - Individual routes further enforce RBAC permissions via authorize() middleware
+ *   - /health (with /liveness and /readiness) and /api/auth (login, bootstrap) are PUBLIC
+ *   - All other /api/* routes run through `protectedStack` [authenticate, profileMiddleware, idempotencyMiddleware]:
+ *       1. Authenticate user via JWT & session check
+ *       2. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
+ *       3. Establish canonical profile DB context
+ *       4. Support Idempotency-Key header on mutating requests
+ *       5. Individual routes enforce RBAC via authorize()
  */
 export function createRoutes(
   stockController: StockController,
@@ -45,18 +51,19 @@ export function createRoutes(
   router.use('/health', createHealthRouter(healthController));
   router.use('/api/auth', createAuthRouter());
 
-  // ── Protected routes (authentication required) ───────────────────────
-  // All routes below require a valid JWT Bearer token.
-  router.use('/api/stocks', authenticate, createStockRouter(stockController));
-  router.use('/api/dashboard', authenticate, createDashboardRouter(dashboardController));
-  router.use('/api/ledger', authenticate, createLedgerRouter(ledgerController));
-  router.use('/api/certificates', authenticate, createCertificateRouter(certificateController));
-  router.use('/api/parties', authenticate, createPartyRouter(partyController));
-  router.use('/api/repairs', authenticate, createRepairRouter(repairController));
-  router.use('/api/settings', authenticate, createSettingsRouter(settingsController));
-  router.use('/api/diamonds', authenticate, diamondRouter);
-  router.use('/api/reports', authenticate, reportsRoutes);
-  router.use('/api/system', authenticate, systemRoutes);
+  // ── Protected routes (Authentication + Profile Authorization + Idempotency) ───
+  const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];
+
+  router.use('/api/stocks', protectedStack, createStockRouter(stockController));
+  router.use('/api/dashboard', protectedStack, createDashboardRouter(dashboardController));
+  router.use('/api/ledger', protectedStack, createLedgerRouter(ledgerController));
+  router.use('/api/certificates', protectedStack, createCertificateRouter(certificateController));
+  router.use('/api/parties', protectedStack, createPartyRouter(partyController));
+  router.use('/api/repairs', protectedStack, createRepairRouter(repairController));
+  router.use('/api/settings', protectedStack, createSettingsRouter(settingsController));
+  router.use('/api/diamonds', protectedStack, diamondRouter);
+  router.use('/api/reports', protectedStack, reportsRoutes);
+  router.use('/api/system', protectedStack, systemRoutes);
 
   return router;
 }

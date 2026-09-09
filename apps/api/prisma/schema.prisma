@@ -23,7 +23,69 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  userProfiles UserProfile[]
+  sessions     Session[]
+
   @@index([role])
+}
+
+model Profile {
+  id          String   @id @default(uuid())
+  code        String   @unique // e.g. "stavan", "stuti"
+  name        String
+  description String?
+  dbPath      String?  // Server-controlled absolute or relative path to DB file
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userProfiles UserProfile[]
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String
+  profileId String
+  role      String   @default("VIEWER")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, profileId])
+  @@index([userId])
+  @@index([profileId])
+}
+
+model Session {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  ipAddress  String?
+  userAgent  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  resource     String
+  statusCode   Int
+  responseBody String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([key])
+  @@index([expiresAt])
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -270,8 +332,8 @@ model Certification {
   transaction   Transaction? @relation(fields: [transactionId], references: [id])
 
   labType           String?
-  reportNumber      String?
-  certificateStatus String? @default("PENDING") // PENDING, SUBMITTED, ISSUED, REJECTED, EXPIRED, REPLACED, CANCELLED
+  reportNumber      String?  @unique
+  certificateStatus String?  @default("PENDING") // PENDING, SUBMITTED, ISSUED, REJECTED, EXPIRED, REPLACED, CANCELLED
 
   cost              Decimal? @default(0)
   measurements      String?
@@ -289,7 +351,6 @@ model Certification {
   updatedAt DateTime @updatedAt
 
   @@index([diamondItemId])
-  @@index([reportNumber])
 }
 
 model Repair {

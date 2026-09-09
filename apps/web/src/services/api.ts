@@ -27,8 +27,10 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const data = await res.json().catch(() => ({}));
 
   if (res.status === 401) {
-    // Dispatch an event so AuthContext can clear token and logout
-    window.dispatchEvent(new Event('unauthorized'));
+    // Dispatch an event so AuthContext can clear token locally, except if /logout itself failed
+    if (!url.includes('/api/auth/logout')) {
+      window.dispatchEvent(new Event('unauthorized'));
+    }
     throw new ApiError(data.error || 'Unauthorized', 401, data);
   }
 
