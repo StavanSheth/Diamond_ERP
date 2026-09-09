@@ -7,6 +7,15 @@ class InventoryService {
       const existingDiamond = await tx.diamondItem.findUnique({ where: { id: diamondItemId }});
       if (!existingDiamond) throw new Error(`Diamond ${diamondItemId} not found`);
 
+      // Task 12: Cross-stock/location validation
+      const targetStock = await tx.stock.findUnique({ where: { id: toStockId } });
+      if (!targetStock) throw new Error(`Target stock ${toStockId} does not exist`);
+
+      if (toLocationId) {
+        const targetLocation = await tx.location.findUnique({ where: { id: toLocationId } });
+        if (!targetLocation) throw new Error(`Target location ${toLocationId} does not exist`);
+      }
+
       const stockBeforeId = existingDiamond.stockId;
       const locationBeforeId = existingDiamond.locationId;
 

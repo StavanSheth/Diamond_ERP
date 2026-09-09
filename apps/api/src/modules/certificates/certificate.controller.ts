@@ -8,18 +8,30 @@ export class CertificateController {
   getCertificates = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const diamondWhere = buildDiamondWhereClause(req.query);
-      const certificates = await prisma.certification.findMany({
-        where: Object.keys(diamondWhere).length > 0 ? {
-          diamondItem: diamondWhere
-        } : undefined,
-        include: {
-          diamondItem: {
-            include: {
-              stock: true
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
+      const [total, certificates] = await prisma.$transaction([
+        prisma.certification.count({
+          where: Object.keys(diamondWhere).length > 0 ? {
+            diamondItem: diamondWhere
+          } : undefined
+        }),
+        prisma.certification.findMany({
+          where: Object.keys(diamondWhere).length > 0 ? {
+            diamondItem: diamondWhere
+          } : undefined,
+          skip,
+          take,
+          include: {
+            diamondItem: {
+              include: {
+                stock: true
+              }
             }
           }
-        }
-      });
+        })
+      ]);
       
       const formatted = certificates.map(c => ({
         id: c.id, // Added for UI compatibility
@@ -46,17 +58,25 @@ export class CertificateController {
         updatedAt: c.updatedAt
       }));
         
-      res.json({ success: true, data: formatted });
+      res.json({ success: true, data: formatted, total });
     } catch (error) {
       next(error);
     }
   };
 
-  getUnlinkedCertificates = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getUnlinkedCertificates = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const certificates = await prisma.certification.findMany({
-        where: { diamondItemId: null }
-      });
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
+      const [total, certificates] = await prisma.$transaction([
+        prisma.certification.count({ where: { diamondItemId: null } }),
+        prisma.certification.findMany({
+          where: { diamondItemId: null },
+          skip,
+          take
+        })
+      ]);
       const formatted = certificates.map(c => ({
         certificateId: c.id,
         labType: c.labType,
@@ -69,7 +89,7 @@ export class CertificateController {
         fluorescence: c.fluorescence,
         laserInscription: c.laserInscription,
       }));
-      res.json({ success: true, data: formatted });
+      res.json({ success: true, data: formatted, total });
     } catch (error) {
       next(error);
     }
@@ -105,6 +125,15 @@ export class CertificateController {
     try {
       const { diamondItemId, labType, reportNumber, cost, laserInscription, name } = req.body;
       
+      // Task 16: Certificate uniqueness rules
+      if (reportNumber) {
+        const existing = await prisma.certification.findFirst({ where: { reportNumber } });
+        if (existing) {
+          res.status(409).json({ success: false, error: `Certificate with report number ${reportNumber} already exists` });
+          return;
+        }
+      }
+
       const newCert = await prisma.$transaction(async (tx) => {
         const cert = await tx.certification.create({
           data: {
@@ -138,6 +167,20 @@ export class CertificateController {
     try {
       const id = req.params.id as string;
       
+      // Task 16: Certificate uniqueness rules
+      if (req.body.reportNumber) {
+        const existing = await prisma.certification.findFirst({ 
+          where: { 
+            reportNumber: req.body.reportNumber,
+            id: { not: id } // Exclude the current certificate being updated
+          } 
+        });
+        if (existing) {
+          res.status(409).json({ success: false, error: `Certificate with report number ${req.body.reportNumber} already exists` });
+          return;
+        }
+      }
+
       const updated = await prisma.$transaction(async (tx) => {
         const cert = await tx.certification.update({
           where: { id },

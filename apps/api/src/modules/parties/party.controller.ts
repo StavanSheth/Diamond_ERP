@@ -1,17 +1,26 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../infrastructure/database/prisma';
+import { Prisma } from '@prisma/client';
 
 export class PartyController {
   
-  getParties = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getParties = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const parties = await prisma.party.findMany({
-        include: {
-          transactions: true,
-          repairs: true,
-          financialEntries: true
-        }
-      });
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
+      const [total, parties] = await prisma.$transaction([
+        prisma.party.count(),
+        prisma.party.findMany({
+          skip,
+          take,
+          include: {
+            transactions: true,
+            repairs: true,
+            financialEntries: true
+          }
+        })
+      ]);
       const mapped = parties.map(p => {
         let outstandingBalance = 0;
         let lastTxDate = p.updatedAt;
@@ -57,7 +66,7 @@ export class PartyController {
           notes: ''
         };
       });
-      res.json({ success: true, data: mapped });
+      res.json({ success: true, data: mapped, total });
     } catch (error) {
       next(error);
     }
@@ -95,7 +104,7 @@ export class PartyController {
   updateParty = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const id = req.params.id as string;
-      const data: any = {
+      const data: Prisma.PartyUpdateInput = {
         name: req.body.partyName || req.body.name,
         partyType: req.body.type || req.body.partyType,
         phone: req.body.phone,
@@ -119,10 +128,32 @@ export class PartyController {
   deleteParty = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const id = req.params.id as string;
+      const existing = await prisma.party.findUnique({
+        where: { id },
+        include: {
+          transactions: { select: { id: true }, take: 1 },
+          repairs: { select: { id: true }, take: 1 },
+          financialEntries: { select: { id: true }, take: 1 }
+        }
+      });
+
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Party not found' });
+        return;
+      }
+
+      if (existing.transactions.length > 0 || existing.repairs.length > 0 || existing.financialEntries.length > 0) {
+        res.status(400).json({ 
+          success: false, 
+          error: 'Cannot delete party because it has existing transactions, financial entries, or repairs attached to it. Please archive or deactivate instead.' 
+        });
+        return;
+      }
+
       await prisma.party.delete({
         where: { id }
       });
-      res.json({ success: true, message: 'Party deleted' });
+      res.json({ success: true, message: 'Party deleted successfully' });
     } catch (error) {
       next(error);
     }

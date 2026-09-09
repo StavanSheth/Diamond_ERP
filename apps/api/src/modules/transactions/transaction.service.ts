@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, DiamondItem } from '@prisma/client';
 import prisma from '../../infrastructure/database/prisma';
 import { validateTransition } from '../../models/inventory-state-machine';
 import { 
@@ -68,7 +68,13 @@ class TransactionService {
     });
   }
 
-  private async _createTransactionLogic(tx: any, payload: CreateTransactionPayload, preserveTransactionId?: string, preserveCreatedAt?: Date, preserveVersion?: number) {
+  private async _createTransactionLogic(
+    tx: Prisma.TransactionClient, 
+    payload: CreateTransactionPayload, 
+    preserveTransactionId?: string, 
+    preserveCreatedAt?: Date, 
+    preserveVersion?: number
+  ) {
     const { ledgerId, transactionType, transactionDate, partyId, items, remarks, referenceNo, createdBy, paymentStatus, paymentDone, paymentDue, brokeragePercentage, brokerageAmount, brokerageType } = payload;
     
     const ledger = await tx.ledger.findUnique({
@@ -140,7 +146,7 @@ class TransactionService {
 
     for (const item of items) {
       let diamondItemId = item.diamondItemId || item.existingDiamondId;
-      let existingDiamond: any = null;
+      let existingDiamond: DiamondItem | null = null;
 
       if (!diamondItemId) {
         if (!item.itemCode) throw new Error('Item code is required for new items');

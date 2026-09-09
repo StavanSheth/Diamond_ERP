@@ -12,55 +12,63 @@ export class DashboardController {
     try {
       const requestId = (req as RequestWithId).requestId || 'REQ-UNKNOWN';
       
-      const stocks = await prisma.stock.findMany({
-        include: { diamondItems: true }
-      });
+      const [activeParcels, stockCounts, totals, recentStocks, topValueStocks] = await Promise.all([
+        prisma.stock.count({ where: { isActive: true } }),
+        prisma.stock.groupBy({
+          by: ['isActive'],
+          _count: { _all: true }
+        }),
+        prisma.diamondItem.aggregate({
+          where: { status: { notIn: ['SOLD', 'WRITTEN_OFF'] } },
+          _sum: { carat: true, currentValue: true }
+        }),
+        prisma.stock.findMany({
+          orderBy: { updatedAt: 'desc' },
+          take: 10,
+          select: { id: true, name: true, updatedAt: true }
+        }),
+        // Top stocks is trickier in pure SQL without a view, we'll fetch stocks and their item sums 
+        // using Prisma's relation count/sum isn't perfectly supported in one go without raw query.
+        // We'll execute a lightweight raw query for top stocks by value:
+        prisma.$queryRaw<{id: string, name: string, total_value: number, carat_weight: number}[]>`
+          SELECT s.id, s.name, 
+                 SUM(d.currentValue) as total_value,
+                 SUM(d.carat) as carat_weight
+          FROM "Stock" s
+          LEFT JOIN "DiamondItem" d ON d."stockId" = s.id AND d.status NOT IN ('SOLD', 'WRITTEN_OFF')
+          GROUP BY s.id, s.name
+          ORDER BY total_value DESC
+          LIMIT 5
+        `
+      ]);
+
+      const totalCarats = Number(totals._sum.carat || 0);
+      const totalStockValue = Number(totals._sum.currentValue || 0);
       
-      let totalStockValue = 0;
-      let totalCarats = 0;
-      let activeParcels = 0;
-      const stocksByStatus: Record<string, number> = {};
-      
-      const enrichedStocks = stocks.map(stock => {
-        const activeItems = stock.diamondItems.filter(i => i.status !== 'SOLD' && i.status !== 'WRITTEN_OFF');
-        const stockCarats = activeItems.reduce((sum, item) => sum + Number(item.carat), 0);
-        const stockValue = activeItems.reduce((sum, item) => sum + Number(item.currentValue), 0);
-        
-        totalCarats += stockCarats;
-        totalStockValue += stockValue;
-        
-        if (stock.isActive) activeParcels++;
-        
-        const status = stock.isActive ? 'ACTIVE' : 'INACTIVE';
-        stocksByStatus[status] = (stocksByStatus[status] || 0) + 1;
-        
-        return {
-          id: stock.id,
-          stockName: stock.name,
-          totalValue: stockValue,
-          caratWeight: stockCarats,
-          status: status,
-          updatedAt: stock.updatedAt,
-          updatedBy: 'system'
-        };
-      });
+      const stocksByStatus: Record<string, number> = {
+        'ACTIVE': stockCounts.find(c => c.isActive)?._count._all || 0,
+        'INACTIVE': stockCounts.find(c => !c.isActive)?._count._all || 0,
+      };
+
+      const topStocks = topValueStocks.map(s => ({
+        id: s.id,
+        stockName: s.name,
+        totalValue: Number(s.total_value || 0),
+        caratWeight: Number(s.carat_weight || 0),
+        status: 'ACTIVE',
+        updatedAt: new Date(), // Mocked for UI compatibility from raw query
+        updatedBy: 'system'
+      }));
+
+      const recentActivity = recentStocks.map(s => ({
+        id: s.id,
+        stockName: s.name,
+        action: 'Updated',
+        updatedAt: s.updatedAt.toISOString(),
+        updatedBy: 'system',
+      }));
 
       const avgRatePerCarat = totalCarats > 0 ? (totalStockValue / totalCarats) : 0;
-
-      const topStocks = [...enrichedStocks]
-        .sort((a, b) => b.totalValue - a.totalValue)
-        .slice(0, 5);
-
-      const recentActivity = [...enrichedStocks]
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 10)
-        .map(s => ({
-          id: s.id,
-          stockName: s.stockName,
-          action: 'Updated',
-          updatedAt: s.updatedAt.toISOString(),
-          updatedBy: s.updatedBy,
-        }));
 
       const dashboard: DashboardData = {
         totalStockValue: Math.round(totalStockValue * 100) / 100,

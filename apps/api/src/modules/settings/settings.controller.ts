@@ -24,7 +24,19 @@ export class SettingsController {
     try {
       const settingsToUpdate: Record<string, string> = req.body;
       
+      // Task 17: Settings Allowlist
+      const ALLOWED_SETTINGS = [
+        'COMPANY_NAME', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
+        'DEFAULT_CURRENCY', 'TAX_PERCENTAGE', 'DEFAULT_BROKERAGE',
+        'FINANCIAL_YEAR_START', 'INVOICE_PREFIX', 'THEME_PREFERENCE'
+      ];
+
       for (const [key, value] of Object.entries(settingsToUpdate)) {
+        if (!ALLOWED_SETTINGS.includes(key)) {
+          res.status(400).json({ success: false, error: `Setting key '${key}' is not allowed` });
+          return;
+        }
+
         await prisma.setting.upsert({
           where: { key },
           update: { value },
@@ -70,7 +82,15 @@ export class SettingsController {
         orderBy: [{ ledgerId: 'asc' }, { transactionDate: 'asc' }, { sequenceNumber: 'asc' }],
       });
 
-      const workbook = new ExcelJS.Workbook();
+      // Task 21: Streaming exports
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="diamond_inventory_export.xlsx"');
+
+      const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+        stream: res,
+        useStyles: true,
+        useSharedStrings: true
+      });
       
       // 1. Diamonds Sheet
       const diamondSheet = workbook.addWorksheet('Diamonds');
@@ -127,7 +147,8 @@ export class SettingsController {
         { header: 'Currency', key: 'currency', width: 10 },
         { header: 'Is Active', key: 'isActive', width: 10 },
       ];
-      stocks.forEach(s => stockSheet.addRow(s));
+      stocks.forEach(s => stockSheet.addRow(s).commit());
+      stockSheet.commit();
 
       // 3. Locations Sheet
       const locationSheet = workbook.addWorksheet('Locations');
@@ -145,6 +166,7 @@ export class SettingsController {
           parentLocation: loc.parentLocation?.name || '',
         });
       });
+      locationSheet.commit();
 
       // 4. Parties Sheet
       const partySheet = workbook.addWorksheet('Parties');
@@ -161,6 +183,7 @@ export class SettingsController {
         ...p,
         brokeragePercentage: Number(p.brokeragePercentage || 0),
       }));
+      partySheet.commit();
 
       // 5. Ledgers Sheet with Debit, Credit & Closing Balance
       const ledgerSheet = workbook.addWorksheet('Ledgers');
@@ -211,6 +234,7 @@ export class SettingsController {
           closingValue: openingValue + totalDebitValue - totalCreditValue,
         });
       });
+      ledgerSheet.commit();
 
       // 6. Certificates Sheet
       const certSheet = workbook.addWorksheet('Certificates');
@@ -228,6 +252,7 @@ export class SettingsController {
         certificateStatus: c.certificateStatus,
         cost: c.cost,
       }));
+      certSheet.commit();
 
       // 7. Repairs Sheet
       const repairSheet = workbook.addWorksheet('Repairs');
@@ -245,6 +270,7 @@ export class SettingsController {
         status: r.status,
         cost: r.cost,
       }));
+      repairSheet.commit();
 
       // 8. Transactions Sheet with Debit, Credit & Closing Balance
       const txnSheet = workbook.addWorksheet('Transactions');
@@ -324,6 +350,7 @@ export class SettingsController {
           paymentDue: Number(t.paymentDue || 0),
         });
       });
+      txnSheet.commit();
 
       // 9. Transaction Items Sheet
       const txnItemSheet = workbook.addWorksheet('Transaction Items');
@@ -349,10 +376,9 @@ export class SettingsController {
           });
         });
       });
+      txnItemSheet.commit();
 
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="diamond_inventory_export.xlsx"');
-      await workbook.xlsx.write(res);
+      await workbook.commit();
       res.end();
     } catch (error) {
       next(error);
@@ -701,6 +727,12 @@ export class SettingsController {
         return;
       }
 
+      // Task 22: File size limit (10MB)
+      if (req.file.size && req.file.size > 10 * 1024 * 1024) {
+        res.status(400).json({ success: false, message: 'File too large. Maximum allowed size is 10MB.' });
+        return;
+      }
+
       const mode = req.query.mode as string || 'merge'; // 'merge' or 'overwrite'
 
       const workbook = new ExcelJS.Workbook();
@@ -708,6 +740,14 @@ export class SettingsController {
         await workbook.xlsx.load(req.file.buffer as any);
       } catch {
         res.status(400).json({ success: false, message: 'Invalid Excel file format' });
+        return;
+      }
+
+      // Task 22: Resource limits
+      let totalRows = 0;
+      workbook.eachSheet((sheet) => { totalRows += sheet.rowCount; });
+      if (totalRows > 10000) {
+        res.status(400).json({ success: false, message: 'Too many rows. Maximum allowed is 10,000 across all sheets.' });
         return;
       }
 

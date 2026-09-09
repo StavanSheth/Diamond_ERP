@@ -11,6 +11,10 @@ export class StockController {
       const diamondWhere = buildDiamondWhereClause(req.query);
       const hasFilters = Object.keys(diamondWhere).length > 0;
 
+      // Task 18 & 19: Pagination and Optimization
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
       const stockWhere: any = {};
       if (hasFilters) {
         stockWhere.diamondItems = { some: diamondWhere };
@@ -43,15 +47,20 @@ export class StockController {
         };
       }
 
-      const stocks = await prisma.stock.findMany({
-        where: Object.keys(stockWhere).length > 0 ? stockWhere : undefined,
-        include: {
-          ledgers: true,
-          diamondItems: {
-            where: diamondWhere
+      const [total, stocks] = await prisma.$transaction([
+        prisma.stock.count({ where: Object.keys(stockWhere).length > 0 ? stockWhere : undefined }),
+        prisma.stock.findMany({
+          where: Object.keys(stockWhere).length > 0 ? stockWhere : undefined,
+          skip,
+          take,
+          include: {
+            ledgers: true,
+            diamondItems: {
+              where: diamondWhere
+            }
           }
-        }
-      });
+        })
+      ]);
       
       const mappedStocks = stocks.map(stock => {
         const activeItems = stock.diamondItems.filter(i => i.status !== 'SOLD' && i.status !== 'WRITTEN_OFF');
@@ -110,7 +119,7 @@ export class StockController {
         };
       });
 
-      res.json({ success: true, data: mappedStocks });
+      res.json({ success: true, data: mappedStocks, total });
     } catch (error) {
       next(error);
     }
@@ -226,16 +235,24 @@ export class StockController {
       const stockId = req.params.id as string;
       const diamondWhere = buildDiamondWhereClause(req.query);
       
-      const items = await prisma.diamondItem.findMany({
-        where: { stockId, ...diamondWhere },
-        include: {
-          location: true,
-          events: true,
-          certifications: true,
-          repairs: true
-        }
-      });
-      res.json({ success: true, data: items });
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
+      const [total, items] = await prisma.$transaction([
+        prisma.diamondItem.count({ where: { stockId, ...diamondWhere } }),
+        prisma.diamondItem.findMany({
+          where: { stockId, ...diamondWhere },
+          skip,
+          take,
+          include: {
+            location: true,
+            events: true,
+            certifications: true,
+            repairs: true
+          }
+        })
+      ]);
+      res.json({ success: true, data: items, total });
     } catch (error) {
       next(error);
     }

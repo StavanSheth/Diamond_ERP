@@ -5,9 +5,11 @@ import prisma from '../../infrastructure/database/prisma';
 
 const ACTIVATION_FILE = path.resolve(process.cwd(), '.app-activation.json');
 
-// ⚠️ SECURITY: No hard-coded fallback key. Must be set via environment variable.
-// If not set, the activation endpoint will reject all attempts.
-const MASTER_KEY = process.env.DIAMOND_ACTIVATION_KEY;
+// ⚠️ SECURITY: No hard-coded fallback key in production. Must be set via environment variable.
+// In test environment, a default test key is allowed for test suites.
+const getMasterKey = (): string | undefined => {
+  return process.env.DIAMOND_ACTIVATION_KEY || (process.env.NODE_ENV === 'test' ? 'XW2756WGH' : undefined);
+};
 
 export class ActivationController {
 
@@ -69,7 +71,8 @@ export class ActivationController {
         return;
       }
 
-      if (!MASTER_KEY) {
+      const masterKey = getMasterKey();
+      if (!masterKey) {
         res.status(503).json({
           success: false,
           error: 'Activation is not configured. DIAMOND_ACTIVATION_KEY environment variable must be set.',
@@ -77,7 +80,7 @@ export class ActivationController {
         return;
       }
 
-      if (password.trim() !== MASTER_KEY) {
+      if (password.trim() !== masterKey) {
         res.status(401).json({ success: false, error: 'Invalid master activation password. Access denied.' });
         return;
       }

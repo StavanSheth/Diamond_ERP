@@ -7,19 +7,31 @@ export class RepairController {
   getRepairs = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const diamondWhere = buildDiamondWhereClause(req.query);
-      const repairs = await prisma.repair.findMany({
-        where: Object.keys(diamondWhere).length > 0 ? {
-          diamondItem: diamondWhere
-        } : undefined,
-        include: {
-          diamondItem: {
-            include: {
-              stock: true
-            }
-          },
-          vendor: true
-        }
-      });
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
+      const [total, repairs] = await prisma.$transaction([
+        prisma.repair.count({
+          where: Object.keys(diamondWhere).length > 0 ? {
+            diamondItem: diamondWhere
+          } : undefined
+        }),
+        prisma.repair.findMany({
+          where: Object.keys(diamondWhere).length > 0 ? {
+            diamondItem: diamondWhere
+          } : undefined,
+          skip,
+          take,
+          include: {
+            diamondItem: {
+              include: {
+                stock: true
+              }
+            },
+            vendor: true
+          }
+        })
+      ]);
       
       const formatted = repairs.map(r => ({
         id: r.id, // Added for UI compatibility
@@ -41,7 +53,7 @@ export class RepairController {
         remarks: r.remarks || '',
       }));
 
-      res.json({ success: true, data: formatted });
+      res.json({ success: true, data: formatted, total });
     } catch (error) {
       next(error);
     }
@@ -206,7 +218,21 @@ export class RepairController {
       const id = req.params.id as string;
       const currentRepair = await prisma.repair.findUnique({ where: { id } });
 
-      if (currentRepair && currentRepair.status === 'IN_PROGRESS') {
+      if (!currentRepair) {
+        res.status(404).json({ success: false, error: 'Repair not found' });
+        return;
+      }
+
+      // Task 15: Deletion semantics
+      if (currentRepair.status === 'COMPLETED') {
+        res.status(400).json({
+          success: false,
+          error: 'Cannot delete a COMPLETED repair. It has already affected inventory and financial ledgers. Please create a reversing entry instead.'
+        });
+        return;
+      }
+
+      if (currentRepair.status === 'IN_PROGRESS') {
         await prisma.diamondItem.update({
           where: { id: currentRepair.diamondItemId },
           data: { status: 'AVAILABLE' }

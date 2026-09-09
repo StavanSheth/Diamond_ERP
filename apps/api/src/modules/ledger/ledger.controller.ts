@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../infrastructure/database/prisma';
+import { Prisma } from '@prisma/client';
 import { transactionService } from '../transactions/transaction.service';
 
 export class LedgerController {
@@ -12,6 +13,10 @@ export class LedgerController {
     try {
       const { stockId, partyId, itemCode, paymentStatus, agingDays, paymentDirection } = req.query;
       
+      // Task 18 & 19: Pagination and Optimization
+      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+
       const whereCondition: any = {};
       
       if (stockId) {
@@ -50,51 +55,55 @@ export class LedgerController {
         }
       }
 
-      const transactions = await prisma.transaction.findMany({
-        where: whereCondition,
-        include: {
-          ledger: { include: { stock: true } },
-          party: true,
-          items: { include: { diamondItem: true } },
-          inventoryMovements: true,
-          financialEntries: true
-        },
-        orderBy: { transactionDate: 'desc' }
-      });
+      const [total, transactions] = await prisma.$transaction([
+        prisma.transaction.count({ where: whereCondition }),
+        prisma.transaction.findMany({
+          where: whereCondition,
+          skip,
+          take,
+          include: {
+            ledger: { include: { stock: true } },
+            party: true,
+            items: { include: { diamondItem: true } },
+            inventoryMovements: true,
+            financialEntries: true
+          },
+          orderBy: { transactionDate: 'desc' }
+        })
+      ]);
 
-      // Calculate running balances on the fly (since ledger might have many transactions)
-      // Actually the prompt said "Running balances should preferably be calculated from an ordered transaction stream"
-      let currentCaratBalance = 0;
-      let currentValueBalance = 0;
+      // Calculate running balances on the fly
+      let currentCaratBalance = new Prisma.Decimal(0);
+      let currentValueBalance = new Prisma.Decimal(0);
       
       const transactionsAsc = [...transactions].reverse();
       const balancedTransactions = transactionsAsc.map(txn => {
-        let caratIn = 0;
-        let caratOut = 0;
-        let valueIn = 0;
-        let valueOut = 0;
+        let caratIn = new Prisma.Decimal(0);
+        let caratOut = new Prisma.Decimal(0);
+        let valueIn = new Prisma.Decimal(0);
+        let valueOut = new Prisma.Decimal(0);
         
         // Compute carat and value in/out from transaction items (TransactionItem stream)
         txn.items.forEach(item => {
           if (item.itemAction === 'IN') {
-            caratIn += Number(item.carat);
-            valueIn += Number(item.totalValue);
+            caratIn = caratIn.add(item.carat || 0);
+            valueIn = valueIn.add(item.totalValue || 0);
           } else if (item.itemAction === 'OUT') {
-            caratOut += Number(item.carat);
-            valueOut += Number(item.totalValue);
+            caratOut = caratOut.add(item.carat || 0);
+            valueOut = valueOut.add(item.totalValue || 0);
           }
         });
 
-        currentCaratBalance = currentCaratBalance + caratIn - caratOut;
-        currentValueBalance = currentValueBalance + valueIn - valueOut;
+        currentCaratBalance = currentCaratBalance.add(caratIn).sub(caratOut);
+        currentValueBalance = currentValueBalance.add(valueIn).sub(valueOut);
         return {
           ...txn,
-          caratIn,
-          caratOut,
-          valueIn,
-          valueOut,
-          balanceCarat: currentCaratBalance,
-          balanceValue: currentValueBalance,
+          caratIn: caratIn.toNumber(),
+          caratOut: caratOut.toNumber(),
+          valueIn: valueIn.toNumber(),
+          valueOut: valueOut.toNumber(),
+          balanceCarat: currentCaratBalance.toNumber(),
+          balanceValue: currentValueBalance.toNumber(),
           itemsCount: txn.items.length
         };
       });
@@ -102,7 +111,7 @@ export class LedgerController {
       // Reverse back for display
       balancedTransactions.reverse();
 
-      res.json({ success: true, data: balancedTransactions });
+      res.json({ success: true, data: balancedTransactions, total });
     } catch (err) {
       next(err);
     }
@@ -126,11 +135,21 @@ export class LedgerController {
         if (firstLedger) targetLedgerId = firstLedger.id;
       }
 
-      const normalizedItems = (payload.items || []).map((item: any) => ({
-        ...item,
-        carat: item.carat != null ? item.carat : (item.caratWeight != null ? item.caratWeight : 0),
-        totalValue: item.totalValue != null ? item.totalValue : (Number(item.carat || item.caratWeight || 0) * Number(item.ratePerCarat || item.caratRate || 0)),
-      }));
+      const normalizedItems = (payload.items || []).map((item: any) => {
+        const carat = item.carat != null ? item.carat : (item.caratWeight != null ? item.caratWeight : 0);
+        const rate = item.ratePerCarat || item.caratRate || 0;
+        
+        let totalValue = item.totalValue;
+        if (totalValue == null) {
+          totalValue = new Prisma.Decimal(carat || 0).mul(new Prisma.Decimal(rate || 0)).toNumber();
+        }
+
+        return {
+          ...item,
+          carat,
+          totalValue,
+        };
+      });
 
       const totalCarat = payload.totalCarat != null
         ? Number(payload.totalCarat)

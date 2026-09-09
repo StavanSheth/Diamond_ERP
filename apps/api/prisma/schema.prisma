@@ -203,6 +203,7 @@ model TransactionItem {
 
   @@index([transactionId])
   @@index([diamondItemId])
+  @@unique([transactionId, diamondItemId])
 }
 
 model ItemEvent {

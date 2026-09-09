@@ -14,10 +14,14 @@ const allowedOrigins = process.env.CORS_ORIGIN
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    // Task 23: Strict CORS Policies
+    // Allow requests with no origin ONLY in development (like curl), or explicitly allow in production
+    if (!origin) {
+      if (process.env.NODE_ENV !== 'production') return callback(null, true);
+      return callback(new Error('Strict CORS: Origin missing'));
+    }
     
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));

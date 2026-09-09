@@ -79,10 +79,23 @@ async function bootstrap(): Promise<void> {
   app.use(corsMiddleware);
   app.use(profileMiddleware);
 
-  // Security headers
+  // Task 23: Strict CORS/CSRF headers
   app.use(helmet({
-    contentSecurityPolicy: false, // Disabled to avoid breaking the frontend
-    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        connectSrc: ["'self'"],
+        imgSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+      },
+    },
+    crossOriginEmbedderPolicy: true,
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+    frameguard: { action: 'deny' },
+    noSniff: true,
+    xssFilter: true,
   }));
 
   app.use(express.json({ limit: '10mb' }));
