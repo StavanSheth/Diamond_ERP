@@ -1,4 +1,6 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../../infrastructure/database/prisma';
+import { validateTransition } from '../../models/inventory-state-machine';
 import { 
   TransactionType, 
   ItemEventType, 
@@ -75,24 +77,42 @@ class TransactionService {
     });
     if (!ledger) throw new Error('Ledger not found');
 
-    // 17. TRANSACTION TOTAL RECONCILIATION
-    const sumCarat = items.reduce((sum, item) => sum + Number(item.carat), 0);
-    const sumValue = items.reduce((sum, item) => sum + Number(item.totalValue), 0);
+    // 17. TRANSACTION TOTAL RECONCILIATION (Phase 11: Financial Invariants)
+    let sumCarat = new Prisma.Decimal(0);
+    let sumValue = new Prisma.Decimal(0);
+    items.forEach(i => {
+      sumCarat = sumCarat.add(new Prisma.Decimal(i.carat));
+      sumValue = sumValue.add(new Prisma.Decimal(i.totalValue));
+    });
+
+    const diffCarat = sumCarat.minus(new Prisma.Decimal(payload.totalCarat)).abs();
+    const diffValue = sumValue.minus(new Prisma.Decimal(payload.totalValue)).abs();
     
-    if (Math.abs(sumCarat - payload.totalCarat) > 0.001) {
-      throw new Error(`Transaction carat reconciliation failed: Items sum ${sumCarat} != Transaction total ${payload.totalCarat}`);
+    if (diffCarat.gt(new Prisma.Decimal('0.001'))) {
+      throw new Error(`Transaction carat reconciliation failed: Items sum ${sumCarat.toString()} != Transaction total ${payload.totalCarat}`);
     }
-    if (Math.abs(sumValue - payload.totalValue) > 0.01) {
-      throw new Error(`Transaction value reconciliation failed: Items sum ${sumValue} != Transaction total ${payload.totalValue}`);
+    if (diffValue.gt(new Prisma.Decimal('0.01'))) {
+      throw new Error(`Transaction value reconciliation failed: Items sum ${sumValue.toString()} != Transaction total ${payload.totalValue}`);
     }
 
-    const transactionNo = referenceNo || `TXN-${Date.now()}`;
+    // Phase 7 & 8: Atomic Database-Backed Sequences
+    let transactionNo = referenceNo;
+    if (!transactionNo) {
+      const globalSeq = await tx.sequence.upsert({
+        where: { id: 'global_transaction_no' },
+        update: { value: { increment: 1 } },
+        create: { id: 'global_transaction_no', value: 1 }
+      });
+      transactionNo = `TXN-${new Date().getFullYear()}-${String(globalSeq.value).padStart(6, '0')}`;
+    }
     
-    const lastSeq = await tx.transaction.findFirst({
-      where: { ledgerId },
-      orderBy: { sequenceNumber: 'desc' }
+    const ledgerSeqId = `ledger_seq_${ledgerId}`;
+    const ledgerSeq = await tx.sequence.upsert({
+      where: { id: ledgerSeqId },
+      update: { value: { increment: 1 } },
+      create: { id: ledgerSeqId, value: 1 }
     });
-    const sequenceNumber = (lastSeq?.sequenceNumber || 0) + 1;
+    const sequenceNumber = ledgerSeq.value;
 
     const transaction = await tx.transaction.create({
       data: {
@@ -167,10 +187,16 @@ class TransactionService {
         }
       });
 
-      let statusAfter = existingDiamond.status;
       let stockAfterId = existingDiamond.stockId;
       let locationAfterId = existingDiamond.locationId;
       let eventType = ItemEventType.ADJUSTED;
+      
+      // Phase 9: State Machine Validation
+      const transition = validateTransition(transactionType, statusBefore);
+      if (!transition.valid) {
+        throw new Error(transition.error);
+      }
+      let statusAfter = transition.targetStatus as ItemStatus;
       
       if (transactionType === TransactionType.PURCHASE || transactionType === TransactionType.ADD_IN) {
         statusAfter = ItemStatus.AVAILABLE;
@@ -562,6 +588,11 @@ class TransactionService {
         include: { items: true, inventoryMovements: true, financialEntries: true, events: true }
       });
       if (!oldTxn) throw new Error('Transaction not found');
+      
+      // Phase 10: Immutable posted transactions
+      if (oldTxn.status === 'POSTED') {
+        throw new Error('Transaction is POSTED and immutable. Use a reversal transaction instead.');
+      }
 
       if (payload.expectedVersion !== undefined && oldTxn.version !== payload.expectedVersion) {
         throw new Error('Concurrency conflict: Transaction has been modified by another process.');

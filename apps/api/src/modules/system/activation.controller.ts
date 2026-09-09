@@ -4,7 +4,10 @@ import fs from 'fs';
 import prisma from '../../infrastructure/database/prisma';
 
 const ACTIVATION_FILE = path.resolve(process.cwd(), '.app-activation.json');
-const MASTER_KEY = process.env.DIAMOND_ACTIVATION_KEY || 'XW2756WGH';
+
+// ⚠️ SECURITY: No hard-coded fallback key. Must be set via environment variable.
+// If not set, the activation endpoint will reject all attempts.
+const MASTER_KEY = process.env.DIAMOND_ACTIVATION_KEY;
 
 export class ActivationController {
 
@@ -63,6 +66,14 @@ export class ActivationController {
 
       if (!password || typeof password !== 'string') {
         res.status(400).json({ success: false, error: 'Password is required' });
+        return;
+      }
+
+      if (!MASTER_KEY) {
+        res.status(503).json({
+          success: false,
+          error: 'Activation is not configured. DIAMOND_ACTIVATION_KEY environment variable must be set.',
+        });
         return;
       }
 

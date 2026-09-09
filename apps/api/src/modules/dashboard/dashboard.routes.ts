@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { DashboardController } from './dashboard.controller';
+import { authorize } from '../../middleware/authorize';
 
 /**
  * Create dashboard route.
@@ -8,6 +9,6 @@ import { DashboardController } from './dashboard.controller';
  */
 export function createDashboardRouter(controller: DashboardController): Router {
   const router = Router();
-  router.get('/', controller.getDashboard);
+  router.get('/', authorize('dashboard.read'), controller.getDashboard);
   return router;
 }

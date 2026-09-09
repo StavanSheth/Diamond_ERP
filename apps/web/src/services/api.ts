@@ -7,12 +7,27 @@ const BASE_URL = '';
  * Uses fetch with proper error handling.
  */
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('token');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE_URL}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...headers, ...(options?.headers || {}) },
     ...options,
   });
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    // Dispatch an event so AuthContext can clear token and logout
+    window.dispatchEvent(new Event('unauthorized'));
+    throw new ApiError(data.error || 'Unauthorized', 401, data);
+  }
 
   if (!res.ok) {
     throw new ApiError(data.error || `Request failed with status ${res.status}`, res.status, data);
@@ -224,12 +239,16 @@ export const api = {
     const formData = new FormData();
     formData.append('file', file);
     
-    // We can't use our `request` wrapper directly because it sets 'Content-Type': 'application/json'
-    // For FormData, the browser must set the boundary header automatically.
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    
     return fetch(`/api/certificates/upload`, {
       method: 'POST',
+      headers,
       body: formData,
     }).then(res => {
+      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
       if (!res.ok) throw new Error('Upload failed');
       return res.json();
     });
@@ -307,7 +326,12 @@ export const api = {
       });
     }
     const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    const res = await fetch(`/api/reports/export/excel${qs}`);
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`/api/reports/export/excel${qs}`, { headers });
+    if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
     if (!res.ok) throw new Error('Failed to download report Excel');
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
@@ -347,7 +371,12 @@ export const api = {
 
   /** Export data to Excel */
   exportExcel(): Promise<Blob> {
-    return fetch(`/api/settings/export/excel`).then((res) => {
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    
+    return fetch(`/api/settings/export/excel`, { headers }).then((res) => {
+      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
       if (!res.ok) throw new Error('Export failed');
       return res.blob();
     });
@@ -355,7 +384,12 @@ export const api = {
 
   /** Download Excel template */
   downloadTemplate(): Promise<Blob> {
-    return fetch(`/api/settings/export/template`).then((res) => {
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    
+    return fetch(`/api/settings/export/template`, { headers }).then((res) => {
+      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     });
@@ -365,10 +399,17 @@ export const api = {
   importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
     const formData = new FormData();
     formData.append('file', file);
+    
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     return fetch(`/api/settings/import/excel?mode=${mode}`, {
       method: 'POST',
+      headers,
       body: formData,
     }).then(async (res) => {
+      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
       if (res.status === 400 && res.headers.get('content-type')?.includes('spreadsheetml')) {
         // Automatically trigger a download of the error excel file if the backend returned it
         const blob = await res.blob();
@@ -399,5 +440,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     });
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // AUTHENTICATION API
+  // ═══════════════════════════════════════════════════════════════
+
+  login(username: string, password: string): Promise<{ success: boolean; data: { user: any; token: string } }> {
+    return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+  },
+
+  bootstrapUser(data: any): Promise<{ success: boolean; data: any }> {
+    return request('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  getMe(): Promise<{ success: boolean; data: any }> {
+    return request('/api/auth/me');
   },
 };

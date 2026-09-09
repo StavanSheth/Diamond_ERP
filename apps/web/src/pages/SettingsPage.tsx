@@ -178,48 +178,7 @@ export const SettingsPage: React.FC = () => {
         ) : (
           <form className="max-w-3xl flex flex-col gap-xl pb-32" onSubmit={handleSave}>
             
-            <section className="bg-surface border border-outline-variant rounded-xl p-lg shadow-sm">
-              <h3 className="font-title-lg font-bold text-on-surface flex items-center gap-sm mb-lg border-b border-outline-variant pb-sm">
-                <span className="material-symbols-outlined text-primary">group</span>
-                User Profiles & Workspaces
-              </h3>
-              
-              <div className="flex flex-col gap-md">
-                <div className="flex items-center justify-between p-md border border-outline-variant rounded-md">
-                  <div>
-                    <h4 className="font-title-md font-bold text-on-surface">Active Profile</h4>
-                    <p className="font-caption text-caption text-on-surface-variant">Switching profiles instantly changes the active database.</p>
-                  </div>
-                  <div className="flex items-center gap-sm">
-                    <select 
-                      value={activeProfile}
-                      onChange={async (e) => {
-                        await api.switchProfile(e.target.value);
-                        window.location.reload();
-                      }}
-                      className="px-md py-sm border border-outline-variant rounded-md bg-surface-container-lowest focus:outline-none focus:border-primary text-on-surface"
-                    >
-                      {profiles.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setNewProfileName('');
-                        setNewProfileCallback(() => async (name: string) => {
-                          await api.switchProfile(name);
-                          window.location.reload();
-                        });
-                        setNewProfileModalOpen(true);
-                      }}
-                      className="bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant rounded-md px-sm py-sm transition-colors"
-                      title="Create New Profile"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">add</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
+            
 
             {/* ══════════════════════════════════════════════════════════ */}
             {/* APP LOCK & DEVICE SECURITY SECTION                       */}
@@ -959,20 +918,7 @@ export const SettingsPage: React.FC = () => {
               >
                 Delete All Current Data & Import New Data
               </button>
-              <button 
-                onClick={() => {
-                  setNewProfileName('');
-                  setNewProfileCallback(() => async (name: string) => {
-                    await api.switchProfile(name);
-                    await handleImportExecution('merge');
-                    window.location.reload();
-                  });
-                  setNewProfileModalOpen(true);
-                }}
-                className="w-full p-sm bg-secondary hover:bg-secondary-container text-white rounded-md font-bold transition-colors"
-              >
-                Import to New Profile
-              </button>
+              
             </div>
 
             <button onClick={() => setImportModalOpen(false)} className="mt-md text-on-surface-variant hover:text-on-surface font-bold">Cancel</button>

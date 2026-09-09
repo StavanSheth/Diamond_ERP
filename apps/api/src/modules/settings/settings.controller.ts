@@ -607,9 +607,62 @@ export class SettingsController {
     }
   };
 
-  factoryReset = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  factoryReset = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // Wipe the database in proper dependency order
+      // ── SECURITY: Factory reset protection ──────────────────────────────
+      // 1. Check if factory reset is allowed by environment configuration
+      if (process.env.ALLOW_FACTORY_RESET !== 'true') {
+        res.status(403).json({
+          success: false,
+          error: 'Factory reset is disabled. Set ALLOW_FACTORY_RESET=true in environment to enable.',
+        });
+        return;
+      }
+
+      // 2. Require re-authentication: user must provide their password
+      const { confirmPassword } = req.body;
+      if (!confirmPassword || typeof confirmPassword !== 'string') {
+        res.status(400).json({
+          success: false,
+          error: 'Password confirmation required. Send { confirmPassword: "your-password" } to confirm this destructive operation.',
+        });
+        return;
+      }
+
+      // 3. Verify the password matches the authenticated user
+      // Note: req.user is attached by the authenticate middleware
+      const authenticatedUser = (req as any).user;
+      if (!authenticatedUser) {
+        res.status(401).json({ success: false, error: 'Authentication required.' });
+        return;
+      }
+
+      // Verify re-authentication password
+      const { authService } = await import('../auth/auth.service');
+      const user = await prisma.user.findUnique({ where: { id: authenticatedUser.id } });
+      if (!user) {
+        res.status(401).json({ success: false, error: 'User not found.' });
+        return;
+      }
+      const passwordValid = await authService.verifyPassword(confirmPassword, user.passwordHash);
+      if (!passwordValid) {
+        res.status(401).json({ success: false, error: 'Incorrect password. Factory reset aborted.' });
+        return;
+      }
+
+      // 4. Create audit event BEFORE the reset
+      await prisma.auditEvent.create({
+        data: {
+          entityType: 'SYSTEM',
+          entityId: 'factory-reset',
+          eventType: 'FACTORY_RESET',
+          description: `Factory reset initiated by ${authenticatedUser.username} (${authenticatedUser.role})`,
+          performedBy: authenticatedUser.id,
+          ipAddress: req.ip || undefined,
+        },
+      });
+
+      // 5. Wipe the database in proper dependency order
       await prisma.$transaction([
         prisma.transformationProvenance.deleteMany({}),
         prisma.itemTransformation.deleteMany({}),
@@ -629,10 +682,10 @@ export class SettingsController {
         prisma.recordVersion.deleteMany({}),
         prisma.draftRevision.deleteMany({}),
         prisma.documentDraft.deleteMany({}),
-        prisma.auditEvent.deleteMany({}),
+        // Note: auditEvent is intentionally NOT deleted — audit trail is preserved
       ]);
 
-      res.json({ success: true, message: 'Factory reset completed. All data wiped.' });
+      res.json({ success: true, message: 'Factory reset completed. All business data wiped. Audit trail preserved.' });
     } catch (error) {
       next(error);
     }
@@ -681,6 +734,8 @@ export class SettingsController {
 
       const errors: string[] = [];
       let totalSuccess = 0;
+      
+      await prisma.$transaction(async (tx) => {
 
       // Helper: read sheet rows into objects
       const readSheet = (sheetName: string): any[] => {
@@ -709,7 +764,7 @@ export class SettingsController {
         try {
           const stockCode = row['Stock Code'];
           if (!stockCode) continue;
-          await prisma.stock.upsert({
+          await tx.stock.upsert({
             where: { stockCode: String(stockCode) },
             update: { name: row['Name'] || stockCode, currency: row['Currency'] || 'INR', isActive: row['Is Active'] !== undefined ? Boolean(row['Is Active']) : true },
             create: { stockCode: String(stockCode), name: row['Name'] || stockCode, currency: row['Currency'] || 'INR', isActive: row['Is Active'] !== undefined ? Boolean(row['Is Active']) : true },
@@ -729,28 +784,28 @@ export class SettingsController {
           const stockCode = row['Stock Code'];
           let stock = null;
           if (stockCode) {
-            stock = await prisma.stock.findUnique({ where: { stockCode: String(stockCode) } });
+            stock = await tx.stock.findUnique({ where: { stockCode: String(stockCode) } });
           }
           if (!stock) {
-            stock = await prisma.stock.findFirst();
+            stock = await tx.stock.findFirst();
           }
           if (!stock) {
-            stock = await prisma.stock.create({
+            stock = await tx.stock.create({
               data: { stockCode: 'MAIN', name: 'Main Inventory', currency: 'INR' }
             });
           }
 
-          const existingLoc = await prisma.location.findFirst({
+          const existingLoc = await tx.location.findFirst({
             where: { name: String(locName), stockId: stock.id }
           });
 
           if (existingLoc) {
-            await prisma.location.update({
+            await tx.location.update({
               where: { id: existingLoc.id },
               data: { locationType: row['Location Type'] || 'VAULT' }
             });
           } else {
-            await prisma.location.create({
+            await tx.location.create({
               data: {
                 name: String(locName),
                 stockId: stock.id,
@@ -770,7 +825,7 @@ export class SettingsController {
         try {
           const partyCode = row['Party Code'];
           if (!partyCode) continue;
-          await prisma.party.upsert({
+          await tx.party.upsert({
             where: { partyCode: String(partyCode) },
             update: {
               name: row['Name'] || partyCode,
@@ -805,18 +860,18 @@ export class SettingsController {
           const stockCode = row['Stock Code'];
           let stock = null;
           if (stockCode) {
-            stock = await prisma.stock.findUnique({ where: { stockCode: String(stockCode) } });
+            stock = await tx.stock.findUnique({ where: { stockCode: String(stockCode) } });
           }
           if (!stock) {
-            stock = await prisma.stock.findFirst();
+            stock = await tx.stock.findFirst();
           }
           if (!stock) {
-            stock = await prisma.stock.create({
+            stock = await tx.stock.create({
               data: { stockCode: 'MAIN', name: 'Main Inventory', currency: 'INR' }
             });
           }
 
-          const existingLedger = await prisma.ledger.findFirst({
+          const existingLedger = await tx.ledger.findFirst({
             where: { name: String(ledgerName), stockId: stock.id }
           });
 
@@ -832,12 +887,12 @@ export class SettingsController {
           };
 
           if (existingLedger) {
-            await prisma.ledger.update({
+            await tx.ledger.update({
               where: { id: existingLedger.id },
               data: ledgerData,
             });
           } else {
-            await prisma.ledger.create({
+            await tx.ledger.create({
               data: ledgerData,
             });
           }
@@ -849,9 +904,9 @@ export class SettingsController {
 
       // ── 4. Import Diamonds ───────────────────────────────────────────
       const diamondRows = readSheet('Diamonds');
-      let defaultStock = await prisma.stock.findFirst();
+      let defaultStock = await tx.stock.findFirst();
       if (!defaultStock) {
-        defaultStock = await prisma.stock.create({ data: { stockCode: 'MAIN', name: 'Main Inventory', currency: 'INR' } });
+        defaultStock = await tx.stock.create({ data: { stockCode: 'MAIN', name: 'Main Inventory', currency: 'INR' } });
       }
 
       for (const row of diamondRows) {
@@ -859,9 +914,9 @@ export class SettingsController {
           const stockCode = row['Stock Code'];
           let stockId = defaultStock?.id;
           if (stockCode) {
-            let stock = await prisma.stock.findUnique({ where: { stockCode: String(stockCode) } });
+            let stock = await tx.stock.findUnique({ where: { stockCode: String(stockCode) } });
             if (!stock) {
-              stock = await prisma.stock.create({ data: { stockCode: String(stockCode), name: `Imported ${stockCode}` } });
+              stock = await tx.stock.create({ data: { stockCode: String(stockCode), name: `Imported ${stockCode}` } });
             }
             stockId = stock.id;
           }
@@ -876,9 +931,9 @@ export class SettingsController {
           let locationId: string | null = null;
           const locName = row['Location Name'] || row['Location'];
           if (locName) {
-            const loc = await prisma.location.findFirst({
+            const loc = await tx.location.findFirst({
               where: { name: String(locName), stockId }
-            }) || await prisma.location.findFirst({ where: { name: String(locName) } });
+            }) || await tx.location.findFirst({ where: { name: String(locName) } });
             if (loc) locationId = loc.id;
           }
 
@@ -914,7 +969,7 @@ export class SettingsController {
             certificateStatus: 'PENDING',
           };
 
-          await prisma.diamondItem.upsert({
+          await tx.diamondItem.upsert({
             where: { itemCode: String(itemCode) },
             update: data,
             create: { ...data, itemCode: String(itemCode) },
@@ -935,14 +990,14 @@ export class SettingsController {
           // Try to find linked diamond by Item Code
           let diamondItemId: string | null = null;
           if (row['Item Code']) {
-            const diamond = await prisma.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
+            const diamond = await tx.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
             if (diamond) diamondItemId = diamond.id;
           }
 
           // Check if cert with this report number already exists
-          const existing = await prisma.certification.findFirst({ where: { reportNumber: String(reportNumber) } });
+          const existing = await tx.certification.findFirst({ where: { reportNumber: String(reportNumber) } });
           if (existing) {
-            await prisma.certification.update({
+            await tx.certification.update({
               where: { id: existing.id },
               data: {
                 labType: row['Lab Type'] || existing.labType,
@@ -952,7 +1007,7 @@ export class SettingsController {
               },
             });
           } else {
-            await prisma.certification.create({
+            await tx.certification.create({
               data: {
                 reportNumber: String(reportNumber),
                 labType: row['Lab Type'] || '',
@@ -973,25 +1028,25 @@ export class SettingsController {
       for (const row of repairRows) {
         try {
           if (!row['Item Code']) continue;
-          const diamond = await prisma.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
+          const diamond = await tx.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
           if (!diamond) throw new Error(`Diamond "${row['Item Code']}" not found`);
 
           // Find vendor party
           let vendorId: string | undefined;
           if (row['Vendor']) {
-            const vendor = await prisma.party.findFirst({ where: { name: String(row['Vendor']) } });
+            const vendor = await tx.party.findFirst({ where: { name: String(row['Vendor']) } });
             if (vendor) vendorId = vendor.id;
           }
           if (!vendorId) {
             const code = `WS-${String(row['Vendor'] || 'UNKNOWN').toUpperCase().replace(/\s+/g, '_').substring(0, 10)}`;
-            let party = await prisma.party.findUnique({ where: { partyCode: code } });
+            let party = await tx.party.findUnique({ where: { partyCode: code } });
             if (!party) {
-              party = await prisma.party.create({ data: { partyCode: code, name: String(row['Vendor'] || 'Unknown Workshop'), partyType: 'WORKSHOP' } });
+              party = await tx.party.create({ data: { partyCode: code, name: String(row['Vendor'] || 'Unknown Workshop'), partyType: 'WORKSHOP' } });
             }
             vendorId = party.id;
           }
 
-          await prisma.repair.create({
+          await tx.repair.create({
             data: {
               diamondItemId: diamond.id,
               repairType: row['Repair Type'] || 'OTHER',
@@ -1019,22 +1074,22 @@ export class SettingsController {
           // Resolve ledger
           let ledger = null;
           if (row['Ledger Name']) {
-            ledger = await prisma.ledger.findFirst({ where: { name: String(row['Ledger Name']) } });
+            ledger = await tx.ledger.findFirst({ where: { name: String(row['Ledger Name']) } });
           }
           if (!ledger && row['Stock Code']) {
-            const stock = await prisma.stock.findUnique({ where: { stockCode: String(row['Stock Code']) } });
+            const stock = await tx.stock.findUnique({ where: { stockCode: String(row['Stock Code']) } });
             if (stock) {
-              ledger = await prisma.ledger.findFirst({ where: { stockId: stock.id } });
+              ledger = await tx.ledger.findFirst({ where: { stockId: stock.id } });
             }
           }
           if (!ledger) {
-            ledger = await prisma.ledger.findFirst();
+            ledger = await tx.ledger.findFirst();
           }
           if (!ledger) {
-            const defStock = await prisma.stock.findFirst() || await prisma.stock.create({
+            const defStock = await tx.stock.findFirst() || await tx.stock.create({
               data: { stockCode: 'MAIN', name: 'Main Inventory', currency: 'INR' }
             });
-            ledger = await prisma.ledger.create({
+            ledger = await tx.ledger.create({
               data: { stockId: defStock.id, name: `${defStock.name} Ledger`, ledgerType: 'DEFAULT' }
             });
           }
@@ -1042,18 +1097,18 @@ export class SettingsController {
           // Resolve party
           let partyId: string | null = null;
           if (row['Party Code']) {
-            const party = await prisma.party.findUnique({ where: { partyCode: String(row['Party Code']) } });
+            const party = await tx.party.findUnique({ where: { partyCode: String(row['Party Code']) } });
             if (party) partyId = party.id;
           }
 
-          const existingTxn = await prisma.transaction.findUnique({
+          const existingTxn = await tx.transaction.findUnique({
             where: { transactionNo: String(transactionNo) }
           });
 
           const txnDate = row['Transaction Date'] ? new Date(row['Transaction Date']) : new Date();
           const validDate = isNaN(txnDate.getTime()) ? new Date() : txnDate;
 
-          const lastSeq = await prisma.transaction.findFirst({
+          const lastSeq = await tx.transaction.findFirst({
             where: { ledgerId: ledger.id },
             orderBy: { sequenceNumber: 'desc' }
           });
@@ -1079,12 +1134,12 @@ export class SettingsController {
           let currentTxnId: string;
           if (existingTxn) {
             currentTxnId = existingTxn.id;
-            await prisma.transaction.update({
+            await tx.transaction.update({
               where: { id: existingTxn.id },
               data: txnData,
             });
           } else {
-            const created = await prisma.transaction.create({
+            const created = await tx.transaction.create({
               data: {
                 ...txnData,
                 transactionNo: String(transactionNo),
@@ -1097,9 +1152,9 @@ export class SettingsController {
 
           // Support optional inline item details in Transactions row
           if (row['Item Code']) {
-            const diamond = await prisma.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
+            const diamond = await tx.diamondItem.findUnique({ where: { itemCode: String(row['Item Code']) } });
             if (diamond) {
-              const existingItem = await prisma.transactionItem.findFirst({
+              const existingItem = await tx.transactionItem.findFirst({
                 where: { transactionId: currentTxnId, diamondItemId: diamond.id }
               });
               const carat = parseFloat(row['Item Carat']) || Number(diamond.carat);
@@ -1108,12 +1163,12 @@ export class SettingsController {
               const itemAction = row['Item Action'] || (txnData.transactionType === 'SALE' ? 'OUT' : 'IN');
 
               if (existingItem) {
-                await prisma.transactionItem.update({
+                await tx.transactionItem.update({
                   where: { id: existingItem.id },
                   data: { carat, ratePerCarat, totalValue, itemAction },
                 });
               } else {
-                await prisma.transactionItem.create({
+                await tx.transactionItem.create({
                   data: {
                     transactionId: currentTxnId,
                     diamondItemId: diamond.id,
@@ -1142,13 +1197,13 @@ export class SettingsController {
           const itemCode = row['Item Code'];
           if (!transactionNo || !itemCode) continue;
 
-          const txn = await prisma.transaction.findUnique({ where: { transactionNo: String(transactionNo) } });
+          const txn = await tx.transaction.findUnique({ where: { transactionNo: String(transactionNo) } });
           if (!txn) throw new Error(`Transaction "${transactionNo}" not found`);
 
-          const diamond = await prisma.diamondItem.findUnique({ where: { itemCode: String(itemCode) } });
+          const diamond = await tx.diamondItem.findUnique({ where: { itemCode: String(itemCode) } });
           if (!diamond) throw new Error(`Diamond item "${itemCode}" not found`);
 
-          const existingItem = await prisma.transactionItem.findFirst({
+          const existingItem = await tx.transactionItem.findFirst({
             where: { transactionId: txn.id, diamondItemId: diamond.id }
           });
 
@@ -1159,12 +1214,12 @@ export class SettingsController {
           const itemAction = row['Item Action'] || 'IN';
 
           if (existingItem) {
-            await prisma.transactionItem.update({
+            await tx.transactionItem.update({
               where: { id: existingItem.id },
               data: { quantity, carat, ratePerCarat, totalValue, itemAction },
             });
           } else {
-            await prisma.transactionItem.create({
+            await tx.transactionItem.create({
               data: {
                 transactionId: txn.id,
                 diamondItemId: diamond.id,
@@ -1185,17 +1240,17 @@ export class SettingsController {
       // ── 9. Auto-Generate Movements & Financial Entries for Complete Integrity ────────
       for (const txnId of importedTxnIds) {
         try {
-          const txn = await prisma.transaction.findUnique({
+          const txn = await tx.transaction.findUnique({
             where: { id: txnId },
             include: { items: { include: { diamondItem: true } }, ledger: true }
           });
           if (!txn) continue;
 
           // Auto-generate movements if missing
-          const existingMovements = await prisma.inventoryMovement.count({ where: { transactionId: txn.id } });
+          const existingMovements = await tx.inventoryMovement.count({ where: { transactionId: txn.id } });
           if (existingMovements === 0) {
             for (const item of txn.items) {
-              await prisma.inventoryMovement.create({
+              await tx.inventoryMovement.create({
                 data: {
                   diamondItemId: item.diamondItemId,
                   transactionId: txn.id,
@@ -1215,10 +1270,10 @@ export class SettingsController {
           }
 
           // Auto-generate double-entry financial entries if missing
-          const existingFin = await prisma.financialEntry.count({ where: { transactionId: txn.id } });
+          const existingFin = await tx.financialEntry.count({ where: { transactionId: txn.id } });
           if (existingFin === 0 && txn.items.length > 0) {
             const totalVal = txn.items.reduce((sum, it) => sum + Number(it.totalValue || 0), 0);
-            await prisma.financialEntry.create({
+            await tx.financialEntry.create({
               data: {
                 transactionId: txn.id,
                 partyId: txn.partyId,
@@ -1236,6 +1291,8 @@ export class SettingsController {
         }
       }
 
+      
+      });
       // ── Response ─────────────────────────────────────────────────────
       if (errors.length > 0 && totalSuccess === 0) {
         res.status(400).json({ success: false, message: `Import failed. ${errors.length} errors:\n${errors.join('\n')}` });

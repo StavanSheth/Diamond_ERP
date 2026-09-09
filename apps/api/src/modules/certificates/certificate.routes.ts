@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
-import { CertificateController } from '../../modules/certificates/certificate.controller';
-
 import fs from 'fs';
+import crypto from 'crypto';
+import { CertificateController } from '../../modules/certificates/certificate.controller';
+import { authorize } from '../../middleware/authorize';
 
 const certsUploadDir = path.resolve(__dirname, '../../../uploads/certs');
 if (!fs.existsSync(certsUploadDir)) {
@@ -18,23 +19,41 @@ const storage = multer.diskStorage({
     cb(null, certsUploadDir);
   },
   filename: function (_req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    // SECURITY: Randomized filename to prevent path traversal and guessing
+    const randomName = crypto.randomBytes(16).toString('hex');
+    cb(null, randomName + path.extname(file.originalname));
   }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max for certificate PDFs
+  },
+  fileFilter: (_req, file, cb) => {
+    // Only allow PDF files
+    const allowedMimes = ['application/pdf'];
+    const allowedExts = ['.pdf'];
+    const ext = path.extname(file.originalname).toLowerCase();
+
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed for certificate uploads'));
+    }
+  },
+});
 
 export function createCertificateRouter(controller: CertificateController): Router {
   const router = Router();
 
-  router.get('/', controller.getCertificates);
-  router.get('/unlinked', controller.getUnlinkedCertificates);
-  router.post('/', controller.createCertificate);
-  router.post('/upload', upload.single('file'), controller.uploadPdf);
-  router.post('/:id/link', controller.linkCertificate);
-  router.put('/:id', controller.updateCertificate);
-  router.delete('/:id', controller.delete);
+  router.get('/', authorize('certificate.read'), controller.getCertificates);
+  router.get('/unlinked', authorize('certificate.read'), controller.getUnlinkedCertificates);
+  router.post('/', authorize('certificate.create'), controller.createCertificate);
+  router.post('/upload', authorize('certificate.upload'), upload.single('file'), controller.uploadPdf);
+  router.post('/:id/link', authorize('certificate.update'), controller.linkCertificate);
+  router.put('/:id', authorize('certificate.update'), controller.updateCertificate);
+  router.delete('/:id', authorize('certificate.delete'), controller.delete);
 
   return router;
 }

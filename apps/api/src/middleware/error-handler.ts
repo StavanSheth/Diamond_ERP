@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../infrastructure/logging';
 import { RequestWithId } from './request-id';
+import { AuthenticationError, AuthorizationError } from '../modules/auth/auth.service';
 
 export class ConflictError extends Error {
   constructor(
@@ -31,6 +32,28 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const requestId = (req as RequestWithId).requestId || 'unknown';
+
+  // AuthenticationError → 401
+  if (err instanceof AuthenticationError) {
+    logger.warn(`Authentication failed: ${err.message}`, requestId);
+    res.status(401).json({
+      success: false,
+      error: err.message,
+      requestId,
+    });
+    return;
+  }
+
+  // AuthorizationError → 403
+  if (err instanceof AuthorizationError) {
+    logger.warn(`Authorization denied: ${err.message}`, requestId);
+    res.status(403).json({
+      success: false,
+      error: err.message,
+      requestId,
+    });
+    return;
+  }
 
   // ConflictError → 409
   if (err instanceof ConflictError) {
@@ -95,9 +118,13 @@ export function errorHandler(
 
   // Unknown errors → 500
   logger.error(`Unhandled error: ${err.message}`, requestId, err);
+  
+  // Phase 21: Error details scrubbing (Do not leak stack traces or internal DB errors)
+  const isProduction = process.env.NODE_ENV === 'production';
+  
   res.status(500).json({
     success: false,
-    error: 'Internal server error.',
+    error: isProduction ? 'Internal server error.' : err.message,
     requestId,
   });
 }

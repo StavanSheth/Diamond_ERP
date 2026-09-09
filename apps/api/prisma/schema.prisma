@@ -7,6 +7,33 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ═══════════════════════════════════════════════════════════════
+// AUTHENTICATION & AUTHORIZATION
+// ═══════════════════════════════════════════════════════════════
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  displayName  String
+  role         String    @default("VIEWER") // SUPER_ADMIN, ADMIN, MANAGER, ACCOUNTANT, INVENTORY_MANAGER, SALES, VIEWER
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([role])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BUSINESS ENTITIES
+// ═══════════════════════════════════════════════════════════════
+
+model Sequence {
+  id    String @id // e.g. "transaction_no"
+  value Int    @default(0)
+}
+
 model Stock {
   id          String   @id @default(uuid())
   stockCode   String   @unique
@@ -304,6 +331,8 @@ model Location {
   childLocations   Location[] @relation("LocationHierarchy")
 
   diamondItems DiamondItem[]
+
+  @@unique([stockId, name])
 }
 
 model Setting {

@@ -80,14 +80,18 @@ export class CertificateController {
       const id = req.params.id as string;
       const { diamondItemId } = req.body;
       
-      const updated = await prisma.certification.update({
-        where: { id },
-        data: { diamondItemId }
-      });
-      
-      await prisma.diamondItem.update({
-        where: { id: diamondItemId },
-        data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId: id }
+      const updated = await prisma.$transaction(async (tx) => {
+        const cert = await tx.certification.update({
+          where: { id },
+          data: { diamondItemId }
+        });
+        
+        await tx.diamondItem.update({
+          where: { id: diamondItemId },
+          data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId: id }
+        });
+        
+        return cert;
       });
 
       res.json({ success: true, data: updated });
@@ -101,24 +105,28 @@ export class CertificateController {
     try {
       const { diamondItemId, labType, reportNumber, cost, laserInscription, name } = req.body;
       
-      const newCert = await prisma.certification.create({
-        data: {
-          diamondItemId: diamondItemId || null,
-          labType: labType || 'GIA',
-          reportNumber: reportNumber || '',
-          certificateStatus: CertificationStatus.PENDING,
-          cost: cost || 0,
-          laserInscription: laserInscription || '',
-          name: name || '',
-        }
-      });
+      const newCert = await prisma.$transaction(async (tx) => {
+        const cert = await tx.certification.create({
+          data: {
+            diamondItemId: diamondItemId || null,
+            labType: labType || 'GIA',
+            reportNumber: reportNumber || '',
+            certificateStatus: CertificationStatus.PENDING,
+            cost: cost || 0,
+            laserInscription: laserInscription || '',
+            name: name || '',
+          }
+        });
 
-      if (diamondItemId) {
-        await prisma.diamondItem.update({
-          where: { id: diamondItemId },
-          data: { certificateStatus: CertificateState.PENDING }
-        }).catch(() => null);
-      }
+        if (diamondItemId) {
+          await tx.diamondItem.update({
+            where: { id: diamondItemId },
+            data: { certificateStatus: CertificateState.PENDING }
+          }).catch(() => null);
+        }
+        
+        return cert;
+      });
       
       res.status(201).json({ success: true, certificateId: newCert.id, data: newCert });
     } catch (error) {
@@ -130,29 +138,33 @@ export class CertificateController {
     try {
       const id = req.params.id as string;
       
-      const updated = await prisma.certification.update({
-        where: { id },
-        data: {
-          labType: req.body.labType,
-          reportNumber: req.body.reportNumber,
-          cost: req.body.cost,
-          measurements: req.body.measurements,
-          polish: req.body.polish,
-          symmetry: req.body.symmetry,
-          fluorescence: req.body.fluorescence,
-          proportionDiagramPath: req.body.proportionDiagramPath,
-          inclusionPlotPath: req.body.inclusionPlotPath,
-          pdfPath: req.body.pdfPath,
-          certificateStatus: req.body.certificateStatus || req.body.status || CertificationStatus.ISSUED,
-        }
-      });
-      
-      if (updated.diamondItemId) {
-        await prisma.diamondItem.update({
-          where: { id: updated.diamondItemId },
-          data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId: id }
+      const updated = await prisma.$transaction(async (tx) => {
+        const cert = await tx.certification.update({
+          where: { id },
+          data: {
+            labType: req.body.labType,
+            reportNumber: req.body.reportNumber,
+            cost: req.body.cost,
+            measurements: req.body.measurements,
+            polish: req.body.polish,
+            symmetry: req.body.symmetry,
+            fluorescence: req.body.fluorescence,
+            proportionDiagramPath: req.body.proportionDiagramPath,
+            inclusionPlotPath: req.body.inclusionPlotPath,
+            pdfPath: req.body.pdfPath,
+            certificateStatus: req.body.certificateStatus || req.body.status || CertificationStatus.ISSUED,
+          }
         });
-      }
+        
+        if (cert.diamondItemId) {
+          await tx.diamondItem.update({
+            where: { id: cert.diamondItemId },
+            data: { certificateStatus: CertificateState.RECEIVED, currentCertificateId: id }
+          });
+        }
+        
+        return cert;
+      });
 
       res.json({ success: true, certificateId: id, data: updated });
     } catch (error) {
@@ -164,14 +176,16 @@ export class CertificateController {
     try {
       const id = req.params.id as string;
       
-      // Unlink any diamond items pointing to this certificate as currentCertificate
-      await prisma.diamondItem.updateMany({
-        where: { currentCertificateId: id },
-        data: { currentCertificateId: null, certificateStatus: CertificateState.NONE }
-      });
+      await prisma.$transaction(async (tx) => {
+        // Unlink any diamond items pointing to this certificate as currentCertificate
+        await tx.diamondItem.updateMany({
+          where: { currentCertificateId: id },
+          data: { currentCertificateId: null, certificateStatus: CertificateState.NONE }
+        });
 
-      await prisma.certification.delete({
-        where: { id }
+        await tx.certification.delete({
+          where: { id }
+        });
       });
 
       res.json({ success: true, message: 'Certificate deleted successfully' });

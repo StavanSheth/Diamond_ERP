@@ -9,15 +9,20 @@ import { PartiesPage } from './pages/PartiesPage';
 import { RepairsPage } from './pages/RepairsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { LoginPage } from './pages/auth/LoginPage';
 import { useStocks } from './hooks/useStocks';
 import { AppLockProvider } from './contexts/AppLockContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
 import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
+import { Loader2 } from 'lucide-react';
 
 function AppContent() {
+  const { user, loading: authLoading } = useAuth();
+  
   const {
     stocks,
-    loading,
+    loading: stocksLoading,
     error,
     lastSyncedAt,
     syncStatus,
@@ -26,6 +31,18 @@ function AppContent() {
     deleteStock,
     refresh,
   } = useStocks();
+
+  if (authLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-background">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">
@@ -50,7 +67,7 @@ function AppContent() {
             element={
               <DashboardPage
                 stocks={stocks}
-                loading={loading}
+                loading={stocksLoading}
                 lastSyncedAt={lastSyncedAt}
               />
             }
@@ -60,7 +77,7 @@ function AppContent() {
             element={
               <InventoryPage
                 stocks={stocks}
-                loading={loading}
+                loading={stocksLoading}
                 error={error}
                 createStock={createStock}
                 updateStock={updateStock}
@@ -83,9 +100,11 @@ function AppContent() {
 
 function App() {
   return (
-    <AppLockProvider>
-      <AppContent />
-    </AppLockProvider>
+    <AuthProvider>
+      <AppLockProvider>
+        <AppContent />
+      </AppLockProvider>
+    </AuthProvider>
   );
 }
 
