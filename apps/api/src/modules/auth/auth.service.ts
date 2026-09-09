@@ -376,7 +376,15 @@ export class AuthService {
     const userCount = await systemPrisma.user.count();
     if (userCount > 0) return;
 
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123456';
+    const isProd = process.env.NODE_ENV === 'production';
+    const envPassword = process.env.DEFAULT_ADMIN_PASSWORD;
+
+    if (isProd && !envPassword) {
+      logger.warn('[Auth] Database is uninitialized. Provision initial administrator using /api/auth/bootstrap with BOOTSTRAP_SECRET.');
+      return;
+    }
+
+    const defaultPassword = envPassword || (process.env.NODE_ENV === 'test' ? 'Admin@123456' : crypto.randomBytes(12).toString('base64url'));
 
     // Ensure default profile exists
     let stavanProfile = await systemPrisma.profile.findUnique({ where: { code: defaultProfile } });
@@ -391,7 +399,11 @@ export class AuthService {
     }
 
     await this.createUser('admin', defaultPassword, 'System Administrator', ROLES.SUPER_ADMIN, [defaultProfile]);
-    logger.info(`Default admin user seeded: username 'admin'. Change password immediately in production.`);
+    if (envPassword) {
+      logger.info(`Default admin user seeded from DEFAULT_ADMIN_PASSWORD. Change password immediately.`);
+    } else if (process.env.NODE_ENV !== 'test') {
+      logger.warn(`Default admin seeded with generated password: ${defaultPassword}. Please change immediately.`);
+    }
   }
 }
 

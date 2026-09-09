@@ -163,6 +163,7 @@ configureSqlitePragmas(systemPrisma).catch(() => {});
 interface ClientRegistryEntry {
   client: PrismaClient;
   lastUsedAt: number;
+  activeOps: number;
 }
 
 const clientRegistry = new Map<string, ClientRegistryEntry>();
@@ -197,12 +198,12 @@ export async function getClientForProfileAsync(profileCode: string): Promise<Pri
 
   const initPromise = (async () => {
     try {
-      // Evict LRU client if cache limit reached
+      // Evict LRU client if cache limit reached, but NEVER evict a client with active operations
       if (clientRegistry.size >= MAX_CLIENTS) {
         let oldestKey: string | null = null;
         let oldestTime = Infinity;
         for (const [k, entry] of clientRegistry.entries()) {
-          if (entry.lastUsedAt < oldestTime) {
+          if (entry.activeOps === 0 && entry.lastUsedAt < oldestTime) {
             oldestTime = entry.lastUsedAt;
             oldestKey = k;
           }
@@ -229,7 +230,7 @@ export async function getClientForProfileAsync(profileCode: string): Promise<Pri
       const client = createPrismaClient(`file:${canonical.dbPath}`);
       await configureSqlitePragmas(client);
 
-      clientRegistry.set(key, { client, lastUsedAt: Date.now() });
+      clientRegistry.set(key, { client, lastUsedAt: Date.now(), activeOps: 0 });
       return client;
     } finally {
       clientInitLocks.delete(key);
@@ -256,7 +257,7 @@ export function getClientForProfile(profileCode: string): PrismaClient {
 
   const client = createPrismaClient(`file:${canonical.dbPath}`);
   configureSqlitePragmas(client).catch(() => {});
-  clientRegistry.set(key, { client, lastUsedAt: Date.now() });
+  clientRegistry.set(key, { client, lastUsedAt: Date.now(), activeOps: 0 });
   return client;
 }
 

@@ -69,11 +69,14 @@ describe('deviceAuth Service', () => {
   });
 
   describe('hashPin & verifyPin', () => {
-    it('hashes a PIN with SHA-256 and verifies correctly', async () => {
+    it('hashes a PIN with salted PBKDF2 (100,000 iterations) and verifies correctly', async () => {
       const pin = '1234';
       const hash = await hashPin(pin);
       expect(hash).toBeDefined();
-      expect(hash.length).toBe(64); // 256 bits = 64 hex characters
+      expect(hash).toContain(':'); // saltB64:derivedHex format
+      const [salt, hex] = hash.split(':');
+      expect(salt.length).toBeGreaterThanOrEqual(16);
+      expect(hex.length).toBe(64); // 256 bits = 64 hex characters
 
       const isValid = await verifyPin(pin, hash);
       expect(isValid).toBe(true);

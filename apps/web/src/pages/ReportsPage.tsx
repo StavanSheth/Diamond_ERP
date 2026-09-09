@@ -230,6 +230,7 @@ export const ReportsPage: React.FC = () => {
 
   // Analytics state
   const [analyticsData, setAnalyticsData] = useState<any>(null);
+  const reportRequestGenRef = React.useRef<number>(0);
 
   // Load auxiliary lists on mount
   useEffect(() => {
@@ -256,8 +257,9 @@ export const ReportsPage: React.FC = () => {
     loadAux();
   }, []);
 
-  // Fetch report data whenever parameters change
+  // Fetch report data whenever parameters change (with race-condition cancellation)
   const fetchReport = async () => {
+    const currentGen = ++reportRequestGenRef.current;
     setPreviewLoading(true);
     setCurrentPage(1);
     try {
@@ -286,6 +288,10 @@ export const ReportsPage: React.FC = () => {
       };
 
       const res = await api.getReportPreview(params);
+      if (currentGen !== reportRequestGenRef.current) {
+        // Discard stale out-of-order response
+        return;
+      }
       if (res?.success) {
         setReportData({
           title: res.title,

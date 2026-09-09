@@ -18,6 +18,7 @@ import prisma, { systemPrisma, registerProfile, runWithProfile, disconnectAllCli
 import { authService } from '../modules/auth/auth.service';
 import { transactionService } from '../modules/transactions/transaction.service';
 import { inventoryService } from '../modules/inventory/inventory.service';
+import { repairService } from '../modules/repairs/repair.service';
 import { TransactionType } from '../types/enums';
 
 const app = express();
@@ -554,6 +555,43 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
         expect(count).toBe(1);
       });
     });
+
+    it('same key with different request body returns 422 IDEMPOTENCY_BODY_MISMATCH', async () => {
+      const idempotencyKey = `idem-mismatch-${Date.now()}`;
+      const stockName1 = `Vault Original ${Date.now()}`;
+      const stockName2 = `Vault Modified ${Date.now()}`;
+
+      // First request: create stock item
+      const res1 = await request(app)
+        .post('/api/stocks')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA')
+        .set('Idempotency-Key', idempotencyKey)
+        .send({
+          stockName: stockName1,
+          caratWeight: 1.0,
+          caratRate: 5000,
+          remarks: 'Original payload',
+        });
+
+      expect(res1.status).toBe(201);
+
+      // Second request: same key, DIFFERENT payload
+      const res2 = await request(app)
+        .post('/api/stocks')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA')
+        .set('Idempotency-Key', idempotencyKey)
+        .send({
+          stockName: stockName2,
+          caratWeight: 2.0,
+          caratRate: 8000,
+          remarks: 'Altered payload',
+        });
+
+      expect(res2.status).toBe(422);
+      expect(res2.body.code).toBe('IDEMPOTENCY_BODY_MISMATCH');
+    });
   });
 
   describe('P0/P1: Session Fail-Closed & Creation Guarantees', () => {
@@ -663,9 +701,23 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
       expect(resHuge.status).toBe(200);
       expect(resHuge.body.data.length).toBeLessThanOrEqual(100);
     });
+
+    it('posted ledger transaction updates are rejected with 400 TRANSACTION_IMMUTABLE', async () => {
+      const res = await request(app)
+        .put('/api/ledger/test-tx-id')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA')
+        .send({
+          notes: 'Attempt to tamper posted transaction',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('TRANSACTION_IMMUTABLE');
+      expect(res.body.error).toMatch(/posted.*transactions are immutable/i);
+    });
   });
 
-  describe('P0/P1: Inventory Transfer Concurrency', () => {
+  describe('P0/P1: Inventory Concurrency & State Protection', () => {
     it('simultaneous transfers of same diamond result in exactly 1 success and 19 conflicts', async () => {
       let xDiamondId = '';
       let stockTargetId = '';
@@ -718,5 +770,219 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
         expect(finalDiamond?.stockId).toBe(stockTargetId);
       });
     }, 25000);
+
+    it('simultaneous repairs of same diamond result in exactly 1 success and 19 conflicts', async () => {
+      let rDiamondId = '';
+      let vendorPartyId = '';
+      await runWithProfile('ProfileA', async () => {
+        const d = await prisma.diamondItem.create({
+          data: {
+            itemCode: `D-REP-${Date.now()}`,
+            displayName: 'Repair Diamond',
+            stockId: profileAStockId,
+            carat: 2.0,
+            color: 'F',
+            clarity: 'VS2',
+            cut: 'G',
+            shape: 'OVAL',
+            category: 'SINGLE',
+            ratePerCarat: 3000,
+            currentValue: 6000,
+            status: 'AVAILABLE',
+            certificateStatus: 'NONE',
+          },
+        });
+        rDiamondId = d.id;
+
+        const vendor = await prisma.party.create({
+          data: {
+            partyCode: `P-VEND-${Date.now()}`,
+            name: 'Diamond Polisher Ltd',
+            partyType: 'SUPPLIER',
+          },
+        });
+        vendorPartyId = vendor.id;
+      });
+
+      const promises = Array.from({ length: 20 }, (_, i) =>
+        runWithProfile('ProfileA', () =>
+          repairService.sendForRepair(
+            rDiamondId,
+            vendorPartyId,
+            'POLISHING',
+            null,
+            250,
+            `USER-REP-${i}`
+          )
+        )
+      );
+
+      const results = await Promise.allSettled(promises);
+      const succeeded = results.filter((r) => r.status === 'fulfilled');
+      const failed = results.filter((r) => r.status === 'rejected');
+
+      expect(succeeded.length).toBe(1);
+      expect(failed.length).toBe(19);
+
+      // Verify diamond's status is IN_REPAIR
+      await runWithProfile('ProfileA', async () => {
+        const finalDiamond = await prisma.diamondItem.findUnique({ where: { id: rDiamondId } });
+        expect(finalDiamond?.status).toBe('IN_REPAIR');
+      });
+    }, 25000);
+  });
+
+  describe('P0/P1: Certificate Invariants & Document Lifecycle', () => {
+    it('certificate link bidirectional reconciliation unlinks previous certificate and diamond cleanly', async () => {
+      let certAId = '';
+      let certBId = '';
+      let diamond1Id = '';
+      let diamond2Id = '';
+
+      await runWithProfile('ProfileA', async () => {
+        // Create Diamond 1 and Diamond 2
+        const d1 = await prisma.diamondItem.create({
+          data: {
+            itemCode: `D-CERT1-${Date.now()}`,
+            displayName: 'Diamond 1',
+            stockId: profileAStockId,
+            carat: 1.0,
+            color: 'D',
+            clarity: 'VVS1',
+            cut: 'EX',
+            shape: 'ROUND',
+            category: 'SINGLE',
+            ratePerCarat: 5000,
+            currentValue: 5000,
+            status: 'AVAILABLE',
+            certificateStatus: 'CERTIFIED',
+          },
+        });
+        diamond1Id = d1.id;
+
+        const d2 = await prisma.diamondItem.create({
+          data: {
+            itemCode: `D-CERT2-${Date.now()}`,
+            displayName: 'Diamond 2',
+            stockId: profileAStockId,
+            carat: 1.2,
+            color: 'E',
+            clarity: 'VS1',
+            cut: 'EX',
+            shape: 'ROUND',
+            category: 'SINGLE',
+            ratePerCarat: 4000,
+            currentValue: 4800,
+            status: 'AVAILABLE',
+            certificateStatus: 'CERTIFIED',
+          },
+        });
+        diamond2Id = d2.id;
+
+        // Create Certificate A (linked to Diamond 1)
+        const cA = await prisma.certification.create({
+          data: {
+            reportNumber: `GIA-A-${Date.now()}`,
+            labType: 'GIA',
+            diamondItemId: diamond1Id,
+            certificateStatus: 'ISSUED',
+          },
+        });
+        certAId = cA.id;
+        await prisma.diamondItem.update({
+          where: { id: diamond1Id },
+          data: { currentCertificateId: certAId },
+        });
+
+        // Create Certificate B (linked to Diamond 2)
+        const cB = await prisma.certification.create({
+          data: {
+            reportNumber: `GIA-B-${Date.now()}`,
+            labType: 'IGI',
+            diamondItemId: diamond2Id,
+            certificateStatus: 'ISSUED',
+          },
+        });
+        certBId = cB.id;
+        await prisma.diamondItem.update({
+          where: { id: diamond2Id },
+          data: { currentCertificateId: certBId },
+        });
+      });
+
+      // Now link Certificate A to Diamond 2 (should displace Certificate B, and unlink Diamond 1)
+      const res = await request(app)
+        .post(`/api/certificates/${certAId}/link`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA')
+        .send({ diamondItemId: diamond2Id });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify invariants in database
+      await runWithProfile('ProfileA', async () => {
+        // Diamond 1 should have null currentCertificateId, certificateStatus: 'NONE'
+        const d1After = await prisma.diamondItem.findUnique({ where: { id: diamond1Id } });
+        expect(d1After?.currentCertificateId).toBeNull();
+        expect(d1After?.certificateStatus).toBe('NONE');
+
+        // Diamond 2 should have currentCertificateId: certAId
+        const d2After = await prisma.diamondItem.findUnique({ where: { id: diamond2Id } });
+        expect(d2After?.currentCertificateId).toBe(certAId);
+        expect(d2After?.certificateStatus).toBe('RECEIVED');
+
+        // Certificate A should point to Diamond 2
+        const cAAfter = await prisma.certification.findUnique({ where: { id: certAId } });
+        expect(cAAfter?.diamondItemId).toBe(diamond2Id);
+        expect(cAAfter?.certificateStatus).toBe('ISSUED');
+
+        // Certificate B should have null diamondItemId, status: 'PENDING'
+        const cBAfter = await prisma.certification.findUnique({ where: { id: certBId } });
+        expect(cBAfter?.diamondItemId).toBeNull();
+        expect(cBAfter?.certificateStatus).toBe('PENDING');
+      });
+    });
+
+    it('certificate deletion removes physical PDF file from disk', async () => {
+      let certId = '';
+      const uploadsDir = path.resolve(__dirname, '../../uploads/certs');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      const testPdfFilename = `test-delete-${Date.now()}.pdf`;
+      const testPdfPath = path.resolve(uploadsDir, testPdfFilename);
+      fs.writeFileSync(testPdfPath, '%PDF-1.4 test certificate content');
+      expect(fs.existsSync(testPdfPath)).toBe(true);
+
+      await runWithProfile('ProfileA', async () => {
+        const cert = await prisma.certification.create({
+          data: {
+            reportNumber: `IGI-DEL-${Date.now()}`,
+            labType: 'IGI',
+            pdfPath: testPdfFilename,
+            certificateStatus: 'PENDING',
+          },
+        });
+        certId = cert.id;
+      });
+
+      const res = await request(app)
+        .delete(`/api/certificates/${certId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify physical PDF file is deleted from disk
+      expect(fs.existsSync(testPdfPath)).toBe(false);
+
+      // Verify DB record is deleted
+      await runWithProfile('ProfileA', async () => {
+        const deletedCert = await prisma.certification.findUnique({ where: { id: certId } });
+        expect(deletedCert).toBeNull();
+      });
+    });
   });
 });

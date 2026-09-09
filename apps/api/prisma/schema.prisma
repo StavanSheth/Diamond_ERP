@@ -89,7 +89,8 @@ model IdempotencyKey {
   createdAt    DateTime @default(now())
   expiresAt    DateTime
 
-  @@unique([profileId, key])
+  @@unique([userId, profileId, key])
+  @@index([profileId, key])
   @@index([key])
   @@index([userId])
   @@index([profileId])

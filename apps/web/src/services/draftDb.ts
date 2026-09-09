@@ -17,6 +17,10 @@ export interface LocalDraft {
 
   ledgerId?: string;
 
+  /** Multi-tenant and user namespacing */
+  profileId?: string;
+  userId?: string;
+
   /** The full current payload state */
   payload: Record<string, unknown>;
 
@@ -79,10 +83,27 @@ class DiamondERPDraftDB extends Dexie {
       pendingSync: '++id, draftLocalId, action, createdAt',
       metadata: 'key',
     });
+
+    this.version(2).stores({
+      drafts: '++id, serverId, entityType, profileId, userId, status, syncStatus, createdAt',
+      draftRevisions: '++id, draftLocalId, revisionNumber',
+      pendingSync: '++id, draftLocalId, action, createdAt',
+      metadata: 'key',
+    });
   }
 }
 
 export const draftDb = new DiamondERPDraftDB();
+
+/** Clear all drafts for a specific tenant profile */
+export async function clearDraftsForProfile(profileId: string): Promise<void> {
+  await draftDb.drafts.where('profileId').equals(profileId).delete();
+}
+
+/** Clear all drafts for a specific user */
+export async function clearDraftsForUser(userId: string): Promise<void> {
+  await draftDb.drafts.where('userId').equals(userId).delete();
+}
 
 // ──────────────────────────────────────────────────────────
 // Helper functions

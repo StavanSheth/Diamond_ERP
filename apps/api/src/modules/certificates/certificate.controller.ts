@@ -120,10 +120,18 @@ export class CertificateController {
         const targetDiamond = await tx.diamondItem.findUnique({ where: { id: diamondItemId } });
         if (!targetDiamond) throw new NotFoundError('Target diamond not found');
 
-        // If certificate was previously linked to another diamond, unlink it cleanly
+        // 1. If target diamond was already linked to a different certificate, reconcile old certificate
+        if (targetDiamond.currentCertificateId && targetDiamond.currentCertificateId !== id) {
+          await tx.certification.update({
+            where: { id: targetDiamond.currentCertificateId },
+            data: { diamondItemId: null, certificateStatus: CertificationStatus.PENDING }
+          });
+        }
+
+        // 2. If certificate was previously linked to another diamond, unlink that diamond cleanly
         if (cert.diamondItemId && cert.diamondItemId !== diamondItemId) {
           await tx.diamondItem.updateMany({
-            where: { currentCertificateId: id },
+            where: { id: cert.diamondItemId },
             data: { currentCertificateId: null, certificateStatus: CertificateState.NONE },
           });
         }
@@ -215,6 +223,13 @@ export class CertificateController {
         }
       }
 
+      const existing = await prisma.certification.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundError('Certificate not found');
+
+      const oldPdfToDelete = req.body.pdfPath && existing.pdfPath && req.body.pdfPath !== existing.pdfPath
+        ? existing.pdfPath
+        : null;
+
       const updated = await prisma.$transaction(async (tx) => {
         const cert = await tx.certification.update({
           where: { id },
@@ -243,6 +258,14 @@ export class CertificateController {
         return cert;
       });
 
+      // If replacing PDF, remove old physical file
+      if (oldPdfToDelete) {
+        const safeOld = path.resolve(UPLOADS_DIR, path.basename(oldPdfToDelete));
+        if (safeOld.startsWith(UPLOADS_DIR) && fs.existsSync(safeOld)) {
+          try { fs.unlinkSync(safeOld); } catch {}
+        }
+      }
+
       res.json({ success: true, certificateId: id, data: updated });
     } catch (error) {
       next(error);
@@ -252,10 +275,12 @@ export class CertificateController {
   delete = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const id = req.params.id as string;
+      let pdfToDelete: string | null = null;
       
       await prisma.$transaction(async (tx) => {
         const cert = await tx.certification.findUnique({ where: { id } });
         if (!cert) throw new NotFoundError('Certificate not found');
+        pdfToDelete = cert.pdfPath;
 
         // Unlink any diamond items pointing to this certificate as currentCertificate
         await tx.diamondItem.updateMany({
@@ -267,6 +292,19 @@ export class CertificateController {
           where: { id }
         });
       });
+
+      // Physical file cleanup after successful database transaction
+      if (pdfToDelete) {
+        const safeBasename = path.basename(pdfToDelete);
+        const filePath = path.resolve(UPLOADS_DIR, safeBasename);
+        if (filePath.startsWith(UPLOADS_DIR) && fs.existsSync(filePath)) {
+          try {
+            fs.unlinkSync(filePath);
+          } catch (unlinkErr) {
+            console.warn(`[Certificate] Failed to delete file ${filePath}:`, unlinkErr);
+          }
+        }
+      }
 
       res.json({ success: true, message: 'Certificate deleted successfully' });
     } catch (error) {

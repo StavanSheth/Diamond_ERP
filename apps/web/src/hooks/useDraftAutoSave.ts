@@ -35,7 +35,9 @@ interface UseDraftAutoSaveReturn {
   lastSavedAgo: number | null;
   /** Call this whenever the form payload changes */
   onPayloadChange: (payload: Record<string, unknown>, changeSummary?: string) => void;
-  /** Force a server sync immediately */
+  /** Force an immediate local save */
+  forceLocalSave: () => Promise<void>;
+  /** Alias for backward compatibility */
   forceServerSync: () => Promise<void>;
 }
 
@@ -87,6 +89,9 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
     if (!enabled) return;
     setSyncState('SAVING_LOCAL');
 
+    const profileId = typeof localStorage !== 'undefined' ? localStorage.getItem('profileId') || undefined : undefined;
+    const userId = typeof localStorage !== 'undefined' ? localStorage.getItem('userId') || createdBy : createdBy;
+
     const nextRevision = (localDraftRef.current?.localRevision ?? 0) + 1;
     const draft: LocalDraft = {
       ...(localDraftRef.current || {}),
@@ -94,6 +99,8 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
       entityType,
       entityId,
       ledgerId,
+      profileId,
+      userId,
       payload,
       localRevision: nextRevision,
       status: 'ACTIVE',
@@ -139,8 +146,8 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
     [enabled, saveLocally, localDebounceMs],
   );
 
-  // ── Public: forceServerSync ──
-  const forceServerSync = useCallback(async () => {
+  // ── Public: forceLocalSave ──
+  const forceLocalSave = useCallback(async () => {
     if (!enabled) return;
     // First save locally if there's pending data
     if (pendingPayloadRef.current) {
@@ -176,6 +183,7 @@ export function useDraftAutoSave(options: UseDraftAutoSaveOptions): UseDraftAuto
     localRevision,
     lastSavedAgo,
     onPayloadChange,
-    forceServerSync,
+    forceLocalSave,
+    forceServerSync: forceLocalSave,
   };
 }

@@ -272,31 +272,17 @@ export class LedgerController {
     }
   };
 
-  update = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  /**
+   * PUT /api/ledger/:id
+   * Historical posted accounting transactions are immutable.
+   */
+  update = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const id = req.params.id as string;
-      const payload = req.body;
-      const mappedPayload = {
-        ...payload,
-        ledgerId: payload.ledgerId,
-        transactionType: payload.txnType || payload.transactionType,
-        transactionDate: payload.transactionDate ? new Date(payload.transactionDate) : undefined,
-        partyId: payload.partyId,
-        paymentStatus: payload.paymentStatus,
-        paymentDone: payload.paymentDone ? parseFloat(payload.paymentDone) : undefined,
-        paymentDue: payload.paymentDue ? parseFloat(payload.paymentDue) : undefined,
-        brokeragePercentage: payload.brokeragePercentage ? parseFloat(payload.brokeragePercentage) : undefined,
-        brokerageAmount: payload.brokerageAmount ? parseFloat(payload.brokerageAmount) : undefined,
-        brokerageType: payload.brokerageType,
-        items: payload.items ? (payload.items || []).map((item: any) => ({
-          ...item,
-          carat: item.carat != null ? item.carat : item.caratWeight,
-          ratePerCarat: item.ratePerCarat != null ? item.ratePerCarat : item.caratRate,
-        })) : undefined
-      };
-
-      const updated = await transactionService.updateTransaction(id, mappedPayload);
-      res.json({ success: true, data: updated });
+      res.status(400).json({
+        success: false,
+        error: 'Posted accounting transactions are immutable. To correct balances, please post a reversal or correcting transaction.',
+        code: 'TRANSACTION_IMMUTABLE'
+      });
     } catch (err) {
       next(err);
     }

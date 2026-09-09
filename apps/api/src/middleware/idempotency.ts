@@ -86,7 +86,8 @@ export async function idempotencyMiddleware(
     if (!reservationSuccess) {
       const existing = await prisma.idempotencyKey.findUnique({
         where: {
-          profileId_key: {
+          userId_profileId_key: {
+            userId,
             profileId,
             key,
           },
@@ -98,10 +99,30 @@ export async function idempotencyMiddleware(
         if (existing.expiresAt <= new Date()) {
           await prisma.idempotencyKey.delete({
             where: {
-              profileId_key: { profileId, key },
+              userId_profileId_key: { userId, profileId, key },
             },
           }).catch(() => null);
           return next();
+        }
+
+        // Verify request method and path match original request
+        if (existing.method !== req.method || existing.path !== req.path) {
+          res.status(422).json({
+            success: false,
+            error: 'Idempotency key reuse across different HTTP methods or endpoints is prohibited.',
+            code: 'IDEMPOTENCY_KEY_MISMATCH',
+          });
+          return;
+        }
+
+        // Verify request payload hash matches original request
+        if (existing.requestHash && existing.requestHash !== requestHash) {
+          res.status(422).json({
+            success: false,
+            error: 'Idempotency key payload does not match original request payload.',
+            code: 'IDEMPOTENCY_BODY_MISMATCH',
+          });
+          return;
         }
 
         // If PENDING: A concurrent request is currently in progress
@@ -117,15 +138,6 @@ export async function idempotencyMiddleware(
 
         // If SUCCESS: Verify request context matches before replaying
         if (existing.status === 'SUCCESS' && existing.statusCode && existing.responseBody) {
-          if (existing.method !== req.method || existing.path !== req.path) {
-            res.status(422).json({
-              success: false,
-              error: 'Idempotency key reuse across different HTTP methods or endpoints is prohibited.',
-              code: 'IDEMPOTENCY_KEY_MISMATCH',
-            });
-            return;
-          }
-
           logger.info(`[Idempotency] Replaying cached response for key "${key}" (${existing.statusCode})`);
           res.setHeader('X-Idempotency-Replayed', 'true');
           res.status(existing.statusCode).json(JSON.parse(existing.responseBody));
@@ -136,7 +148,7 @@ export async function idempotencyMiddleware(
         if (existing.status === 'FAILED') {
           await prisma.idempotencyKey.update({
             where: {
-              profileId_key: { profileId, key },
+              userId_profileId_key: { userId, profileId, key },
             },
             data: {
               status: 'PENDING',
@@ -148,39 +160,33 @@ export async function idempotencyMiddleware(
       }
     }
 
-    // 3. We hold the PENDING reservation. Intercept res.json to finalize the record.
+    // 3. We hold the PENDING reservation. Intercept res.json to atomically finalize the record.
     const originalJson = res.json.bind(res);
     res.json = function (body: any): Response {
       const statusCode = res.statusCode;
-      if (statusCode >= 200 && statusCode < 300) {
-        // Mutation succeeded -> update to SUCCESS and cache response
-        prisma.idempotencyKey.update({
-          where: {
-            profileId_key: { profileId, key },
-          },
-          data: {
-            status: 'SUCCESS',
-            statusCode,
-            responseBody: JSON.stringify(body),
-          },
-        }).catch((err) => {
-          logger.warn(`[Idempotency] Failed to finalize SUCCESS for key "${key}": ${err.message}`);
-        });
-      } else {
-        // Mutation failed -> update to FAILED so key can be retried safely
-        prisma.idempotencyKey.update({
-          where: {
-            profileId_key: { profileId, key },
-          },
-          data: {
-            status: 'FAILED',
-            statusCode,
-            responseBody: JSON.stringify(body),
-          },
-        }).catch(() => null);
-      }
+      const isSuccess = statusCode >= 200 && statusCode < 300;
 
-      return originalJson(body);
+      // Atomically update DB record before flushing response to client
+      (async () => {
+        try {
+          await prisma.idempotencyKey.update({
+            where: {
+              userId_profileId_key: { userId, profileId, key },
+            },
+            data: {
+              status: isSuccess ? 'SUCCESS' : 'FAILED',
+              statusCode,
+              responseBody: JSON.stringify(body),
+            },
+          });
+        } catch (err: any) {
+          logger.warn(`[Idempotency] Failed to finalize status for key "${key}": ${err.message}`);
+        } finally {
+          originalJson(body);
+        }
+      })();
+
+      return res;
     };
 
     next();

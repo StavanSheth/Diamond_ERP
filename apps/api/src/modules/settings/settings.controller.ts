@@ -64,36 +64,6 @@ export class SettingsController {
 
   exportExcel = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const diamonds = await prisma.diamondItem.findMany({ 
-        include: { stock: true, location: true },
-        orderBy: { itemCode: 'asc' }
-      });
-      const stocks = await prisma.stock.findMany({ orderBy: { stockCode: 'asc' } });
-      const locations = await prisma.location.findMany({
-        include: { stock: true, parentLocation: true },
-        orderBy: { name: 'asc' },
-      });
-      const parties = await prisma.party.findMany({ orderBy: { partyCode: 'asc' } });
-      const certificates = await prisma.certification.findMany({ include: { diamondItem: true } });
-      const repairs = await prisma.repair.findMany({ include: { diamondItem: true, vendor: true } });
-      const ledgers = await prisma.ledger.findMany({
-        include: {
-          stock: true,
-          transactions: {
-            include: { items: true },
-          },
-        },
-        orderBy: { name: 'asc' },
-      });
-      const transactions = await prisma.transaction.findMany({
-        include: {
-          ledger: { include: { stock: true } },
-          party: true,
-          items: { include: { diamondItem: true } },
-        },
-        orderBy: [{ ledgerId: 'asc' }, { transactionDate: 'asc' }, { sequenceNumber: 'asc' }],
-      });
-
       // Task 21: Streaming exports
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="diamond_inventory_export.xlsx"');
@@ -104,7 +74,7 @@ export class SettingsController {
         useSharedStrings: true
       });
       
-      // 1. Diamonds Sheet
+      // 1. Diamonds Sheet (Chunked/Batched Streaming to prevent OOM)
       const diamondSheet = workbook.addWorksheet('Diamonds');
       diamondSheet.columns = [
         { header: 'Item Code', key: 'itemCode', width: 15 },
@@ -127,29 +97,68 @@ export class SettingsController {
         { header: 'Current Value', key: 'currentValue', width: 15 },
         { header: 'Status', key: 'status', width: 15 },
       ];
-      diamonds.forEach(d => {
-        diamondSheet.addRow({
-          itemCode: d.itemCode,
-          displayName: d.displayName,
-          stockCode: d.stock?.stockCode,
-          locationName: d.location?.name || '',
-          category: d.category,
-          carat: Number(d.carat),
-          color: d.color,
-          clarity: d.clarity,
-          cut: d.cut,
-          shape: d.shape,
-          polish: d.polish || '',
-          symmetry: d.symmetry || '',
-          fluorescence: d.fluorescence || '',
-          lengthMm: d.lengthMm != null ? Number(d.lengthMm) : '',
-          widthMm: d.widthMm != null ? Number(d.widthMm) : '',
-          depthMm: d.depthMm != null ? Number(d.depthMm) : '',
-          ratePerCarat: Number(d.ratePerCarat),
-          currentValue: Number(d.currentValue),
-          status: d.status,
+
+      const BATCH_SIZE = 500;
+      let diamondSkip = 0;
+      while (true) {
+        const batch = await prisma.diamondItem.findMany({
+          include: { stock: true, location: true },
+          orderBy: { itemCode: 'asc' },
+          skip: diamondSkip,
+          take: BATCH_SIZE,
         });
-      });
+        if (batch.length === 0) break;
+        batch.forEach(d => {
+          diamondSheet.addRow({
+            itemCode: d.itemCode,
+            displayName: d.displayName,
+            stockCode: d.stock?.stockCode,
+            locationName: d.location?.name || '',
+            category: d.category,
+            carat: Number(d.carat),
+            color: d.color,
+            clarity: d.clarity,
+            cut: d.cut,
+            shape: d.shape,
+            polish: d.polish || '',
+            symmetry: d.symmetry || '',
+            fluorescence: d.fluorescence || '',
+            lengthMm: d.lengthMm != null ? Number(d.lengthMm) : '',
+            widthMm: d.widthMm != null ? Number(d.widthMm) : '',
+            depthMm: d.depthMm != null ? Number(d.depthMm) : '',
+            ratePerCarat: Number(d.ratePerCarat),
+            currentValue: Number(d.currentValue),
+            status: d.status,
+          }).commit();
+        });
+        diamondSkip += batch.length;
+      }
+      diamondSheet.commit();
+
+      const [stocks, locations, parties, ledgers, certificates, repairs, transactions] = await Promise.all([
+        prisma.stock.findMany({ orderBy: { stockCode: 'asc' } }),
+        prisma.location.findMany({ include: { stock: true, parentLocation: true }, orderBy: { name: 'asc' } }),
+        prisma.party.findMany({ orderBy: { partyCode: 'asc' } }),
+        prisma.ledger.findMany({
+          include: {
+            stock: true,
+            transactions: {
+              include: { items: true },
+            },
+          },
+          orderBy: { name: 'asc' },
+        }),
+        prisma.certification.findMany({ include: { diamondItem: true } }),
+        prisma.repair.findMany({ include: { diamondItem: true, vendor: true } }),
+        prisma.transaction.findMany({
+          include: {
+            party: true,
+            ledger: { include: { stock: true } },
+            items: { include: { diamondItem: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
 
       // 2. Stocks Sheet
       const stockSheet = workbook.addWorksheet('Stocks');
@@ -731,7 +740,14 @@ export class SettingsController {
         return;
       }
 
-      // Task 22: File size limit (10MB)
+      // Strict container validation: verify ZIP magic bytes (PK\x03\x04: 0x50, 0x4B, 0x03, 0x04)
+      const buf = req.file.buffer;
+      if (!buf || buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x03 || buf[3] !== 0x04) {
+        res.status(400).json({ success: false, message: 'Invalid file format: not a valid Excel (.xlsx) ZIP container.' });
+        return;
+      }
+
+      // File size limit (10MB)
       if (req.file.size && req.file.size > 10 * 1024 * 1024) {
         res.status(400).json({ success: false, message: 'File too large. Maximum allowed size is 10MB.' });
         return;
@@ -744,6 +760,12 @@ export class SettingsController {
         await workbook.xlsx.load(req.file.buffer as any);
       } catch {
         res.status(400).json({ success: false, message: 'Invalid Excel file format' });
+        return;
+      }
+
+      // Resource limits: worksheet count and row count
+      if (workbook.worksheets.length > 20) {
+        res.status(400).json({ success: false, message: 'Too many worksheets. Maximum allowed is 20.' });
         return;
       }
 

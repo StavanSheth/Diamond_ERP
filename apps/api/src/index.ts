@@ -21,7 +21,6 @@ import { requestIdMiddleware } from './middleware/request-id';
 import { performanceMiddleware } from './middleware/performance';
 import { errorHandler } from './middleware/error-handler';
 import { corsMiddleware } from './middleware/cors';
-import { profileMiddleware } from './middleware/profile';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
 import prisma, { disconnectAllClients } from './infrastructure/database/prisma';
 
@@ -77,7 +76,6 @@ async function bootstrap(): Promise<void> {
   // 6. Register middleware (order matters)
   app.use(requestIdMiddleware);
   app.use(corsMiddleware);
-  app.use(profileMiddleware);
 
   // Security Headers via Helmet
   app.use(

@@ -154,23 +154,67 @@ export async function verifyDeviceCredential(credentialId?: string): Promise<boo
 }
 
 /**
- * SHA-256 hash a backup PIN so it is never stored in plain text.
+ * Derives a high-entropy key from an AppLock screen shield PIN using PBKDF2 (100,000 iterations).
+ * Note: AppLock is an in-browser workstation screen-shield/idle timer, not server authentication.
  */
-export async function hashPin(pin: string): Promise<string> {
+export async function hashPin(pin: string, saltInput?: string): Promise<string> {
+  const salt = saltInput 
+    ? base64UrlToBuffer(saltInput) 
+    : (typeof window !== 'undefined' && window.crypto 
+        ? window.crypto.getRandomValues(new Uint8Array(16)) 
+        : new Uint8Array(16));
+
   const encoder = new TextEncoder();
-  const data = encoder.encode(pin.trim());
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(pin.trim()),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 100000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    256
+  );
+
+  const hashArray = Array.from(new Uint8Array(derivedBits));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  const saltB64 = bufferToBase64Url(salt.buffer);
+  return `${saltB64}:${hashHex}`;
 }
 
 /**
- * Verifies input PIN against stored SHA-256 hash.
+ * Verifies an input PIN against a stored PBKDF2 hash (with legacy SHA-256 fallback).
  */
 export async function verifyPin(pin: string, storedHash: string): Promise<boolean> {
   if (!pin || !storedHash) return false;
-  const hash = await hashPin(pin);
-  return hash === storedHash;
+
+  const parts = storedHash.split(':');
+  if (parts.length === 2) {
+    const [saltB64] = parts;
+    const computed = await hashPin(pin, saltB64);
+    return computed === storedHash;
+  }
+
+  // Legacy unsalted fallback for existing stored screen lock hashes
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(pin.trim());
+    const legacyBuffer = await crypto.subtle.digest('SHA-256', data);
+    const legacyHex = Array.from(new Uint8Array(legacyBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return legacyHex === storedHash;
+  } catch {
+    return false;
+  }
 }
 
 export const MIN_SESSION_TIMEOUT_MINUTES = 1;

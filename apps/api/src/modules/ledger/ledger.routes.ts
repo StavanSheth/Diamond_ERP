@@ -15,11 +15,11 @@ export function createLedgerRouter(controller: LedgerController): Router {
   // Note: ledger entries are typically created implicitly via transactions
   router.post('/', authorize('ledger.create'), validateRequest(createTransactionSchema), controller.create.bind(controller));
   
-  // Reusing the create schema for updates for now since they are structurally similar
-  router.put('/:id', authorize('ledger.update'), validateRequest(createTransactionSchema), controller.update.bind(controller));
+  // Ledger entries are immutable once posted; updates are rejected
+  router.put('/:id', authorize('ledger.update'), controller.update.bind(controller));
   
   // Ledger entries are immutable, but maintaining the route for now until full deprecation
-  router.delete('/:id', authorize('SUPER_ADMIN'), controller.delete.bind(controller));
+  router.delete('/:id', authorize('ledger.delete'), controller.delete.bind(controller));
 
   return router;
 }

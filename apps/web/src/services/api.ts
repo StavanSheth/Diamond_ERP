@@ -22,74 +22,129 @@ function getAuthHeaders(includeContentType = true): Record<string, string> {
   return headers;
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+export interface ApiRequestOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
+async function request<T>(url: string, options?: ApiRequestOptions): Promise<T> {
   const headers = { ...getAuthHeaders(true), ...(options?.headers || {}) };
+  const timeoutMs = options?.timeoutMs || 30000;
 
-  const res = await fetch(`${BASE_URL}${url}`, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = options?.signal || controller.signal;
 
-  const data = await res.json().catch(() => ({}));
+  try {
+    const res = await fetch(`${BASE_URL}${url}`, {
+      ...options,
+      headers,
+      signal,
+    });
 
-  if (res.status === 401) {
-    if (!url.includes('/api/auth/logout')) {
-      window.dispatchEvent(new Event('unauthorized'));
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      if (!url.includes('/api/auth/logout')) {
+        window.dispatchEvent(new Event('unauthorized'));
+      }
+      throw new ApiError(data.error || 'Unauthorized', 401, data);
     }
-    throw new ApiError(data.error || 'Unauthorized', 401, data);
-  }
 
-  if (!res.ok) {
-    throw new ApiError(data.error || `Request failed with status ${res.status}`, res.status, data);
-  }
+    if (!res.ok) {
+      throw new ApiError(data.error || `Request failed with status ${res.status}`, res.status, data);
+    }
 
-  return data as T;
+    return data as T;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new ApiError(`Request timed out after ${timeoutMs}ms`, 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
-async function requestBlob(url: string, options?: RequestInit): Promise<Blob> {
+async function requestBlob(url: string, options?: ApiRequestOptions): Promise<Blob> {
   const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
+  const timeoutMs = options?.timeoutMs || 60000;
 
-  const res = await fetch(`${BASE_URL}${url}`, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = options?.signal || controller.signal;
 
-  if (res.status === 401) {
-    if (!url.includes('/api/auth/logout')) {
-      window.dispatchEvent(new Event('unauthorized'));
+  try {
+    const res = await fetch(`${BASE_URL}${url}`, {
+      ...options,
+      headers,
+      signal,
+    });
+
+    if (res.status === 401) {
+      if (!url.includes('/api/auth/logout')) {
+        window.dispatchEvent(new Event('unauthorized'));
+      }
+      throw new ApiError('Unauthorized', 401);
     }
-    throw new ApiError('Unauthorized', 401);
-  }
 
-  if (!res.ok) {
-    throw new ApiError(`Request failed with status ${res.status}`, res.status);
-  }
+    if (!res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const errorJson = await res.json().catch(() => ({}));
+        throw new ApiError(errorJson.error || errorJson.message || `Request failed with status ${res.status}`, res.status, errorJson);
+      }
+      const text = await res.text().catch(() => '');
+      throw new ApiError(text || `Request failed with status ${res.status}`, res.status);
+    }
 
-  return res.blob();
+    return res.blob();
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new ApiError(`Download request timed out after ${timeoutMs}ms`, 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
-async function requestUpload<T>(url: string, formData: FormData, options?: RequestInit): Promise<T> {
+async function requestUpload<T>(url: string, formData: FormData, options?: ApiRequestOptions): Promise<T> {
   const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
+  const timeoutMs = options?.timeoutMs || 120000; // 2 minutes for uploads
 
-  const res = await fetch(`${BASE_URL}${url}`, {
-    method: 'POST',
-    ...options,
-    headers,
-    body: formData,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = options?.signal || controller.signal;
 
-  const data = await res.json().catch(() => ({}));
+  try {
+    const res = await fetch(`${BASE_URL}${url}`, {
+      method: 'POST',
+      ...options,
+      headers,
+      body: formData,
+      signal,
+    });
 
-  if (res.status === 401) {
-    window.dispatchEvent(new Event('unauthorized'));
-    throw new ApiError(data.error || 'Unauthorized', 401, data);
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      window.dispatchEvent(new Event('unauthorized'));
+      throw new ApiError(data.error || 'Unauthorized', 401, data);
+    }
+
+    if (!res.ok) {
+      throw new ApiError(data.error || `Upload failed with status ${res.status}`, res.status, data);
+    }
+
+    return data as T;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new ApiError(`Upload timed out after ${timeoutMs}ms`, 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  if (!res.ok) {
-    throw new ApiError(data.error || `Upload failed with status ${res.status}`, res.status, data);
-  }
-
-  return data as T;
 }
 
 export class ApiError extends Error {
