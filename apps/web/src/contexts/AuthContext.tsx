@@ -24,24 +24,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Attempt to hydrate user from token on mount
+    let active = true;
+
+    // Attempt to hydrate user from token on mount or token change
     const hydrate = async () => {
-      if (token) {
-        try {
-          const res = await api.getMe(); // Note: getMe uses the token attached in api.ts
+      const currentToken = localStorage.getItem('token');
+      if (!currentToken) {
+        if (active) {
+          setUser(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const res = await api.getMe();
+        if (active) {
           setUser(res.data);
-        } catch (error) {
-          console.error('Failed to hydrate user, clearing token:', error);
+          setToken(currentToken);
+        }
+      } catch (error) {
+        if (active) {
           setToken(null);
           setUser(null);
           localStorage.removeItem('token');
         }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
-      setLoading(false);
     };
 
     hydrate();
-  }, []);
+
+    return () => {
+      active = false;
+    };
+  }, [token]);
 
   const localLogout = () => {
     localStorage.removeItem('token');

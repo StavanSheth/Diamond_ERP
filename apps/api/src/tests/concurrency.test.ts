@@ -17,6 +17,7 @@ import { SettingsController } from '../modules/settings/settings.controller';
 import prisma, { systemPrisma, registerProfile, runWithProfile, disconnectAllClients } from '../infrastructure/database/prisma';
 import { authService } from '../modules/auth/auth.service';
 import { transactionService } from '../modules/transactions/transaction.service';
+import { inventoryService } from '../modules/inventory/inventory.service';
 import { TransactionType } from '../types/enums';
 
 const app = express();
@@ -144,8 +145,10 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
 
     // 7. Deterministic seed data in ProfileA and ProfileB databases
     await runWithProfile('ProfileA', async () => {
-      const stock = await prisma.stock.create({
-        data: {
+      const stock = await prisma.stock.upsert({
+        where: { stockCode: 'STK-PROFA-01' },
+        update: {},
+        create: {
           stockCode: 'STK-PROFA-01',
           name: 'Profile A Main Vault',
           currency: 'USD',
@@ -155,8 +158,10 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
     });
 
     await runWithProfile('ProfileB', async () => {
-      await prisma.stock.create({
-        data: {
+      await prisma.stock.upsert({
+        where: { stockCode: 'STK-PROFB-01' },
+        update: {},
+        create: {
           stockCode: 'STK-PROFB-01',
           name: 'Profile B Main Vault',
           currency: 'EUR',
@@ -252,6 +257,41 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
         .set('X-Profile-Id', 'NonExistentProfile');
 
       expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('User A attempting to create resource in Profile B returns 403 Forbidden', async () => {
+      const res = await request(app)
+        .post('/api/stocks')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Profile-Id', 'ProfileB')
+        .send({
+          stockName: 'Unauthorized Cross Stock',
+          caratWeight: 1.0,
+          caratRate: 5000,
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('User A attempting to export report from Profile B returns 403 Forbidden', async () => {
+      const res = await request(app)
+        .get('/api/reports/export/excel')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Profile-Id', 'ProfileB');
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('User A attempting to download certificate file from Profile B returns 403 Forbidden', async () => {
+      const res = await request(app)
+        .get('/api/certificates/dummy-id/file')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Profile-Id', 'ProfileB');
+
+      expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
     });
   });
@@ -482,5 +522,201 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
       expect(res2.header['x-idempotency-replayed']).toBe('true');
       expect(res2.body.data.id).toBe(originalStockId);
     });
+
+    it('same key across 20 concurrent requests results in exactly 1 creation', async () => {
+      const key = `concur-idem-${Date.now()}`;
+      const stockName = `Concur Stock ${Date.now()}`;
+
+      const reqs = Array.from({ length: 20 }, () =>
+        request(app)
+          .post('/api/stocks')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .set('X-Profile-Id', 'ProfileA')
+          .set('Idempotency-Key', key)
+          .send({ stockName, caratWeight: 1.0, caratRate: 5000 })
+      );
+
+      const results = await Promise.all(reqs);
+      const created = results.filter((r) => r.status === 201);
+      const conflicts = results.filter((r) => r.status === 409);
+
+      // All 20 requests must either succeed or return 409 Conflict
+      expect(created.length + conflicts.length).toBe(20);
+      expect(created.length).toBeGreaterThanOrEqual(1);
+
+      // All 201 responses must return the EXACT same stock ID
+      const stockIds = new Set(created.map((r) => r.body.data.id));
+      expect(stockIds.size).toBe(1);
+
+      // Verify exactly 1 stock record exists in the database
+      await runWithProfile('ProfileA', async () => {
+        const count = await prisma.stock.count({ where: { name: stockName } });
+        expect(count).toBe(1);
+      });
+    });
+  });
+
+  describe('P0/P1: Session Fail-Closed & Creation Guarantees', () => {
+    it('valid JWT with deleted session returns 401 Unauthorized (Fail-Closed)', async () => {
+      const login = await authService.login('usera', 'Password123!');
+      const payload = authService.verifyToken(login.token);
+      expect(payload?.sessionId).toBeDefined();
+
+      // Delete the session record from system DB
+      await systemPrisma.session.delete({ where: { id: payload!.sessionId! } });
+
+      // Authenticated request with original token must be rejected
+      const res = await request(app)
+        .get('/api/stocks')
+        .set('Authorization', `Bearer ${login.token}`)
+        .set('X-Profile-Id', 'ProfileA');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toMatch(/session has been revoked, expired, or is invalid/i);
+    });
+
+    it('session DB failure causes login to fail without issuing JWT', async () => {
+      const originalCreate = systemPrisma.session.create;
+      systemPrisma.session.create = (() => {
+        throw new Error('Database disk full: session write failure');
+      }) as any;
+
+      try {
+        await expect(authService.login('usera', 'Password123!')).rejects.toThrow(/failed to persist session/i);
+      } finally {
+        systemPrisma.session.create = originalCreate;
+      }
+    });
+  });
+
+  describe('P0/P1: Financial Calculations & Ledger Integrity', () => {
+    it('rejects transaction when client totalValue does not match item sum with 422', async () => {
+      let testPartyId = '';
+      let testLedgerId = '';
+      await runWithProfile('ProfileA', async () => {
+        const p = await prisma.party.create({
+          data: { partyCode: `P-FIN-${Date.now()}`, name: 'Fin Customer', partyType: 'CUSTOMER' },
+        });
+        testPartyId = p.id;
+
+        const l = await prisma.ledger.create({
+          data: {
+            stockId: profileAStockId,
+            name: `Ledger Fin ${Date.now()}`,
+            ledgerType: 'GENERAL',
+            openingCarat: 0,
+            openingValue: 0,
+          },
+        });
+        testLedgerId = l.id;
+      });
+
+      const res = await request(app)
+        .post('/api/ledger')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA')
+        .send({
+          ledgerId: testLedgerId,
+          transactionType: 'PURCHASE',
+          transactionDate: new Date().toISOString(),
+          createdBy: 'SYSTEM_AUDIT',
+          partyId: testPartyId,
+          totalValue: 1, // Manipulated total! (1 instead of 10000)
+          totalCarat: 1,
+          items: [
+            {
+              carat: 1.0,
+              ratePerCarat: 10000,
+              totalValue: 10000,
+              itemAction: 'IN',
+            },
+          ],
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('FINANCIAL_TOTAL_MISMATCH');
+    });
+
+    it('validates and clamps pagination parameters in ledger', async () => {
+      const resNeg = await request(app)
+        .get('/api/ledger?take=-1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA');
+      expect(resNeg.status).toBe(400);
+
+      const resZero = await request(app)
+        .get('/api/ledger?take=0')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA');
+      expect(resZero.status).toBe(400);
+
+      const resSkipNeg = await request(app)
+        .get('/api/ledger?skip=-10')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA');
+      expect(resSkipNeg.status).toBe(400);
+
+      const resHuge = await request(app)
+        .get('/api/ledger?take=99999999')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Profile-Id', 'ProfileA');
+      expect(resHuge.status).toBe(200);
+      expect(resHuge.body.data.length).toBeLessThanOrEqual(100);
+    });
+  });
+
+  describe('P0/P1: Inventory Transfer Concurrency', () => {
+    it('simultaneous transfers of same diamond result in exactly 1 success and 19 conflicts', async () => {
+      let xDiamondId = '';
+      let stockTargetId = '';
+      await runWithProfile('ProfileA', async () => {
+        const d = await prisma.diamondItem.create({
+          data: {
+            itemCode: `D-TX-${Date.now()}`,
+            displayName: 'Transfer Diamond',
+            stockId: profileAStockId,
+            carat: 1.5,
+            color: 'E',
+            clarity: 'VS1',
+            cut: 'VG',
+            shape: 'ROUND',
+            category: 'SINGLE',
+            ratePerCarat: 4000,
+            currentValue: 6000,
+            status: 'AVAILABLE',
+            certificateStatus: 'NONE',
+          },
+        });
+        xDiamondId = d.id;
+
+        const targetStock = await prisma.stock.create({
+          data: {
+            stockCode: `STK-TARGET-${Date.now()}`,
+            name: 'Target Vault B',
+            currency: 'USD',
+          },
+        });
+        stockTargetId = targetStock.id;
+      });
+
+      const promises = Array.from({ length: 20 }, (_, i) =>
+        runWithProfile('ProfileA', () =>
+          inventoryService.transferItem(xDiamondId, stockTargetId, null, `SYSTEM-T${i}`)
+        )
+      );
+
+      const transferResults = await Promise.allSettled(promises);
+      const succeeded = transferResults.filter((r) => r.status === 'fulfilled');
+      const failed = transferResults.filter((r) => r.status === 'rejected');
+
+      expect(succeeded.length).toBe(1);
+      expect(failed.length).toBe(19);
+
+      // Verify diamond's current location is the target stock
+      await runWithProfile('ProfileA', async () => {
+        const finalDiamond = await prisma.diamondItem.findUnique({ where: { id: xDiamondId } });
+        expect(finalDiamond?.stockId).toBe(stockTargetId);
+      });
+    }, 25000);
   });
 });

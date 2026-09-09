@@ -50,8 +50,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
         })
         .catch(err => console.error('Failed to load parties:', err));
 
-      fetch('/api/certificates/unlinked')
-        .then(r => r.json())
+      api.getUnlinkedCertificates()
         .then(res => {
           if (res.success) setUnlinkedCerts(res.data);
         })

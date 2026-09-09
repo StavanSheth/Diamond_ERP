@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService, AuthenticatedUser, ROLES } from '../modules/auth/auth.service';
 import { RequestWithId } from './request-id';
-import { systemPrisma, getAllProfiles, defaultProfile } from '../infrastructure/database/prisma';
+import { systemPrisma, getAllProfiles } from '../infrastructure/database/prisma';
 
 /**
  * Extends Express Request with authenticated user information.
@@ -62,15 +62,15 @@ export async function authenticate(
       return;
     }
 
-    // If session ID is present in token, ensure session was not individually revoked
+    // If session ID is present in token, ensure session was not revoked or missing (Fail-Closed)
     if (payload.sessionId) {
       const session = await systemPrisma.session.findUnique({
         where: { id: payload.sessionId },
       });
-      if (session && (session.revokedAt || session.expiresAt < new Date())) {
+      if (!session || session.revokedAt || session.expiresAt < new Date() || session.userId !== user.id) {
         res.status(401).json({
           success: false,
-          error: 'Session has been revoked or expired.',
+          error: 'Session has been revoked, expired, or is invalid. Please log in again.',
           requestId,
         });
         return;
@@ -85,10 +85,6 @@ export async function authenticate(
       authorizedProfiles = user.userProfiles
         .filter((up) => up.isActive && up.profile.isActive)
         .map((up) => up.profile.code);
-
-      if (authorizedProfiles.length === 0) {
-        authorizedProfiles = [defaultProfile];
-      }
     }
 
     (req as AuthenticatedRequest).user = {
@@ -141,10 +137,6 @@ export async function optionalAuthenticate(
           authorizedProfiles = user.userProfiles
             .filter((up) => up.isActive && up.profile.isActive)
             .map((up) => up.profile.code);
-
-          if (authorizedProfiles.length === 0) {
-            authorizedProfiles = [defaultProfile];
-          }
         }
 
         (req as AuthenticatedRequest).user = {

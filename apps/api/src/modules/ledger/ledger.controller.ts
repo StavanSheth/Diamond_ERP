@@ -7,15 +7,26 @@ export class LedgerController {
 
   /**
    * GET /api/ledger
-   * Returns all transactions with their items, ordered by date descending.
+   * Returns transactions with pagination, bounded relations, and correct running balances.
    */
   getAll = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { stockId, partyId, itemCode, paymentStatus, agingDays, paymentDirection } = req.query;
       
-      // Task 18 & 19: Pagination and Optimization
-      const skip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
-      const take = req.query.take ? parseInt(req.query.take as string, 10) : 1000;
+      // Strict pagination validation and clamping
+      const rawSkip = req.query.skip ? parseInt(req.query.skip as string, 10) : 0;
+      const rawTake = req.query.take ? parseInt(req.query.take as string, 10) : 50;
+
+      if (isNaN(rawSkip) || rawSkip < 0) {
+        res.status(400).json({ success: false, error: 'Invalid skip parameter: must be an integer >= 0' });
+        return;
+      }
+      if (isNaN(rawTake) || rawTake <= 0) {
+        res.status(400).json({ success: false, error: 'Invalid take parameter: must be an integer > 0' });
+        return;
+      }
+      const take = Math.min(rawTake, 100); // max 100 records per page
+      const skip = rawSkip;
 
       const whereCondition: any = {};
       
@@ -55,6 +66,7 @@ export class LedgerController {
         }
       }
 
+      // Query total count and page of transactions with optimized projection
       const [total, transactions] = await prisma.$transaction([
         prisma.transaction.count({ where: whereCondition }),
         prisma.transaction.findMany({
@@ -62,19 +74,47 @@ export class LedgerController {
           skip,
           take,
           include: {
-            ledger: { include: { stock: true } },
-            party: true,
-            items: { include: { diamondItem: true } },
-            inventoryMovements: true,
-            financialEntries: true
+            ledger: { select: { id: true, name: true, stockId: true } },
+            party: { select: { id: true, name: true, partyCode: true, partyType: true } },
+            items: {
+              select: {
+                id: true,
+                carat: true,
+                totalValue: true,
+                itemAction: true,
+                ratePerCarat: true,
+                diamondItem: { select: { id: true, itemCode: true, status: true } }
+              }
+            }
           },
           orderBy: { transactionDate: 'desc' }
         })
       ]);
 
-      // Calculate running balances on the fly
+      // Calculate cumulative opening balance from older historical transactions (transactions older than current page)
       let currentCaratBalance = new Prisma.Decimal(0);
       let currentValueBalance = new Prisma.Decimal(0);
+
+      const olderItems = await prisma.transactionItem.findMany({
+        where: { transaction: whereCondition },
+        select: {
+          itemAction: true,
+          carat: true,
+          totalValue: true,
+        },
+        orderBy: { transaction: { transactionDate: 'desc' } },
+        skip: skip + take, // all items older than the current page window
+      });
+
+      olderItems.forEach(item => {
+        if (item.itemAction === 'IN') {
+          currentCaratBalance = currentCaratBalance.add(item.carat || 0);
+          currentValueBalance = currentValueBalance.add(item.totalValue || 0);
+        } else if (item.itemAction === 'OUT') {
+          currentCaratBalance = currentCaratBalance.sub(item.carat || 0);
+          currentValueBalance = currentValueBalance.sub(item.totalValue || 0);
+        }
+      });
       
       const transactionsAsc = [...transactions].reverse();
       const balancedTransactions = transactionsAsc.map(txn => {
@@ -83,7 +123,6 @@ export class LedgerController {
         let valueIn = new Prisma.Decimal(0);
         let valueOut = new Prisma.Decimal(0);
         
-        // Compute carat and value in/out from transaction items (TransactionItem stream)
         txn.items.forEach(item => {
           if (item.itemAction === 'IN') {
             caratIn = caratIn.add(item.carat || 0);
@@ -108,7 +147,7 @@ export class LedgerController {
         };
       });
 
-      // Reverse back for display
+      // Reverse back for display (newest first)
       balancedTransactions.reverse();
 
       res.json({ success: true, data: balancedTransactions, total });
@@ -119,7 +158,7 @@ export class LedgerController {
 
   /**
    * POST /api/ledger
-   * Create a transaction using TransactionService.
+   * Create a transaction using TransactionService with server-authoritative financial calculation.
    */
   create = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -135,29 +174,62 @@ export class LedgerController {
         if (firstLedger) targetLedgerId = firstLedger.id;
       }
 
+      // Server-authoritative calculation using Decimal
+      let computedTotalCarat = new Prisma.Decimal(0);
+      let computedTotalValue = new Prisma.Decimal(0);
+
       const normalizedItems = (payload.items || []).map((item: any) => {
-        const carat = item.carat != null ? item.carat : (item.caratWeight != null ? item.caratWeight : 0);
-        const rate = item.ratePerCarat || item.caratRate || 0;
+        const caratDec = new Prisma.Decimal(item.carat != null ? item.carat : (item.caratWeight != null ? item.caratWeight : 0));
+        const rateDec = new Prisma.Decimal(item.ratePerCarat || item.caratRate || 0);
         
-        let totalValue = item.totalValue;
-        if (totalValue == null) {
-          totalValue = new Prisma.Decimal(carat || 0).mul(new Prisma.Decimal(rate || 0)).toNumber();
+        let itemValueDec: Prisma.Decimal;
+        if (item.totalValue != null) {
+          itemValueDec = new Prisma.Decimal(item.totalValue);
+        } else {
+          itemValueDec = caratDec.mul(rateDec);
         }
+
+        computedTotalCarat = computedTotalCarat.add(caratDec);
+        computedTotalValue = computedTotalValue.add(itemValueDec);
 
         return {
           ...item,
-          carat,
-          totalValue,
+          carat: caratDec.toNumber(),
+          totalValue: itemValueDec.toNumber(),
         };
       });
 
-      const totalCarat = payload.totalCarat != null
-        ? Number(payload.totalCarat)
-        : normalizedItems.reduce((sum: number, item: any) => sum + Number(item.carat || 0), 0);
+      // FINANCIAL INTEGRITY CHECK: Client totalCarat and totalValue verification
+      if (payload.totalCarat != null) {
+        const clientCarat = new Prisma.Decimal(payload.totalCarat);
+        if (clientCarat.sub(computedTotalCarat).abs().greaterThan(0.001)) {
+          res.status(422).json({
+            success: false,
+            error: `Financial total mismatch: client totalCarat (${clientCarat}) does not match calculated sum of items (${computedTotalCarat}).`,
+            code: 'FINANCIAL_TOTAL_MISMATCH',
+          });
+          return;
+        }
+      }
 
-      const totalValue = payload.totalValue != null
-        ? Number(payload.totalValue)
-        : normalizedItems.reduce((sum: number, item: any) => sum + Number(item.totalValue || 0), 0);
+      if (payload.totalValue != null) {
+        const clientValue = new Prisma.Decimal(payload.totalValue);
+        if (clientValue.sub(computedTotalValue).abs().greaterThan(0.01)) {
+          res.status(422).json({
+            success: false,
+            error: `Financial total mismatch: client totalValue (${clientValue}) does not match calculated sum of items (${computedTotalValue}).`,
+            code: 'FINANCIAL_TOTAL_MISMATCH',
+          });
+          return;
+        }
+      }
+
+      const totalCarat = computedTotalCarat.toNumber();
+      const totalValue = computedTotalValue.toNumber();
+
+      const paymentDoneDec = new Prisma.Decimal(payload.paymentDone || 0);
+      const paymentDueDec = computedTotalValue.sub(paymentDoneDec);
+      const paymentDue = paymentDueDec.greaterThan(0) ? paymentDueDec.toNumber() : 0;
 
       const transaction = await transactionService.createTransaction({
         ledgerId: targetLedgerId,
@@ -167,9 +239,9 @@ export class LedgerController {
         remarks: payload.remarks,
         referenceNo: payload.referenceNo,
         createdBy: (req as any).user?.username || payload.createdBy || 'system',
-        paymentStatus: payload.paymentStatus || 'PENDING',
-        paymentDone: payload.paymentDone ? parseFloat(payload.paymentDone) : 0,
-        paymentDue: payload.paymentDue ? parseFloat(payload.paymentDue) : 0,
+        paymentStatus: payload.paymentStatus || (paymentDue === 0 ? 'COMPLETED' : 'PENDING'),
+        paymentDone: paymentDoneDec.toNumber(),
+        paymentDue,
         brokeragePercentage: payload.brokeragePercentage ? parseFloat(payload.brokeragePercentage) : 0,
         brokerageAmount: payload.brokerageAmount ? parseFloat(payload.brokerageAmount) : 0,
         brokerageType: payload.brokerageType || 'INCLUSIVE',
@@ -178,24 +250,27 @@ export class LedgerController {
         items: normalizedItems
       });
 
-      res.json({ success: true, data: transaction });
+      res.status(201).json({ success: true, data: transaction });
     } catch (err) {
       next(err);
     }
-  }
+  };
 
   /**
    * DELETE /api/ledger/:id
-   * Soft deletes a transaction. Wait, rule 1: "Never delete historical transactions. Use reversal/correction transactions."
-   * For the API, we can either throw an error or implement a reverse. 
+   * Historical transactions cannot be deleted.
    */
   delete = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      res.status(400).json({ success: false, error: 'Historical transactions cannot be deleted. Please create a reversal transaction instead.' });
+      res.status(400).json({
+        success: false,
+        error: 'Historical accounting transactions cannot be deleted. Please create a reversal transaction instead.',
+        code: 'TRANSACTION_IMMUTABLE'
+      });
     } catch (err) {
       next(err);
     }
-  }
+  };
 
   update = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -208,19 +283,24 @@ export class LedgerController {
         transactionDate: payload.transactionDate ? new Date(payload.transactionDate) : undefined,
         partyId: payload.partyId,
         paymentStatus: payload.paymentStatus,
-        paymentDone: payload.paymentDone !== undefined ? parseFloat(payload.paymentDone) : undefined,
-        paymentDue: payload.paymentDue !== undefined ? parseFloat(payload.paymentDue) : undefined,
-        brokeragePercentage: payload.brokeragePercentage !== undefined ? parseFloat(payload.brokeragePercentage) : undefined,
-        brokerageAmount: payload.brokerageAmount !== undefined ? parseFloat(payload.brokerageAmount) : undefined,
-        brokerageType: payload.brokerageType || undefined,
-        expectedVersion: payload.version !== undefined ? parseInt(payload.version, 10) : undefined,
+        paymentDone: payload.paymentDone ? parseFloat(payload.paymentDone) : undefined,
+        paymentDue: payload.paymentDue ? parseFloat(payload.paymentDue) : undefined,
+        brokeragePercentage: payload.brokeragePercentage ? parseFloat(payload.brokeragePercentage) : undefined,
+        brokerageAmount: payload.brokerageAmount ? parseFloat(payload.brokerageAmount) : undefined,
+        brokerageType: payload.brokerageType,
+        items: payload.items ? (payload.items || []).map((item: any) => ({
+          ...item,
+          carat: item.carat != null ? item.carat : item.caratWeight,
+          ratePerCarat: item.ratePerCarat != null ? item.ratePerCarat : item.caratRate,
+        })) : undefined
       };
-      const transaction = await transactionService.updateTransaction(id, mappedPayload as any);
-      res.json({ success: true, data: transaction });
+
+      const updated = await transactionService.updateTransaction(id, mappedPayload);
+      res.json({ success: true, data: updated });
     } catch (err) {
       next(err);
     }
-  }
+  };
 
   getParties = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -229,7 +309,7 @@ export class LedgerController {
     } catch (err) {
       next(err);
     }
-  }
+  };
 
   getStockNames = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -238,8 +318,12 @@ export class LedgerController {
     } catch (err) {
       next(err);
     }
-  }
+  };
 
+  /**
+   * GET /api/ledger/payment-summary
+   * Memory-safe database aggregated payment summaries.
+   */
   getPaymentSummary = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { stockId, partyId, itemCode, agingDays } = req.query;
@@ -267,38 +351,56 @@ export class LedgerController {
         }
       }
 
-      const purchases = await prisma.transaction.findMany({
-        where: { ...whereCondition, transactionType: 'PURCHASE' },
-        select: { paymentDue: true, paymentDone: true, transactionDate: true, items: { select: { totalValue: true } } }
-      });
-      const sales = await prisma.transaction.findMany({
-        where: { ...whereCondition, transactionType: 'SALE' },
-        select: { paymentDue: true, paymentDone: true, transactionDate: true, items: { select: { totalValue: true } } }
-      });
+      // Memory-safe database-level aggregations
+      const [purchaseAgg, saleAgg] = await prisma.$transaction([
+        prisma.transaction.aggregate({
+          where: { ...whereCondition, transactionType: 'PURCHASE' },
+          _sum: {
+            paymentDue: true,
+            paymentDone: true,
+          }
+        }),
+        prisma.transaction.aggregate({
+          where: { ...whereCondition, transactionType: 'SALE' },
+          _sum: {
+            paymentDue: true,
+            paymentDone: true,
+          }
+        })
+      ]);
 
-      const calcLegacy = (t: any) => {
-        const pd = Number(t.paymentDue || 0);
-        const pdo = Number(t.paymentDone || 0);
-        if (pd === 0 && pdo === 0) {
-          return t.items.reduce((sum: number, i: any) => sum + Number(i.totalValue || 0), 0);
-        }
-        return pd;
-      };
+      const payableDue = purchaseAgg._sum.paymentDue?.toNumber() || 0;
+      const payablePaid = purchaseAgg._sum.paymentDone?.toNumber() || 0;
+      const receivableDue = saleAgg._sum.paymentDue?.toNumber() || 0;
+      const receivableCollected = saleAgg._sum.paymentDone?.toNumber() || 0;
 
-      const payableDue = purchases.reduce((s, t) => s + calcLegacy(t), 0);
-      const payablePaid = purchases.reduce((s, t) => s + Number(t.paymentDone || 0), 0);
-      
-      const receivableDue = sales.reduce((s, t) => s + calcLegacy(t), 0);
-      const receivableCollected = sales.reduce((s, t) => s + Number(t.paymentDone || 0), 0);
-
-      // Compute aging breakdown for over 15, 30, 45, 60 days
-      const getOverdue = (txns: any[], days: number) => {
+      // Aggregations for aging breakdown
+      const getOverdueSum = async (txnType: string, days: number) => {
         const cutoff = new Date(now);
         cutoff.setDate(cutoff.getDate() - days);
-        return txns
-          .filter(t => new Date(t.transactionDate) <= cutoff)
-          .reduce((s, t) => s + calcLegacy(t), 0);
+        const agg = await prisma.transaction.aggregate({
+          where: {
+            ...whereCondition,
+            transactionType: txnType,
+            transactionDate: { lte: cutoff }
+          },
+          _sum: {
+            paymentDue: true,
+          }
+        });
+        return agg._sum.paymentDue?.toNumber() || 0;
       };
+
+      const [r15, r30, r45, r60, p15, p30, p45, p60] = await Promise.all([
+        getOverdueSum('SALE', 15),
+        getOverdueSum('SALE', 30),
+        getOverdueSum('SALE', 45),
+        getOverdueSum('SALE', 60),
+        getOverdueSum('PURCHASE', 15),
+        getOverdueSum('PURCHASE', 30),
+        getOverdueSum('PURCHASE', 45),
+        getOverdueSum('PURCHASE', 60),
+      ]);
 
       res.json({
         success: true,
@@ -309,16 +411,16 @@ export class LedgerController {
           receivableCollected,
           aging: {
             receivable: {
-              over15: getOverdue(sales, 15),
-              over30: getOverdue(sales, 30),
-              over45: getOverdue(sales, 45),
-              over60: getOverdue(sales, 60),
+              over15: r15,
+              over30: r30,
+              over45: r45,
+              over60: r60,
             },
             payable: {
-              over15: getOverdue(purchases, 15),
-              over30: getOverdue(purchases, 30),
-              over45: getOverdue(purchases, 45),
-              over60: getOverdue(purchases, 60),
+              over15: p15,
+              over30: p30,
+              over45: p45,
+              over60: p60,
             }
           }
         }

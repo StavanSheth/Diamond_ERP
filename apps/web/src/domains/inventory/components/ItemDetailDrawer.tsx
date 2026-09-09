@@ -23,18 +23,15 @@ export const ItemDetailDrawer: React.FC<ItemDetailDrawerProps> = ({ open, itemId
     if (open && itemId) {
       setLoading(true);
       setError(null);
-      // Fetch diamond API (needs to be added to api.ts, I will do that next)
-      fetch(`/api/diamonds/${itemId}`)
-        .then(res => res.json())
+      api.getDiamondById(itemId)
         .then(res => {
           if (res.success) setItem(res.data);
-          else setError(res.error || 'Failed to fetch diamond');
+          else setError('Failed to fetch diamond');
         })
         .catch(err => setError(err.message))
         .finally(() => setLoading(false));
         
-      fetch('/api/certificates/unlinked')
-        .then(r => r.json())
+      api.getUnlinkedCertificates()
         .then(res => {
           if (res.success) setUnlinkedCerts(res.data);
         })
@@ -46,19 +43,13 @@ export const ItemDetailDrawer: React.FC<ItemDetailDrawerProps> = ({ open, itemId
   }, [open, itemId]);
 
   const handleLinkCert = async () => {
-    if (!selectedCertId) return;
+    if (!selectedCertId || !item) return;
     setLinking(true);
     try {
-      const res = await fetch(`/api/certificates/${selectedCertId}/link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ diamondItemId: item.id })
-      });
-      const data = await res.json();
+      const data = await api.linkCertificate(selectedCertId, item.id);
       if (data.success) {
         // Refresh item
-        const itemRes = await fetch(`/api/diamonds/${itemId}`);
-        const itemData = await itemRes.json();
+        const itemData = await api.getDiamondById(itemId!);
         if (itemData.success) setItem(itemData.data);
         
         // Remove from unlinked list

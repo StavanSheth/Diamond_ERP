@@ -62,6 +62,15 @@ export function profileMiddleware(
   if (authenticatedUser) {
     const userProfiles = authenticatedUser.profiles || [];
 
+    // Reject non-SUPER_ADMIN users with 0 assigned profiles
+    if (authenticatedUser.role !== 'SUPER_ADMIN' && userProfiles.length === 0) {
+      res.status(403).json({
+        success: false,
+        error: `Forbidden: User "${authenticatedUser.username}" has no active profile memberships.`,
+      });
+      return;
+    }
+
     if (requestedProfile) {
       const canonical = getCanonicalProfile(requestedProfile);
       const targetCode = canonical ? canonical.code : requestedProfile;
@@ -81,9 +90,17 @@ export function profileMiddleware(
 
       canonicalCode = targetCode;
     } else {
-      // If no header sent, default to user's first assigned profile or defaultProfile if authorized
+      // If no header sent: default to user's first assigned profile (or defaultProfile for SUPER_ADMIN)
       if (userProfiles.length > 0) {
         canonicalCode = userProfiles[0];
+      } else if (authenticatedUser.role === 'SUPER_ADMIN') {
+        canonicalCode = defaultProfile;
+      } else {
+        res.status(403).json({
+          success: false,
+          error: `Forbidden: User "${authenticatedUser.username}" has no active profile memberships.`,
+        });
+        return;
       }
     }
   } else if (requestedProfile) {

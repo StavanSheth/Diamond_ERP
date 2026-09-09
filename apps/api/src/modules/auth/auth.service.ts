@@ -150,13 +150,13 @@ export class AuthService {
     });
 
     if (!user || !user.isActive) {
-      logger.warn(`Failed login: user not found or inactive: ${normalizedUsername}`);
+      logger.warn(`Failed login attempt: user not found or inactive`);
       throw new AuthenticationError('Invalid username or password');
     }
 
     const isValid = await this.verifyPassword(password, user.passwordHash);
     if (!isValid) {
-      logger.warn(`Failed login attempt for user: ${normalizedUsername}`);
+      logger.warn(`Failed login attempt for account ID: ${user.id}`);
       throw new AuthenticationError('Invalid username or password');
     }
 
@@ -168,11 +168,6 @@ export class AuthService {
       accessibleProfiles = user.userProfiles
         .filter((up) => up.isActive && up.profile.isActive)
         .map((up) => up.profile.code);
-
-      // If user has no specific profile assignments yet, default to defaultProfile if authorized
-      if (accessibleProfiles.length === 0) {
-        accessibleProfiles = [defaultProfile];
-      }
     }
 
     // Generate unique session identifier
@@ -180,21 +175,24 @@ export class AuthService {
     const sessionSecret = crypto.randomBytes(32).toString('hex');
     const tokenHash = hashToken(sessionSecret);
 
-    // Persist session in database
+    // Persist session in database ATOMICALLY - if session creation fails, login MUST fail
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-    await systemPrisma.session.create({
-      data: {
-        id: sessionId,
-        userId: user.id,
-        tokenHash,
-        expiresAt,
-        ipAddress: meta?.ip,
-        userAgent: meta?.userAgent,
-        lastUsedAt: new Date(),
-      },
-    }).catch((err) => {
-      logger.warn(`Failed to record session in DB: ${err}`);
-    });
+    try {
+      await systemPrisma.session.create({
+        data: {
+          id: sessionId,
+          userId: user.id,
+          tokenHash,
+          expiresAt,
+          ipAddress: meta?.ip,
+          userAgent: meta?.userAgent,
+          lastUsedAt: new Date(),
+        },
+      });
+    } catch (sessionErr: any) {
+      logger.error(`Failed to record session in DB for user ${user.id}: ${sessionErr.message}`);
+      throw new Error('Authentication system failed to persist session. Please try again.');
+    }
 
     const token = this.generateToken({
       userId: user.id,

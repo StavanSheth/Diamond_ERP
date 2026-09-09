@@ -77,14 +77,22 @@ model Session {
 
 model IdempotencyKey {
   id           String   @id @default(uuid())
-  key          String   @unique
-  resource     String
-  statusCode   Int
-  responseBody String
+  key          String
+  userId       String
+  profileId    String
+  method       String
+  path         String
+  requestHash  String?
+  status       String   @default("PENDING") // PENDING, SUCCESS, FAILED
+  statusCode   Int?
+  responseBody String?
   createdAt    DateTime @default(now())
   expiresAt    DateTime
 
+  @@unique([profileId, key])
   @@index([key])
+  @@index([userId])
+  @@index([profileId])
   @@index([expiresAt])
 }
 

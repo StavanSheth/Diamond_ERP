@@ -251,8 +251,7 @@ export function getClientForProfile(profileCode: string): PrismaClient {
   // Synchronous fallback (initializes immediately if not cached)
   const canonical = configuredProfiles.get(key);
   if (!canonical) {
-    // If not configured, fall back to systemPrisma rather than throwing or creating arbitrary file
-    return systemPrisma;
+    throw new Error(`Profile "${profileCode}" is not configured on this server`);
   }
 
   const client = createPrismaClient(`file:${canonical.dbPath}`);

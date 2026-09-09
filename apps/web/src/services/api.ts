@@ -6,28 +6,33 @@ const BASE_URL = '';
  * API client for DiamondERP backend.
  * Uses fetch with proper error handling.
  */
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+function getAuthHeaders(includeContentType = true): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (includeContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
   const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
-  const profileId = localStorage.getItem('profileId') || 'Stavan';
-  headers['X-Profile-Id'] = profileId;
+  const profileId = localStorage.getItem('profileId');
+  if (profileId) {
+    headers['X-Profile-Id'] = profileId;
+  }
+  return headers;
+}
+
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const headers = { ...getAuthHeaders(true), ...(options?.headers || {}) };
 
   const res = await fetch(`${BASE_URL}${url}`, {
-    headers: { ...headers, ...(options?.headers || {}) },
     ...options,
+    headers,
   });
 
   const data = await res.json().catch(() => ({}));
 
   if (res.status === 401) {
-    // Dispatch an event so AuthContext can clear token locally, except if /logout itself failed
     if (!url.includes('/api/auth/logout')) {
       window.dispatchEvent(new Event('unauthorized'));
     }
@@ -36,6 +41,52 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     throw new ApiError(data.error || `Request failed with status ${res.status}`, res.status, data);
+  }
+
+  return data as T;
+}
+
+async function requestBlob(url: string, options?: RequestInit): Promise<Blob> {
+  const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
+
+  const res = await fetch(`${BASE_URL}${url}`, {
+    ...options,
+    headers,
+  });
+
+  if (res.status === 401) {
+    if (!url.includes('/api/auth/logout')) {
+      window.dispatchEvent(new Event('unauthorized'));
+    }
+    throw new ApiError('Unauthorized', 401);
+  }
+
+  if (!res.ok) {
+    throw new ApiError(`Request failed with status ${res.status}`, res.status);
+  }
+
+  return res.blob();
+}
+
+async function requestUpload<T>(url: string, formData: FormData, options?: RequestInit): Promise<T> {
+  const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
+
+  const res = await fetch(`${BASE_URL}${url}`, {
+    method: 'POST',
+    ...options,
+    headers,
+    body: formData,
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    window.dispatchEvent(new Event('unauthorized'));
+    throw new ApiError(data.error || 'Unauthorized', 401, data);
+  }
+
+  if (!res.ok) {
+    throw new ApiError(data.error || `Upload failed with status ${res.status}`, res.status, data);
   }
 
   return data as T;
@@ -243,39 +294,14 @@ export const api = {
   uploadCertificateFile(file: File): Promise<{ success: boolean; data: { path: string } }> {
     const formData = new FormData();
     formData.append('file', file);
-    
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    
-    return fetch(`/api/certificates/upload`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    }).then(res => {
-      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-      if (!res.ok) throw new Error('Upload failed');
-      return res.json();
-    });
+    return requestUpload('/api/certificates/upload', formData);
   },
 
   /** Open Certificate PDF Securely */
   async openCertificatePdf(id: string): Promise<void> {
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const res = await fetch(`/api/certificates/${id}/file`, { headers });
-    if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-    if (!res.ok) throw new Error('Failed to load PDF');
-    
-    const blob = await res.blob();
+    const blob = await requestBlob(`/api/certificates/${id}/file`);
     const url = window.URL.createObjectURL(blob);
     window.open(url, '_blank');
-    // Note: Can't easily revokeObjectUrl immediately when using window.open for PDFs, 
-    // it will be garbage collected when the tab closes.
   },
 
   // --- PARTIES ---
@@ -350,15 +376,7 @@ export const api = {
       });
     }
     const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const res = await fetch(`/api/reports/export/excel${qs}`, { headers });
-    if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-    if (!res.ok) throw new Error('Failed to download report Excel');
-    const blob = await res.blob();
+    const blob = await requestBlob(`/api/reports/export/excel${qs}`);
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -396,65 +414,19 @@ export const api = {
 
   /** Export data to Excel */
   exportExcel(): Promise<Blob> {
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    
-    return fetch(`/api/settings/export/excel`, { headers }).then((res) => {
-      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-      if (!res.ok) throw new Error('Export failed');
-      return res.blob();
-    });
+    return requestBlob('/api/settings/export/excel');
   },
 
   /** Download Excel template */
   downloadTemplate(): Promise<Blob> {
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    
-    return fetch(`/api/settings/export/template`, { headers }).then((res) => {
-      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-      if (!res.ok) throw new Error('Download failed');
-      return res.blob();
-    });
+    return requestBlob('/api/settings/export/template');
   },
 
   /** Import data from Excel */
-  importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
+  async importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    
-    const token = localStorage.getItem('token');
-    const profileId = localStorage.getItem('profileId') || 'Stavan';
-    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    return fetch(`/api/settings/import/excel?mode=${mode}`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    }).then(async (res) => {
-      if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
-      if (res.status === 400 && res.headers.get('content-type')?.includes('spreadsheetml')) {
-        // Automatically trigger a download of the error excel file if the backend returned it
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'Import_Errors.xlsx';
-        a.click();
-        window.URL.revokeObjectURL(url);
-        return { success: false, message: 'Import failed with errors. Downloaded error file for review.' };
-      }
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.message || 'Import failed');
-      }
-      return res.json();
-    });
+    return requestUpload(`/api/settings/import/excel?mode=${mode}`, formData);
   },
 
   /** Get lifetime activation / master lock status */
@@ -478,8 +450,16 @@ export const api = {
     return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
   },
 
-  bootstrapUser(data: any): Promise<{ success: boolean; data: any }> {
-    return request('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(data) });
+  bootstrapUser(data: any, secret?: string): Promise<{ success: boolean; data: any }> {
+    const headers: Record<string, string> = {};
+    if (secret) {
+      headers['X-Bootstrap-Secret'] = secret;
+    }
+    return request('/api/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers,
+    });
   },
 
   getMe(): Promise<{ success: boolean; data: any }> {
@@ -488,5 +468,20 @@ export const api = {
 
   logout(): Promise<{ success: boolean; message: string }> {
     return request('/api/auth/logout', { method: 'POST' });
+  },
+
+  getUnlinkedCertificates(): Promise<{ success: boolean; data: any[] }> {
+    return request('/api/certificates/unlinked');
+  },
+
+  getDiamondById(id: string): Promise<{ success: boolean; data: any }> {
+    return request(`/api/diamonds/${id}`);
+  },
+
+  linkCertificate(certId: string, diamondItemId: string): Promise<any> {
+    return request(`/api/certificates/${certId}/link`, {
+      method: 'POST',
+      body: JSON.stringify({ diamondItemId }),
+    });
   },
 };

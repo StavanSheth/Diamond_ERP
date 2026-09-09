@@ -160,8 +160,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
         
       api.getCertificates().then(res => {
         if (res.success) setAllCerts(res.data);
-        fetch('/api/certificates/unlinked')
-          .then(r => r.json())
+        api.getUnlinkedCertificates()
           .then(res => {
             if (res.success) setUnlinkedCerts(res.data);
           })
