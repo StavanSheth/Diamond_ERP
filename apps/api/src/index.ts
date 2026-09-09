@@ -21,7 +21,7 @@ import { requestIdMiddleware } from './middleware/request-id';
 import { performanceMiddleware } from './middleware/performance';
 import { errorHandler } from './middleware/error-handler';
 import { corsMiddleware } from './middleware/cors';
-import { authenticate } from './middleware/auth';
+import { profileMiddleware } from './middleware/profile';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
 import prisma from './infrastructure/database/prisma';
 
@@ -77,6 +77,7 @@ async function bootstrap(): Promise<void> {
   // 6. Register middleware (order matters)
   app.use(requestIdMiddleware);
   app.use(corsMiddleware);
+  app.use(profileMiddleware);
 
   // Security headers
   app.use(helmet({
@@ -117,11 +118,6 @@ async function bootstrap(): Promise<void> {
   // Certificates are now served through authenticated API endpoint:
   //   GET /api/certificates/:id/file
   // This prevents unauthorized access to sensitive certificate documents.
-  // 
-  // Previously: app.use('/uploads', express.static(uploadsDir));
-  
-  // Authenticated file access for uploads
-  app.use('/uploads', authenticate, express.static(uploadsDir));
 
   // 7. Swagger UI (only in development)
   if (process.env.NODE_ENV !== 'production') {

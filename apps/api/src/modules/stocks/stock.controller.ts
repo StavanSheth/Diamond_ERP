@@ -152,7 +152,7 @@ export class StockController {
           ledgerId: ledger.id,
           transactionType: TransactionType.ADD_IN as any,
           transactionDate: new Date(),
-          createdBy: 'system',
+          createdBy: (req as any).user?.username || 'system',
           remarks: 'Opening Balance for New Stock Parcel',
           totalCarat: parseFloat(req.body.caratWeight),
           totalValue: parseFloat(req.body.caratWeight) * parseFloat(req.body.caratRate || 0),

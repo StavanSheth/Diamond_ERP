@@ -27,6 +27,7 @@ export interface AuthTokenPayload {
   userId: string;
   username: string;
   role: string;
+  tokenVersion: number;
 }
 
 export interface LoginResult {
@@ -126,6 +127,7 @@ export class AuthService {
       userId: user.id,
       username: user.username,
       role: user.role,
+      tokenVersion: user.tokenVersion,
     });
 
     // Update last login timestamp
@@ -215,10 +217,24 @@ export class AuthService {
     const passwordHash = await this.hashPassword(newPassword);
     await prisma.user.update({
       where: { id: userId },
-      data: { passwordHash },
+      data: { 
+        passwordHash,
+        tokenVersion: { increment: 1 }
+      },
     });
 
     logger.info(`Password changed for user: ${user.username}`);
+  }
+
+  /**
+   * Invalidate all existing sessions for a user by incrementing their tokenVersion.
+   */
+  async invalidateSessions(userId: string): Promise<void> {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } },
+    });
+    logger.info(`Sessions invalidated for user ID: ${userId}`);
   }
 
   /**

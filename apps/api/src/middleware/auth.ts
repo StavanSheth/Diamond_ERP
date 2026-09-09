@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService, AuthenticatedUser } from '../modules/auth/auth.service';
 import { RequestWithId } from './request-id';
+import prisma from '../infrastructure/database/prisma';
 
 /**
  * Extends Express Request with authenticated user information.
@@ -17,11 +18,11 @@ export interface AuthenticatedRequest extends Request {
  * 
  * Expected header format: Authorization: Bearer <token>
  */
-export function authenticate(
+export async function authenticate(
   req: Request,
   res: Response,
   next: NextFunction,
-): void {
+): Promise<void> {
   const requestId = (req as RequestWithId).requestId || 'unknown';
 
   // Extract token from Authorization header
@@ -37,7 +38,6 @@ export function authenticate(
 
   const token = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-  // Verify token
   const payload = authService.verifyToken(token);
   if (!payload) {
     res.status(401).json({
@@ -48,15 +48,30 @@ export function authenticate(
     return;
   }
 
-  // Attach authenticated user to request
-  (req as AuthenticatedRequest).user = {
-    id: payload.userId,
-    username: payload.username,
-    displayName: payload.username, // Will be enriched if needed
-    role: payload.role,
-  };
+  try {
+    // Session validation: ensure the user exists, is active, and token version matches
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user || !user.isActive || user.tokenVersion !== payload.tokenVersion) {
+      res.status(401).json({
+        success: false,
+        error: 'Session expired or invalidated. Please log in again.',
+        requestId,
+      });
+      return;
+    }
 
-  next();
+    // Attach authenticated user to request
+    (req as AuthenticatedRequest).user = {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      role: user.role,
+    };
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 /**
@@ -67,11 +82,11 @@ export function authenticate(
  * 
  * Useful for endpoints that behave differently for authenticated vs anonymous users.
  */
-export function optionalAuthenticate(
+export async function optionalAuthenticate(
   req: Request,
   _res: Response,
   next: NextFunction,
-): void {
+): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     next();
@@ -81,12 +96,19 @@ export function optionalAuthenticate(
   const token = authHeader.substring(7);
   const payload = authService.verifyToken(token);
   if (payload) {
-    (req as AuthenticatedRequest).user = {
-      id: payload.userId,
-      username: payload.username,
-      displayName: payload.username,
-      role: payload.role,
-    };
+    try {
+      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+      if (user && user.isActive && user.tokenVersion === payload.tokenVersion) {
+        (req as AuthenticatedRequest).user = {
+          id: user.id,
+          username: user.username,
+          displayName: user.displayName,
+          role: user.role,
+        };
+      }
+    } catch (error) {
+      // Ignore DB errors for optional auth
+    }
   }
 
   next();

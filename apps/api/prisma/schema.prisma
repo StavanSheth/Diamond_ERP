@@ -18,6 +18,7 @@ model User {
   displayName  String
   role         String    @default("VIEWER") // SUPER_ADMIN, ADMIN, MANAGER, ACCOUNTANT, INVENTORY_MANAGER, SALES, VIEWER
   isActive     Boolean   @default(true)
+  tokenVersion Int       @default(1)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

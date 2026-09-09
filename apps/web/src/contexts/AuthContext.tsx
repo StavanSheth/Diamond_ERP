@@ -59,10 +59,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(newUser);
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
+  const logout = async () => {
+    try {
+      if (token) {
+        await api.logout();
+      }
+    } catch (e) {
+      console.error('Logout failed:', e);
+    } finally {
+      localStorage.removeItem('token');
+      setToken(null);
+      setUser(null);
+    }
   };
 
   return (

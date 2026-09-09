@@ -200,8 +200,53 @@ export class CertificateController {
         res.status(400).json({ success: false, error: 'No file uploaded' });
         return;
       }
-      const fileUrl = `/uploads/certs/${req.file.filename}`;
-      res.json({ success: true, data: { path: fileUrl } });
+
+      // Magic bytes validation for PDF (%PDF-)
+      const fs = require('fs');
+      const buffer = Buffer.alloc(5);
+      const fd = fs.openSync(req.file.path, 'r');
+      fs.readSync(fd, buffer, 0, 5, 0);
+      fs.closeSync(fd);
+      
+      if (buffer.toString('utf8') !== '%PDF-') {
+        fs.unlinkSync(req.file.path);
+        res.status(400).json({ success: false, error: 'Invalid file format. Only valid PDFs are allowed.' });
+        return;
+      }
+
+      // Store just the filename, not the /uploads path
+      const filename = req.file.filename;
+      res.json({ success: true, data: { path: filename } });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  downloadPdf = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const id = req.params.id as string;
+      const cert = await prisma.certification.findUnique({ where: { id } });
+      
+      if (!cert || !cert.pdfPath) {
+        res.status(404).json({ success: false, error: 'Certificate file not found' });
+        return;
+      }
+
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.resolve(__dirname, '../../../../uploads/certs', cert.pdfPath);
+
+      if (!fs.existsSync(filePath)) {
+        res.status(404).json({ success: false, error: 'File missing from storage' });
+        return;
+      }
+
+      // Secure streaming
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${cert.reportNumber || 'certificate'}.pdf"`);
+      
+      const stream = fs.createReadStream(filePath);
+      stream.pipe(res);
     } catch (error) {
       next(error);
     }

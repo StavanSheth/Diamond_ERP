@@ -252,7 +252,7 @@ export const EditCertificateModal: React.FC<EditCertificateModalProps> = ({
             <div className="flex items-center gap-md mt-1">
               <input
                 type="file"
-                accept=".pdf,image/*"
+                accept=".pdf,application/pdf"
                 onChange={handleFileUpload}
                 disabled={uploading}
                 className="text-xs text-on-surface-variant file:mr-md file:py-xs file:px-md file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-on-primary hover:file:bg-surface-tint cursor-pointer"

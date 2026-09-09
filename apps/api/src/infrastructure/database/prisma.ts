@@ -1,11 +1,18 @@
 import { PrismaClient } from '@prisma/client';
-import { execSync } from 'child_process';
+import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
 import fs from 'fs';
 
+// ── Profile Context ─────────────────────────────────────────────────────
+export interface ProfileContext {
+  profileId: string;
+}
+
+export const requestContext = new AsyncLocalStorage<ProfileContext>();
+
 // ── Profile Config Persistence ──────────────────────────────────────────
-// We persist the active profile name to a JSON file so it survives server restarts.
-const DB_DIR = path.resolve(__dirname, '../../../'); // backend root where dev.db lives
+// We persist a default fallback profile name.
+const DB_DIR = path.resolve(__dirname, '../../../'); // backend root where .db files live
 const CONFIG_PATH = path.join(DB_DIR, '.profile-config.json');
 
 interface ProfileConfig {
@@ -18,13 +25,9 @@ function readConfig(): ProfileConfig {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
     }
   } catch {
-    // Corrupted config file, fall back to default
+    // Ignore read errors
   }
   return { activeProfile: 'Stavan' };
-}
-
-function writeConfig(cfg: ProfileConfig) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -38,6 +41,12 @@ function getDbUrlForProfile(profileName: string): string {
 }
 
 function createClientForProfile(profileName: string): PrismaClient {
+  const dbPath = getDbPathForProfile(profileName);
+  
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`[Profile] Database for profile "${profileName}" does not exist at ${dbPath}.`);
+  }
+
   const client = new PrismaClient({
     datasources: {
       db: {
@@ -58,12 +67,23 @@ function createClientForProfile(profileName: string): PrismaClient {
 
 // ── State ───────────────────────────────────────────────────────────────
 const config = readConfig();
-let currentProfile = config.activeProfile;
-let activeClient = createClientForProfile(currentProfile);
+const defaultProfile = config.activeProfile || 'Stavan';
+const clientRegistry = new Map<string, PrismaClient>();
+
+function getClientForProfile(profileName: string): PrismaClient {
+  const sanitized = profileName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!sanitized) throw new Error('Invalid profile name');
+
+  if (!clientRegistry.has(sanitized)) {
+    clientRegistry.set(sanitized, createClientForProfile(sanitized));
+  }
+  return clientRegistry.get(sanitized)!;
+}
 
 // ── Public API ──────────────────────────────────────────────────────────
 export function getActiveProfile(): string {
-  return currentProfile;
+  const store = requestContext.getStore();
+  return store?.profileId || defaultProfile;
 }
 
 export function getAllProfiles(): string[] {
@@ -73,54 +93,20 @@ export function getAllProfiles(): string[] {
       .filter(f => f.endsWith('.db') && !f.includes('journal'))
       .map(f => f.replace('.db', ''));
   } catch {
-    return ['Stavan'];
+    return [defaultProfile];
   }
-}
-
-export async function switchProfile(profileName: string): Promise<void> {
-  // Sanitize profile name: only allow alphanumeric, hyphens, underscores
-  const sanitized = profileName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  if (!sanitized) return;
-
-  if (currentProfile === sanitized) return;
-
-  // Disconnect old client
-  try {
-    await activeClient.$disconnect();
-  } catch {
-    // Ignore disconnect errors
-  }
-
-  currentProfile = sanitized;
-  writeConfig({ activeProfile: sanitized });
-
-  const dbPath = getDbPathForProfile(sanitized);
-
-  // If the database file doesn't exist, create it with prisma db push
-  if (!fs.existsSync(dbPath)) {
-    console.log(`[Profile] Creating new database for profile: ${sanitized} at ${dbPath}`);
-    try {
-      const schemaPath = path.resolve(DB_DIR, 'prisma', 'schema.prisma');
-      const env = { ...process.env, DATABASE_URL: getDbUrlForProfile(sanitized) };
-      execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate`, {
-        env,
-        stdio: 'inherit',
-        cwd: DB_DIR,
-      });
-    } catch (err) {
-      console.error('[Profile] Failed to create database:', err);
-    }
-  }
-
-  activeClient = createClientForProfile(sanitized);
-  console.log(`[Profile] Switched to profile: ${sanitized} (${dbPath})`);
 }
 
 // ── Proxy ───────────────────────────────────────────────────────────────
 // All modules import `prisma` (the default export). This proxy forwards
-// every property/method access to whichever PrismaClient is currently active.
+// every property/method access to whichever PrismaClient is currently active
+// for the request context.
 const prismaProxy = new Proxy({} as PrismaClient, {
   get(_target, prop) {
+    const store = requestContext.getStore();
+    const profileId = store?.profileId || defaultProfile;
+    const activeClient = getClientForProfile(profileId);
+
     const value = (activeClient as any)[prop];
     if (typeof value === 'function') {
       return value.bind(activeClient);
@@ -130,4 +116,3 @@ const prismaProxy = new Proxy({} as PrismaClient, {
 });
 
 export default prismaProxy;
-

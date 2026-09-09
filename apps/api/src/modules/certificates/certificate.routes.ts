@@ -54,6 +54,7 @@ export function createCertificateRouter(controller: CertificateController): Rout
   router.post('/:id/link', authorize('certificate.update'), controller.linkCertificate);
   router.put('/:id', authorize('certificate.update'), controller.updateCertificate);
   router.delete('/:id', authorize('certificate.delete'), controller.delete);
+  router.get('/:id/file', authorize('certificate.read'), controller.downloadPdf);
 
   return router;
 }

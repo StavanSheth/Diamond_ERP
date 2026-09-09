@@ -144,6 +144,24 @@ export class AuthController {
       next(error);
     }
   };
+
+  /**
+   * POST /api/auth/logout
+   * Invalidate the current user's session globally.
+   */
+  logout = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const user = (req as AuthenticatedRequest).user;
+      await authService.invalidateSessions(user.id);
+      
+      res.json({
+        success: true,
+        message: 'Logged out successfully from all devices',
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
   /**
    * POST /api/auth/bootstrap
    * Create an initial admin user if the database is empty.

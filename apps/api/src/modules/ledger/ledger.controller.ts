@@ -147,7 +147,7 @@ export class LedgerController {
         partyId: payload.partyId,
         remarks: payload.remarks,
         referenceNo: payload.referenceNo,
-        createdBy: payload.createdBy || 'system',
+        createdBy: (req as any).user?.username || payload.createdBy || 'system',
         paymentStatus: payload.paymentStatus || 'PENDING',
         paymentDone: payload.paymentDone ? parseFloat(payload.paymentDone) : 0,
         paymentDue: payload.paymentDue ? parseFloat(payload.paymentDue) : 0,
@@ -194,6 +194,7 @@ export class LedgerController {
         brokeragePercentage: payload.brokeragePercentage !== undefined ? parseFloat(payload.brokeragePercentage) : undefined,
         brokerageAmount: payload.brokerageAmount !== undefined ? parseFloat(payload.brokerageAmount) : undefined,
         brokerageType: payload.brokerageType || undefined,
+        expectedVersion: payload.version !== undefined ? parseInt(payload.version, 10) : undefined,
       };
       const transaction = await transactionService.updateTransaction(id, mappedPayload as any);
       res.json({ success: true, data: transaction });

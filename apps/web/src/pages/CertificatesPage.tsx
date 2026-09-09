@@ -388,16 +388,17 @@ export const CertificatesPage: React.FC = () => {
                         {cert.labType || 'LAB'}
                       </span>
                       {cert.pdfPath && (
-                        <a
-                          href={cert.pdfPath.startsWith('http') ? cert.pdfPath : `http://localhost:3002${cert.pdfPath}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            api.openCertificatePdf(cert.certificateId).catch(err => alert(err.message));
+                          }}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                           title="Open Certificate PDF"
                         >
                           <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-                        </a>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -537,15 +538,17 @@ export const CertificatesPage: React.FC = () => {
                       <td className="px-lg py-md text-right">
                         <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                           {cert.pdfPath && (
-                            <a
-                              href={cert.pdfPath}
-                              target="_blank"
-                              rel="noreferrer"
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                api.openCertificatePdf(cert.certificateId).catch(err => alert(err.message));
+                              }}
                               className="p-1.5 rounded text-on-surface-variant hover:text-primary hover:bg-surface-container transition-colors"
                               title="View PDF"
                             >
                               <span className="material-symbols-outlined text-[18px]">open_in_new</span>
-                            </a>
+                            </button>
                           )}
                           <button
                             type="button"

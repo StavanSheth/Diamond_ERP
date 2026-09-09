@@ -15,6 +15,9 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
+  
+  const profileId = localStorage.getItem('profileId') || 'Stavan';
+  headers['X-Profile-Id'] = profileId;
 
   const res = await fetch(`${BASE_URL}${url}`, {
     headers: { ...headers, ...(options?.headers || {}) },
@@ -240,7 +243,8 @@ export const api = {
     formData.append('file', file);
     
     const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     
     return fetch(`/api/certificates/upload`, {
@@ -252,6 +256,24 @@ export const api = {
       if (!res.ok) throw new Error('Upload failed');
       return res.json();
     });
+  },
+
+  /** Open Certificate PDF Securely */
+  async openCertificatePdf(id: string): Promise<void> {
+    const token = localStorage.getItem('token');
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`/api/certificates/${id}/file`, { headers });
+    if (res.status === 401) window.dispatchEvent(new Event('unauthorized'));
+    if (!res.ok) throw new Error('Failed to load PDF');
+    
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    // Note: Can't easily revokeObjectUrl immediately when using window.open for PDFs, 
+    // it will be garbage collected when the tab closes.
   },
 
   // --- PARTIES ---
@@ -327,7 +349,8 @@ export const api = {
     }
     const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
     const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const res = await fetch(`/api/reports/export/excel${qs}`, { headers });
@@ -372,7 +395,8 @@ export const api = {
   /** Export data to Excel */
   exportExcel(): Promise<Blob> {
     const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     
     return fetch(`/api/settings/export/excel`, { headers }).then((res) => {
@@ -385,7 +409,8 @@ export const api = {
   /** Download Excel template */
   downloadTemplate(): Promise<Blob> {
     const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     
     return fetch(`/api/settings/export/template`, { headers }).then((res) => {
@@ -401,7 +426,8 @@ export const api = {
     formData.append('file', file);
     
     const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
+    const profileId = localStorage.getItem('profileId') || 'Stavan';
+    const headers: Record<string, string> = { 'X-Profile-Id': profileId };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     return fetch(`/api/settings/import/excel?mode=${mode}`, {
@@ -456,5 +482,9 @@ export const api = {
 
   getMe(): Promise<{ success: boolean; data: any }> {
     return request('/api/auth/me');
+  },
+
+  logout(): Promise<{ success: boolean; message: string }> {
+    return request('/api/auth/logout', { method: 'POST' });
   },
 };

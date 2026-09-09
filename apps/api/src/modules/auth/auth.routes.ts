@@ -13,6 +13,7 @@ export function createAuthRouter(): Router {
   // Protected routes (require authentication)
   router.get('/me', authenticate, authController.me);
   router.post('/change-password', authenticate, authController.changePassword);
+  router.post('/logout', authenticate, authController.logout);
 
   // Admin-only routes
   router.post('/users', authenticate, authorize('user.create'), authController.createUser);

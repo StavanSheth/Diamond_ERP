@@ -597,11 +597,14 @@ export class SettingsController {
       }
       
       const prismaObj = require('../../infrastructure/database/prisma');
-      if (prismaObj.switchProfile) {
-        await prismaObj.switchProfile(profileName);
+      const profiles = prismaObj.getAllProfiles ? prismaObj.getAllProfiles() : ['Stavan'];
+      
+      if (!profiles.includes(profileName)) {
+        res.status(404).json({ success: false, message: `Profile database for ${profileName} not found` });
+        return;
       }
       
-      res.json({ success: true, message: `Switched to profile: ${profileName}` });
+      res.json({ success: true, message: `Verified profile: ${profileName}` });
     } catch (error) {
       next(error);
     }
@@ -700,30 +703,6 @@ export class SettingsController {
 
       const mode = req.query.mode as string || 'merge'; // 'merge' or 'overwrite'
 
-      if (mode === 'overwrite') {
-        await prisma.$transaction([
-          prisma.transformationProvenance.deleteMany({}),
-          prisma.itemTransformation.deleteMany({}),
-          prisma.itemEvent.deleteMany({}),
-          prisma.inventoryMovement.deleteMany({}),
-          prisma.financialEntry.deleteMany({}),
-          prisma.transactionItem.deleteMany({}),
-          prisma.certification.deleteMany({}),
-          prisma.repair.deleteMany({}),
-          prisma.transaction.deleteMany({}),
-          prisma.diamondItem.deleteMany({}),
-          prisma.ledger.deleteMany({}),
-          prisma.location.deleteMany({}),
-          prisma.stock.deleteMany({}),
-          prisma.party.deleteMany({}),
-          prisma.versionChange.deleteMany({}),
-          prisma.recordVersion.deleteMany({}),
-          prisma.draftRevision.deleteMany({}),
-          prisma.documentDraft.deleteMany({}),
-          prisma.auditEvent.deleteMany({}),
-        ]);
-      }
-
       const workbook = new ExcelJS.Workbook();
       try {
         await workbook.xlsx.load(req.file.buffer as any);
@@ -736,6 +715,28 @@ export class SettingsController {
       let totalSuccess = 0;
       
       await prisma.$transaction(async (tx) => {
+        if (mode === 'overwrite') {
+          // Delete all current records safely inside the transaction AFTER confirming file is readable
+          await tx.transformationProvenance.deleteMany({});
+          await tx.itemTransformation.deleteMany({});
+          await tx.itemEvent.deleteMany({});
+          await tx.inventoryMovement.deleteMany({});
+          await tx.financialEntry.deleteMany({});
+          await tx.transactionItem.deleteMany({});
+          await tx.certification.deleteMany({});
+          await tx.repair.deleteMany({});
+          await tx.transaction.deleteMany({});
+          await tx.diamondItem.deleteMany({});
+          await tx.ledger.deleteMany({});
+          await tx.location.deleteMany({});
+          await tx.stock.deleteMany({});
+          await tx.party.deleteMany({});
+          await tx.versionChange.deleteMany({});
+          await tx.recordVersion.deleteMany({});
+          await tx.draftRevision.deleteMany({});
+          await tx.documentDraft.deleteMany({});
+          await tx.auditEvent.deleteMany({});
+        }
 
       // Helper: read sheet rows into objects
       const readSheet = (sheetName: string): any[] => {
