@@ -22,6 +22,7 @@ export interface StockItem {
   reportGroup: string;
   location: string;
   status: string;
+  itemType?: string;
   itemCount: number;
   caratWeight: number;
   totalValue: number;
@@ -53,8 +54,8 @@ export interface CreateStockDTO {
   cut?: string;
   clarity?: string;
   color?: string;
-  caratWeight: number;
-  caratRate: number;
+  caratWeight?: number;
+  caratRate?: number;
   remarks?: string;
   itemCount?: number;
   mixCertification?: string;

@@ -66,8 +66,12 @@ export function validateCreateStock(req: Request, res: Response, next: NextFunct
   const { stockName, caratWeight, caratRate } = req.body;
 
   validateRequiredString(stockName, 'stockName', errors);
-  validateNumberField(caratWeight, 'caratWeight', errors);
-  validateNumberField(caratRate, 'caratRate', errors);
+  if (caratWeight !== undefined && caratWeight !== null && caratWeight !== '') {
+    validateNumberField(caratWeight, 'caratWeight', errors);
+  }
+  if (caratRate !== undefined && caratRate !== null && caratRate !== '') {
+    validateNumberField(caratRate, 'caratRate', errors);
+  }
 
   if (errors.length > 0) {
     res.status(400).json({
@@ -80,8 +84,12 @@ export function validateCreateStock(req: Request, res: Response, next: NextFunct
   }
 
   // Coerce to correct types for downstream use
-  req.body.caratWeight = Number(caratWeight);
-  req.body.caratRate = Number(caratRate);
+  if (caratWeight !== undefined && caratWeight !== null && caratWeight !== '') {
+    req.body.caratWeight = Number(caratWeight);
+  }
+  if (caratRate !== undefined && caratRate !== null && caratRate !== '') {
+    req.body.caratRate = Number(caratRate);
+  }
   if (req.body.itemCount) {
     req.body.itemCount = Number(req.body.itemCount);
   }
@@ -97,8 +105,12 @@ export function validateUpdateStock(req: Request, res: Response, next: NextFunct
   const { stockName, caratWeight, caratRate, version } = req.body;
 
   validateRequiredString(stockName, 'stockName', errors);
-  validateNumberField(caratWeight, 'caratWeight', errors);
-  validateNumberField(caratRate, 'caratRate', errors);
+  if (caratWeight !== undefined && caratWeight !== null && caratWeight !== '') {
+    validateNumberField(caratWeight, 'caratWeight', errors);
+  }
+  if (caratRate !== undefined && caratRate !== null && caratRate !== '') {
+    validateNumberField(caratRate, 'caratRate', errors);
+  }
 
   if (version === undefined || version === null || version === '') {
     errors.push({ field: 'version', message: 'version is required for optimistic locking.' });
@@ -119,8 +131,12 @@ export function validateUpdateStock(req: Request, res: Response, next: NextFunct
     return;
   }
 
-  req.body.caratWeight = Number(caratWeight);
-  req.body.caratRate = Number(caratRate);
+  if (caratWeight !== undefined && caratWeight !== null && caratWeight !== '') {
+    req.body.caratWeight = Number(caratWeight);
+  }
+  if (caratRate !== undefined && caratRate !== null && caratRate !== '') {
+    req.body.caratRate = Number(caratRate);
+  }
   req.body.version = Number(version);
   if (req.body.itemCount) {
     req.body.itemCount = Number(req.body.itemCount);

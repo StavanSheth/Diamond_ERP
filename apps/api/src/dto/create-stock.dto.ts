@@ -12,8 +12,8 @@ export interface CreateStockDTO {
   cut?: string;
   clarity?: string;
   color?: string;
-  caratWeight: number;
-  caratRate: number;
+  caratWeight?: number;
+  caratRate?: number;
   remarks?: string;
   itemCount?: number;
 }
