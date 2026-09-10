@@ -74,16 +74,35 @@ export class LedgerController {
           skip,
           take,
           include: {
-            ledger: { select: { id: true, name: true, stockId: true } },
+            ledger: { 
+              select: { 
+                id: true, 
+                name: true, 
+                stockId: true,
+                stock: { select: { id: true, name: true, description: true } }
+              } 
+            },
             party: { select: { id: true, name: true, partyCode: true, partyType: true } },
             items: {
               select: {
                 id: true,
+                name: true,
                 carat: true,
                 totalValue: true,
                 itemAction: true,
                 ratePerCarat: true,
-                diamondItem: { select: { id: true, itemCode: true, status: true } }
+                diamondItem: { 
+                  select: { 
+                    id: true, 
+                    itemCode: true, 
+                    displayName: true,
+                    color: true,
+                    clarity: true,
+                    cut: true,
+                    shape: true,
+                    status: true 
+                  } 
+                }
               }
             }
           },
@@ -239,6 +258,7 @@ export class LedgerController {
         remarks: payload.remarks,
         referenceNo: payload.referenceNo,
         createdBy: (req as any).user?.username || payload.createdBy || 'system',
+        paymentType: payload.paymentType,
         paymentStatus: payload.paymentStatus || (paymentDue === 0 ? 'COMPLETED' : 'PENDING'),
         paymentDone: paymentDoneDec.toNumber(),
         paymentDue,

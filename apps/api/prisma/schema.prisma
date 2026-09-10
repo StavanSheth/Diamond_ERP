@@ -235,7 +235,8 @@ model Transaction {
   remarks     String?
   referenceNo String?
 
-  paymentStatus String? @default("PENDING") // PENDING, PARTIAL, COMPLETED
+  paymentType   String?  @default("TO_PAY") // TO_PAY (Payable/To Give), TO_COLLECT (Receivable/To Collect)
+  paymentStatus String?  @default("PENDING") // PENDING, PARTIAL, COMPLETED
   paymentDone   Decimal? @default(0)
   paymentDue    Decimal? @default(0)
   brokeragePercentage Decimal? @default(0)

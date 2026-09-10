@@ -44,6 +44,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
   const [brokerageAmount, setBrokerageAmount] = useState<string>(draftPayload.brokerageAmount?.toString() || '');
   const [remarks, setRemarks] = useState(draftPayload.remarks || '');
   const [referenceNo, setReferenceNo] = useState(draftPayload.referenceNo || '');
+  const [paymentType, setPaymentType] = useState<'TO_PAY' | 'TO_COLLECT'>(
+    draftPayload.paymentType || (draftPayload.txnType === 'SALE' ? 'TO_COLLECT' : 'TO_PAY')
+  );
   const [paymentStatus, setPaymentStatus] = useState(draftPayload.paymentStatus || 'PENDING');
   const [paymentDone, setPaymentDone] = useState(draftPayload.paymentDone || '');
   const [transactionDate, setTransactionDate] = useState(draftPayload.transactionDate?.split('T')[0] || new Date().toISOString().split('T')[0]);
@@ -129,12 +132,13 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
     brokerageAmount,
     remarks,
     referenceNo,
+    paymentType,
     paymentStatus,
     paymentDone,
     transactionDate,
     selectedLedgerId,
     items,
-  }), [txnType, partyId, brokerageType, brokeragePercentage, brokerageAmount, remarks, referenceNo, paymentStatus, paymentDone, transactionDate, selectedLedgerId, items]);
+  }), [txnType, partyId, brokerageType, brokeragePercentage, brokerageAmount, remarks, referenceNo, paymentType, paymentStatus, paymentDone, transactionDate, selectedLedgerId, items]);
 
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
     return localStorage.getItem('draftAutoSaveEnabled') !== 'false';
@@ -450,11 +454,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
         brokerageType: isBroker ? brokerageType : 'INCLUSIVE',
         remarks: remarks || '',
         referenceNo: referenceNo || `REF-${Date.now().toString().slice(-6)}`,
+        paymentType: paymentType,
         paymentStatus: paymentStatus || 'PENDING',
         paymentDone: paymentDone ? parseFloat(paymentDone) : 0,
-        paymentDue: (txnType === 'SALE' || txnType === 'PURCHASE') 
-          ? (totalVal - (parseFloat(paymentDone) || 0))
-          : 0,
+        paymentDue: Math.max(0, totalVal - (parseFloat(paymentDone) || 0)),
         totalCarat,
         totalValue: totalVal,
         items: preparedItems
@@ -512,7 +515,15 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
                 </div>
                 <select
                   value={txnType}
-                  onChange={(e) => setTxnType(e.target.value)}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    setTxnType(newType);
+                    if (newType === 'SALE') {
+                      setPaymentType('TO_COLLECT');
+                    } else {
+                      setPaymentType('TO_PAY');
+                    }
+                  }}
                   className="w-full px-md h-10 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-sm font-medium shadow-sm"
                 >
                   <option value="PURCHASE">{t('Purchase')}</option>
@@ -611,10 +622,13 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
           {/* Payment Section */}
           <TransactionPaymentSection
             txnType={txnType}
+            paymentType={paymentType}
+            setPaymentType={setPaymentType}
             paymentStatus={paymentStatus}
             setPaymentStatus={setPaymentStatus}
             paymentDone={paymentDone}
             setPaymentDone={setPaymentDone}
+            totalTransactionValue={totalTransactionValue}
           />
 
           {/* Transaction Items Section */}

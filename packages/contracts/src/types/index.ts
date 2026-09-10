@@ -103,6 +103,7 @@ export interface LedgerEntry {
   brokeragePercentage?: number;
   brokerageAmount?: number;
   brokerageType?: BrokerageType | string;
+  paymentType?: 'TO_PAY' | 'TO_COLLECT' | string;
   paymentStatus?: PaymentStatus | string;
   paymentDone?: number;
   paymentDue?: number;
@@ -146,6 +147,7 @@ export interface CreateTransactionDTO {
   brokerageType?: BrokerageType | 'INCLUSIVE' | 'EXCLUSIVE';
   remarks?: string;
   referenceNo?: string;
+  paymentType?: 'TO_PAY' | 'TO_COLLECT' | string;
   paymentStatus?: PaymentStatus | string;
   paymentDone?: number;
   paymentDue?: number;

@@ -41,6 +41,7 @@ export const createTransactionSchema = z.object({
     totalCarat: z.number().nonnegative(),
     totalValue: z.number().nonnegative(),
     status: z.enum(['DRAFT', 'PENDING_AUTHORIZATION', 'AUTHORIZED', 'POSTED', 'CANCELLED', 'REVERSED']).default('DRAFT'),
+    paymentType: z.enum(['TO_PAY', 'TO_COLLECT']).optional(),
     paymentStatus: z.enum(['PENDING', 'PARTIAL', 'COMPLETED']).optional().default('PENDING'),
     paymentDone: z.number().min(0).optional().default(0),
     paymentDue: z.number().min(0).optional().default(0),

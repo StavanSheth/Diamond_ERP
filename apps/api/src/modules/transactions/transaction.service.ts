@@ -53,6 +53,7 @@ interface CreateTransactionPayload {
   totalValue: number;
   status?: string;
   expectedVersion?: number;
+  paymentType?: string;
   paymentStatus?: string;
   paymentDone?: number;
   paymentDue?: number;
@@ -76,7 +77,7 @@ class TransactionService {
     preserveCreatedAt?: Date, 
     preserveVersion?: number
   ) {
-    const { ledgerId, transactionType, transactionDate, partyId, items, remarks, referenceNo, createdBy, paymentStatus, paymentDone, paymentDue, brokeragePercentage, brokerageAmount, brokerageType } = payload;
+    const { ledgerId, transactionType, transactionDate, partyId, items, remarks, referenceNo, createdBy, paymentType, paymentStatus, paymentDone, paymentDue, brokeragePercentage, brokerageAmount, brokerageType } = payload;
     
     const ledger = await tx.ledger.findUnique({
       where: { id: ledgerId },
@@ -136,6 +137,7 @@ class TransactionService {
         remarks,
         referenceNo,
         createdBy,
+        paymentType: paymentType || (transactionType === 'SALE' ? 'TO_COLLECT' : 'TO_PAY'),
         paymentStatus: paymentStatus || 'PENDING',
         paymentDone: paymentDone || 0,
         paymentDue: paymentDue || 0,

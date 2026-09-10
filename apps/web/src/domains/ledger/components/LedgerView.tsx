@@ -156,7 +156,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
               <span className="font-caption text-caption text-on-surface-variant">Ledger</span>
               <span className="material-symbols-outlined text-[14px] text-outline-variant">chevron_right</span>
               <span className="font-caption text-caption text-on-surface-variant">
-                {certificateId ? `Certificate: ${certificateId}` : repairId ? `Repair: ${repairId}` : partyId ? `Party: ${partyId}` : itemCode ? `Item: ${itemCode}` : selectedStock ? `Stock: ${selectedStock}` : 'All Entries'}
+                {certificateId ? `Certificate: ${certificateId}` : repairId ? `Repair: ${repairId}` : partyId ? `Party: ${partyId}` : itemCode ? `Item: ${itemCode}` : selectedStock ? `Stock: ${stockOptions.find(s => s.id === selectedStock)?.name || selectedStock}` : 'All Entries'}
               </span>
             </div>
             <h2 className="font-headline-lg text-headline-lg text-on-surface">
@@ -327,7 +327,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
                         {entry.transactionDate ? entry.transactionDate.split('T')[0] : ''}
                       </td>
                       <td className="px-md py-sm whitespace-nowrap font-medium text-primary">
-                        {entry.ledger?.stock?.name || 'Unknown'}
+                        {entry.ledger?.stock?.name || entry.ledger?.name || '—'}
                       </td>
                       <td className="px-md py-sm">
                         <div className="flex flex-col gap-1 items-start">
@@ -335,14 +335,26 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
                             <span className="material-symbols-outlined text-[12px]">{tc.icon}</span>
                             {tc.label}
                           </span>
-                          {(entry.transactionType === 'SALE' || entry.transactionType === 'PURCHASE') && (
-                            <span className={`inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold tracking-wide uppercase border ${
-                              entry.paymentStatus === 'COMPLETED' ? 'bg-[#E8F5E9] text-[#2E7D32] border-[#A5D6A7]' :
-                              entry.paymentStatus === 'PARTIAL' ? 'bg-[#FFF3E0] text-[#E65100] border-[#FFCC80]' :
-                              'bg-[#FFEBEE] text-[#C62828] border-[#FFCDD2]'
-                            }`}>
-                              {entry.paymentStatus || 'PENDING'}
-                            </span>
+                          {(entry.transactionType === 'SALE' || entry.transactionType === 'PURCHASE' || entry.paymentType) && (
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <span className={`inline-flex items-center gap-0.5 px-1.5 py-[1px] rounded text-[9px] font-bold tracking-wide uppercase border ${
+                                (entry.paymentType === 'TO_COLLECT' || entry.transactionType === 'SALE')
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}>
+                                <span className="material-symbols-outlined text-[10px]">
+                                  {(entry.paymentType === 'TO_COLLECT' || entry.transactionType === 'SALE') ? 'call_received' : 'call_made'}
+                                </span>
+                                {(entry.paymentType === 'TO_COLLECT' || entry.transactionType === 'SALE') ? 'To Collect' : 'To Pay'}
+                              </span>
+                              <span className={`inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold tracking-wide uppercase border ${
+                                entry.paymentStatus === 'COMPLETED' ? 'bg-[#E8F5E9] text-[#2E7D32] border-[#A5D6A7]' :
+                                entry.paymentStatus === 'PARTIAL' ? 'bg-[#FFF3E0] text-[#E65100] border-[#FFCC80]' :
+                                'bg-[#FFEBEE] text-[#C62828] border-[#FFCDD2]'
+                              }`}>
+                                {entry.paymentStatus === 'COMPLETED' ? 'Done' : (entry.paymentStatus === 'PARTIAL' ? 'Partial' : 'Left')}
+                              </span>
+                            </div>
                           )}
                         </div>
                       </td>
