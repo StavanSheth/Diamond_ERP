@@ -137,9 +137,9 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-inverse-surface/40 backdrop-blur-sm p-md overflow-y-auto">
-      <div className="bg-surface-container-lowest w-full max-w-2xl rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.15)] flex flex-col my-auto border border-outline-variant animate-fade-in-up overflow-hidden">
+      <div className="bg-[#F8F9FA] w-full max-w-2xl rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.15)] flex flex-col my-auto border border-outline-variant animate-fade-in-up overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-xl py-lg border-b border-outline-variant bg-surface-bright shrink-0">
+        <div className="flex items-center justify-between px-xl py-lg border-b border-outline-variant bg-white shrink-0">
           <div className="flex items-center gap-md">
             <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-primary font-bold shadow-sm">
               <span className="material-symbols-outlined text-[22px]">inventory_2</span>
@@ -165,7 +165,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
         </div>
 
         {/* Body */}
-        <div className="p-lg flex flex-col gap-md bg-background max-h-[calc(85vh-140px)] overflow-y-auto">
+        <div className="p-lg flex flex-col gap-md bg-[#F8F9FA] max-h-[calc(85vh-140px)] overflow-y-auto">
           {error && (
             <div className="bg-error-container border border-error/20 rounded-xl px-md py-sm flex items-center gap-sm">
               <span className="material-symbols-outlined text-error text-[18px]">error</span>
@@ -174,20 +174,29 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
           )}
 
           {/* Section 1: Parcel Identification & Classification */}
-          <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden shadow-xs">
-            <div className="h-1 bg-primary" />
+          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+            <div className="h-1 bg-blue-600" />
             <div className="p-lg flex flex-col gap-md">
-              <h3 className="font-body-md text-body-md text-on-surface font-bold flex items-center gap-xs m-0">
-                <span className="material-symbols-outlined text-primary text-[18px]">label</span>
-                Parcel Details & Classification
-              </h3>
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center shrink-0 shadow-2xs">
+                  <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                    1. Parcel Details & Classification
+                  </h3>
+                  <p className="text-[11px] text-on-surface-variant m-0">
+                    Parcel name, classification category, and physical storage location
+                  </p>
+                </div>
+              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-md pt-xs">
                 {/* Stock Parcel Name */}
                 <div className="flex flex-col gap-xs md:col-span-2">
-                  <label className="font-caption text-caption font-bold text-on-surface-variant flex items-center gap-1">
+                  <label className="font-caption text-caption font-bold text-on-surface-variant flex items-center gap-1 uppercase tracking-wider">
                     Stock Parcel Name <span className="text-error">*</span>
-                    <span className="font-normal text-on-surface-variant/70 text-[11px]">(e.g., Lot code, Envelope ID, or Brand)</span>
+                    <span className="font-normal text-on-surface-variant/70 text-[11px] lowercase">(e.g., Lot code, Envelope ID, or Brand)</span>
                   </label>
                   <div className="relative">
                     <input
@@ -195,7 +204,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                       value={form.stockName}
                       onChange={(e) => handleChange('stockName', e.target.value.toUpperCase())}
                       placeholder="e.g., WHITE STAR, LOT-A-2026, MELEE-MIX"
-                      className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-md text-on-surface font-semibold tracking-wide"
+                      className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-semibold tracking-wide"
                       autoFocus={!isEdit}
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40 text-xs uppercase font-mono">
@@ -206,13 +215,13 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
                 {/* Parcel Classification / Type */}
                 <div className="flex flex-col gap-xs">
-                  <label className="font-caption text-caption font-bold text-on-surface-variant">
+                  <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                     Parcel Classification / Type
                   </label>
                   <select
                     value={form.itemType}
                     onChange={(e) => handleChange('itemType', e.target.value)}
-                    className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-md text-on-surface font-medium"
+                    className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-medium"
                   >
                     {PARCEL_TYPES.map((type) => (
                       <option key={type} value={type}>
@@ -224,13 +233,13 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
                 {/* Certificate Group / Classification */}
                 <div className="flex flex-col gap-xs">
-                  <label className="font-caption text-caption font-bold text-on-surface-variant">
+                  <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                     Certificate Group / Category
                   </label>
                   <select
                     value={form.reportGroup}
                     onChange={(e) => handleChange('reportGroup', e.target.value)}
-                    className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-md text-on-surface"
+                    className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
                   >
                     <option value="">Select Group (Optional)</option>
                     {REPORT_GROUPS.map((g) => (
@@ -244,7 +253,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 {/* Storage Location */}
                 <div className={`flex flex-col gap-xs ${isEdit ? '' : 'md:col-span-2'}`}>
                   <div className="flex items-center justify-between">
-                    <label className="font-caption text-caption font-bold text-on-surface-variant">
+                    <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                       Storage Location
                     </label>
                     <button
@@ -285,7 +294,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                     <select
                       value={form.location || DEFAULT_LOCATION}
                       onChange={(e) => handleChange('location', e.target.value)}
-                      className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-md text-on-surface"
+                      className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
                     >
                       <option value={DEFAULT_LOCATION}>{DEFAULT_LOCATION}</option>
                       {locations.map((l) => (
@@ -300,7 +309,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 {/* Edit Mode Status Selector */}
                 {isEdit && (
                   <div className="flex flex-col gap-xs">
-                    <label className="font-caption text-caption font-bold text-on-surface-variant">
+                    <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                       Lifecycle Status
                     </label>
                     <select
@@ -313,7 +322,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                           status: isArch ? 'ARCHIVED' : 'ACTIVE',
                         }));
                       }}
-                      className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-md text-on-surface font-semibold"
+                      className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-semibold"
                     >
                       <option value="ACTIVE">Active (In Circulation)</option>
                       <option value="ARCHIVED">Archived (Closed / Deactivated)</option>
@@ -326,30 +335,37 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
           {/* Section 2: Optional Opening Balance (Only for Create Mode) */}
           {!isEdit && (
-            <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden shadow-xs">
+            <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-emerald-600" />
               <div className="p-lg flex flex-col gap-md">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-xs">
-                    <span className="material-symbols-outlined text-emerald-600 text-[20px]">
-                      account_balance_wallet
-                    </span>
-                    <h3 className="font-body-md text-body-md text-on-surface font-bold m-0">
-                      Opening Stock Balance
-                    </h3>
-                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      Optional
-                    </span>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0 shadow-2xs">
+                      <span className="material-symbols-outlined text-[18px]">account_balance_wallet</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                          2. Opening Stock Balance
+                        </h3>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100/70 text-emerald-800 border border-emerald-300/60">
+                          Optional
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        Record initial physical inventory weight and valuation for this parcel
+                      </p>
+                    </div>
                   </div>
 
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <label className="flex items-center gap-2 cursor-pointer select-none bg-white px-3 py-1.5 rounded-xl border border-outline-variant shadow-2xs">
                     <input
                       type="checkbox"
                       checked={hasOpeningBalance}
                       onChange={(e) => setHasOpeningBalance(e.target.checked)}
                       className="w-4 h-4 text-emerald-600 rounded border-outline-variant focus:ring-emerald-500 cursor-pointer"
                     />
-                    <span className="font-caption text-caption font-bold text-on-surface">
+                    <span className="text-xs font-bold text-on-surface">
                       Add Initial Balance
                     </span>
                   </label>
@@ -363,7 +379,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
                       {/* Carat Weight */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant">
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                           Carat Weight <span className="text-error">*</span>
                         </label>
                         <div className="relative">
@@ -374,7 +390,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                             value={form.caratWeight || ''}
                             onChange={(e) => handleChange('caratWeight', e.target.value)}
                             placeholder="0.00"
-                            className="w-full px-sm py-2 border border-emerald-200 rounded-lg bg-emerald-50/30 focus:outline-none focus:border-emerald-600 font-body-lg text-on-surface font-bold text-right pr-9"
+                            className="w-full px-sm py-2 border border-emerald-200 rounded-lg bg-emerald-50/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-600 font-body-lg text-on-surface font-bold text-right pr-9"
                           />
                           <span className="absolute right-3 top-1/2 -translate-y-1/2 font-caption text-on-surface-variant font-medium">
                             ct
@@ -384,7 +400,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
                       {/* Carat Rate */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant">
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                           Carat Rate (₹)
                         </label>
                         <div className="relative">
@@ -398,14 +414,14 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                             value={form.caratRate || ''}
                             onChange={(e) => handleChange('caratRate', e.target.value)}
                             placeholder="0"
-                            className="w-full pl-8 pr-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-lg text-on-surface font-bold text-right"
+                            className="w-full pl-8 pr-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-lg text-on-surface font-bold text-right"
                           />
                         </div>
                       </div>
 
                       {/* Total Net Value (Auto) */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant">
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                           Total Opening Value (Auto)
                         </label>
                         <div className="h-[42px] flex items-center justify-between px-3 rounded-lg bg-emerald-50 border border-emerald-200 font-body-lg text-emerald-800 font-bold">
@@ -433,23 +449,33 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
           )}
 
           {/* Section 3: Notes & Metadata */}
-          <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden shadow-xs">
+          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
             <div className="h-1 bg-purple-600" />
-            <div className="p-lg flex flex-col gap-sm">
-              <h3 className="font-body-md text-body-md text-on-surface font-bold flex items-center gap-xs m-0">
-                <span className="material-symbols-outlined text-purple-600 text-[18px]">notes</span>
-                Operational Notes & Sourcing
-              </h3>
-              <div className="flex flex-col gap-xs">
+            <div className="p-lg flex flex-col gap-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center shrink-0 shadow-2xs">
+                  <span className="material-symbols-outlined text-[18px]">notes</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                    {isEdit ? '2. Operational Notes & Sourcing' : '3. Operational Notes & Sourcing'}
+                  </h3>
+                  <p className="text-[11px] text-on-surface-variant m-0">
+                    Add sourcing details, lot origin, rough supplier, or cutting instructions
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-xs pt-xs">
                 <label className="font-caption text-[10px] font-bold text-on-surface-variant uppercase">
-                  Remarks / Origin Details
+                  Remarks / Origin Details (Optional)
                 </label>
                 <textarea
                   value={form.remarks}
                   onChange={(e) => handleChange('remarks', e.target.value)}
                   placeholder="Add sourcing details (e.g. rough supplier, lot reference, parcel origin, or intended cutting profile)..."
                   rows={2}
-                  className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:border-primary font-body-sm text-on-surface resize-none leading-relaxed"
+                  className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-sm text-on-surface resize-none leading-relaxed"
                 />
               </div>
             </div>
@@ -470,7 +496,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
         </div>
 
         {/* Footer */}
-        <div className="px-xl py-md border-t border-outline-variant bg-surface-bright rounded-b-2xl flex justify-end gap-md shrink-0">
+        <div className="px-xl py-md border-t border-outline-variant bg-white rounded-b-2xl flex justify-end gap-md shrink-0">
           <button
             onClick={onClose}
             className="px-lg py-2 rounded-lg font-body-md font-semibold text-on-surface hover:bg-surface-container transition-colors"
