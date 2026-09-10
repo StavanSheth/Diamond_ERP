@@ -37,12 +37,10 @@ export const STATUSES = ['ACTIVE', 'PARTIAL', 'SOLD_OUT', 'ARCHIVED'] as const;
 
 export const REPORT_GROUPS = ['GIA', 'IGI', 'HRD', 'NON-CERT', 'MIX'] as const;
 
+export const DEFAULT_LOCATION = 'Not Specified';
+
 export const LOCATIONS = [
-  'Mumbai - Main Office',
-  'Surat - Cutting Unit',
-  'Hong Kong - Sales Office',
-  'Dubai - Vault',
-  'Antwerp - Grading',
+  'Mumbai - BKC',
 ] as const;
 
 export const FINANCIAL_YEARS = [

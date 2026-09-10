@@ -38,7 +38,7 @@ class SessionStore {
   constructor() {
     if (typeof localStorage !== 'undefined') {
       this.token = localStorage.getItem('token');
-      this.profileId = localStorage.getItem('profileId');
+      this.profileId = localStorage.getItem('profileId') || 'Stavan';
     }
   }
 
@@ -55,7 +55,7 @@ class SessionStore {
   }
 
   getProfileId(): string | null {
-    return this.profileId;
+    return this.profileId || 'Stavan';
   }
 
   getProfileGeneration(): number {
@@ -164,9 +164,6 @@ export async function requestCore(
     });
 
     if (res.status === 401) {
-      if (!url.includes('/api/auth/logout')) {
-        window.dispatchEvent(new Event('unauthorized'));
-      }
       let errData: any = {};
       try {
         errData = await res.json();

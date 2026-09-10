@@ -2,7 +2,6 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAppLock } from '../../contexts/AppLockContext';
-import { useAuth } from '../../contexts/AuthContext';
 
 const navItems = [
   { to: '/', icon: 'dashboard', label: 'Dashboard' },
@@ -23,7 +22,6 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ syncStatus, lastSyncedAt }) => {
   const { t } = useTranslation();
   const { isAppLockEnabled, lockNow } = useAppLock();
-  const { logout } = useAuth();
   const syncTime = lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : 'Never';
 
   return (
@@ -77,14 +75,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ syncStatus, lastSyncedAt }) =>
             <span>{t('Lock App Screen')}</span>
           </button>
         )}
-        <button
-          type="button"
-          onClick={logout}
-          className="flex items-center justify-center gap-2 w-full py-2 px-3 bg-error-container hover:bg-error border border-error/20 rounded-lg text-xs font-bold text-on-error-container hover:text-white transition-colors"
-        >
-          <span className="material-symbols-outlined text-[16px]">logout</span>
-          <span>Sign Out</span>
-        </button>
         <div className="px-2 text-[10px] text-on-surface-variant flex items-center justify-between">
           <span>Sync: {syncStatus}</span>
           <span>{syncTime}</span>

@@ -43,7 +43,8 @@ export class SettingsController {
       const ALLOWED_SETTINGS = [
         'COMPANY_NAME', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
         'DEFAULT_CURRENCY', 'TAX_PERCENTAGE', 'DEFAULT_BROKERAGE',
-        'FINANCIAL_YEAR_START', 'INVOICE_PREFIX', 'THEME_PREFERENCE'
+        'FINANCIAL_YEAR_START', 'INVOICE_PREFIX', 'THEME_PREFERENCE',
+        'CUSTOM_LOCATIONS'
       ];
 
       // 1. Validate ALL settings before performing any DB operations

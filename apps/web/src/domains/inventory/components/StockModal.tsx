@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../../services/api';
-import { StockItem, CreateStockDTO, UpdateStockDTO, REPORT_GROUPS, LOCATIONS, SHAPES, CUTS, CLARITIES, COLORS } from '../../../types/stock';
+import { StockItem, CreateStockDTO, UpdateStockDTO, REPORT_GROUPS, SHAPES, CUTS, CLARITIES, COLORS } from '../../../types/stock';
+import { useLocations, DEFAULT_LOCATION } from '../../../hooks/useLocations';
 
 interface StockModalProps {
   open: boolean;
@@ -12,7 +13,7 @@ interface StockModalProps {
 const defaultForm: CreateStockDTO = {
   stockName: '',
   reportGroup: '',
-  location: 'Mumbai - Main Office',
+  location: DEFAULT_LOCATION,
   itemType: 'Mix',
   shape: 'Round',
   cut: 'EX',
@@ -35,7 +36,10 @@ const defaultForm: CreateStockDTO = {
 
 export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, onSubmit }) => {
   const isEdit = !!stock;
+  const { locations, addLocation } = useLocations();
   const [form, setForm] = useState<CreateStockDTO & { status?: string; isActive?: boolean }>(defaultForm);
+  const [isAddingLocation, setIsAddingLocation] = useState(false);
+  const [newLocName, setNewLocName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +48,8 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
   useEffect(() => {
     if (open) {
+      setIsAddingLocation(false);
+      setNewLocName('');
       api.getParties()
         .then(res => {
           if (res.success) setParties(res.data as any);
@@ -63,7 +69,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
       setForm({
         stockName: stock.stockName,
         reportGroup: stock.reportGroup,
-        location: stock.location,
+        location: stock.location || DEFAULT_LOCATION,
         itemType: 'Mix', // Defaults for edit since they aren't on Stock_Master
         shape: 'Round',
         cut: 'EX',
@@ -192,16 +198,74 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                   </select>
                 </div>
                 <div className="flex flex-col gap-xs">
-                  <label className="font-caption text-caption font-bold text-on-surface-variant">
-                    Location
-                  </label>
-                  <select
-                    value={form.location}
-                    onChange={(e) => handleChange('location', e.target.value)}
-                    className="w-full px-sm py-xs border border-outline-variant rounded bg-white focus:outline-none focus:border-primary font-body-md text-on-surface"
-                  >
-                    {LOCATIONS.map((l) => <option key={l} value={l}>{l}</option>)}
-                  </select>
+                  <div className="flex items-center justify-between">
+                    <label className="font-caption text-caption font-bold text-on-surface-variant">
+                      Location
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingLocation(!isAddingLocation)}
+                      className="text-[11px] font-bold text-primary hover:underline flex items-center gap-0.5"
+                    >
+                      <span className="material-symbols-outlined text-[13px]">add</span>
+                      {isAddingLocation ? 'Cancel' : 'New Location'}
+                    </button>
+                  </div>
+
+                  {isAddingLocation ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={newLocName}
+                        onChange={(e) => setNewLocName(e.target.value)}
+                        placeholder="e.g. Surat Vault, HK..."
+                        className="w-full px-sm py-xs border border-outline-variant rounded bg-white text-xs text-on-surface focus:outline-none focus:border-primary"
+                        autoFocus
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (newLocName.trim()) {
+                              const res = await addLocation(newLocName.trim());
+                              if (res.success) {
+                                handleChange('location', newLocName.trim());
+                                setNewLocName('');
+                                setIsAddingLocation(false);
+                              }
+                            }
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (newLocName.trim()) {
+                            const res = await addLocation(newLocName.trim());
+                            if (res.success) {
+                              handleChange('location', newLocName.trim());
+                              setNewLocName('');
+                              setIsAddingLocation(false);
+                            }
+                          }
+                        }}
+                        className="px-2 py-1 bg-primary text-white rounded text-xs font-bold shrink-0 hover:bg-surface-tint"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={form.location || DEFAULT_LOCATION}
+                      onChange={(e) => handleChange('location', e.target.value)}
+                      className="w-full px-sm py-xs border border-outline-variant rounded bg-white focus:outline-none focus:border-primary font-body-md text-on-surface"
+                    >
+                      <option value={DEFAULT_LOCATION}>{DEFAULT_LOCATION}</option>
+                      {locations.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 {isEdit && (
                   <div className="flex flex-col gap-xs">

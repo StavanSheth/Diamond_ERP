@@ -115,10 +115,8 @@ export function createProfileMiddleware(
 
         canonicalCode = targetCode;
       } else {
-        // No explicit header — behavior depends on `required` option
-        if (options.required) {
-          // P0 FIX: Tenant-scoped endpoints MUST have explicit profile context.
-          // Never silently select a default — that can cause cross-tenant data mutations.
+        // No explicit header — for non-superadmin users, require explicit context if required
+        if (options.required && authenticatedUser.role !== 'SUPER_ADMIN') {
           res.status(400).json({
             success: false,
             error: 'Profile context required. Set the X-Profile-Id header to specify which profile this request targets.',

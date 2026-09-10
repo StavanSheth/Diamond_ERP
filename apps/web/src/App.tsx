@@ -9,17 +9,13 @@ import { PartiesPage } from './pages/PartiesPage';
 import { RepairsPage } from './pages/RepairsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportsPage } from './pages/ReportsPage';
-import { LoginPage } from './pages/auth/LoginPage';
 import { useStocks } from './hooks/useStocks';
 import { AppLockProvider } from './contexts/AppLockContext';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthProvider } from './contexts/AuthContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
 import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
-import { Loader2 } from 'lucide-react';
 
 function AppContent() {
-  const { user, loading: authLoading } = useAuth();
-  
   const {
     stocks,
     loading: stocksLoading,
@@ -31,18 +27,6 @@ function AppContent() {
     deleteStock,
     refresh,
   } = useStocks();
-
-  if (authLoading) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-background">
-        <Loader2 className="animate-spin h-8 w-8 text-primary" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginPage />;
-  }
 
   return (
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">

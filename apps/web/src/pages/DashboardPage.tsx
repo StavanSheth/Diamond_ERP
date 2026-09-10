@@ -10,6 +10,7 @@ interface DashboardPageProps {
 
 import { formatCurrency, formatNumber } from '../utils/format';
 import { useTranslation } from 'react-i18next';
+import { LocationManagerCard } from '../components/locations/LocationManagerCard';
 
 const fmt = formatCurrency;
 const fmtShort = (v: number) => {
@@ -268,6 +269,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ stocks, loading, l
             )}
           </div>
         </div>
+      </div>
+
+      {/* Inventory Locations Management */}
+      <div className="mb-xl">
+        <LocationManagerCard />
       </div>
 
       {/* Recent Activity */}

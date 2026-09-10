@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAppLock } from '../../contexts/AppLockContext';
-import { useAuth } from '../../contexts/AuthContext';
 
 const mobileNavItems = [
   { to: '/', icon: 'dashboard', label: 'Dashboard' },
@@ -23,7 +22,6 @@ interface TopBarProps {
 export const TopBar: React.FC<TopBarProps> = ({ syncStatus, onRefresh }) => {
   const { t } = useTranslation();
   const { isAppLockEnabled, lockNow } = useAppLock();
-  const { logout } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
@@ -102,17 +100,6 @@ export const TopBar: React.FC<TopBarProps> = ({ syncStatus, onRefresh }) => {
                   <span>{t(item.label)}</span>
                 </NavLink>
               ))}
-            </div>
-
-            <div className="pt-sm border-t border-outline-variant mt-auto">
-              <button
-                type="button"
-                onClick={() => { setDrawerOpen(false); logout(); }}
-                className="flex items-center gap-md w-full px-md py-sm rounded-lg text-error hover:bg-error-container transition-all font-body-md"
-              >
-                <span className="material-symbols-outlined text-[20px]">logout</span>
-                <span>{t('Sign Out')}</span>
-              </button>
             </div>
           </div>
         </div>

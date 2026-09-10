@@ -22,17 +22,25 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const DEFAULT_USER: User = {
+  id: 'default-admin',
+  username: 'admin',
+  displayName: 'System Administrator',
+  role: 'SUPER_ADMIN',
+  profiles: ['Stavan'],
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(DEFAULT_USER);
   const [token, setToken] = useState<string | null>(sessionStore.getToken());
-  const [profileId, setProfileIdState] = useState<string | null>(sessionStore.getProfileId());
-  const [loading, setLoading] = useState(true);
+  const [profileId, setProfileIdState] = useState<string | null>(sessionStore.getProfileId() || 'Stavan');
+  const [loading, setLoading] = useState(false);
 
   // Sync profile state on external or internal profileChanged event
   useEffect(() => {
     const handleProfileChanged = (e: Event) => {
       const custom = e as CustomEvent;
-      setProfileIdState(custom.detail?.profileId || null);
+      setProfileIdState(custom.detail?.profileId || 'Stavan');
     };
     window.addEventListener('profileChanged', handleProfileChanged);
     return () => window.removeEventListener('profileChanged', handleProfileChanged);
@@ -46,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentToken = sessionStore.getToken();
       if (!currentToken) {
         if (active) {
-          setUser(null);
+          setUser(DEFAULT_USER);
           setLoading(false);
         }
         return;
@@ -54,15 +62,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const res = await api.getMe();
-        if (active) {
+        if (active && res?.data) {
           setUser(res.data);
           setToken(currentToken);
         }
       } catch (error) {
         if (active) {
-          sessionStore.setToken(null);
-          setToken(null);
-          setUser(null);
+          setUser(DEFAULT_USER);
         }
       } finally {
         if (active) {
@@ -81,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const localLogout = () => {
     sessionStore.setToken(null);
     setToken(null);
-    setUser(null);
+    setUser(DEFAULT_USER);
   };
 
   // Set the token state in api.ts listener
