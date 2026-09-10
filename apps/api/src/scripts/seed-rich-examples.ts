@@ -44,6 +44,17 @@ async function seedRichExamples() {
       partyMap[p.partyCode] = party;
     }
 
+    // Ensure legacy empty WHITE_STAR stub stock is removed if present
+    const emptyWs = await prisma.stock.findUnique({
+      where: { stockCode: 'WHITE_STAR' },
+      include: { diamondItems: true },
+    });
+    if (emptyWs && emptyWs.diamondItems.length === 0) {
+      await prisma.ledger.deleteMany({ where: { stockId: emptyWs.id } });
+      await prisma.location.deleteMany({ where: { stockId: emptyWs.id } });
+      await prisma.stock.delete({ where: { id: emptyWs.id } });
+    }
+
     // 2. Stocks & Multiple Ledgers (4 Stocks, each with 2 Ledgers)
     console.log('📦 Seeding Stocks & Multi-Ledger Configurations...');
     const stocksData = [
@@ -584,6 +595,7 @@ async function seedRichExamples() {
 
       const existingTx = await prisma.transaction.findUnique({
         where: { transactionNo: t.transactionNo },
+        include: { items: true },
       });
 
       if (!existingTx) {
@@ -611,6 +623,21 @@ async function seedRichExamples() {
             },
           },
         });
+      } else if (existingTx.items.length === 0 && itemsToCreate.length > 0) {
+        for (const itm of itemsToCreate) {
+          await prisma.transactionItem.create({
+            data: {
+              transactionId: existingTx.id,
+              diamondItemId: itm.diamondItemId,
+              name: itm.name,
+              quantity: itm.quantity,
+              carat: itm.carat,
+              ratePerCarat: itm.ratePerCarat,
+              totalValue: itm.totalValue,
+              itemAction: itm.itemAction,
+            },
+          });
+        }
       }
     }
 

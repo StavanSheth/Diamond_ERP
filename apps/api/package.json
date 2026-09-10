@@ -10,6 +10,7 @@
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src/**/*.ts",
+    "seed": "ts-node src/scripts/seed-rich-examples.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
