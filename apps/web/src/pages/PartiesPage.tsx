@@ -127,7 +127,10 @@ export const PartiesPage: React.FC = () => {
     const matchesSearch =
       !search ||
       pName.toLowerCase().includes(search.toLowerCase()) ||
-      pId.toLowerCase().includes(search.toLowerCase());
+      pId.toLowerCase().includes(search.toLowerCase()) ||
+      (p.partyCode && p.partyCode.toLowerCase().includes(search.toLowerCase())) ||
+      (p.gstin && p.gstin.toLowerCase().includes(search.toLowerCase())) ||
+      (p.phone && p.phone.toLowerCase().includes(search.toLowerCase()));
 
     const bal = p.outstandingBalance || 0;
     const meetsMin = minBalance === '' || bal >= parseFloat(minBalance);
@@ -379,6 +382,12 @@ export const PartiesPage: React.FC = () => {
                                   Comm: {party.brokeragePercentage}%
                                 </span>
                               )}
+                              {party.gstin && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200" title={`GSTIN: ${party.gstin}`}>
+                                  <span className="material-symbols-outlined text-[11px]">badge</span>
+                                  {party.gstin}
+                                </span>
+                              )}
                             </div>
                           );
                         })()}
@@ -537,6 +546,11 @@ export const PartiesPage: React.FC = () => {
                       <td className="px-lg py-md text-xs text-on-surface-variant">
                         <div>{party.phone || '—'}</div>
                         <div className="text-outline">{party.email || ''}</div>
+                        {party.gstin && (
+                          <div className="text-[11px] font-mono text-slate-600 font-semibold mt-0.5">
+                            GSTIN: {party.gstin}
+                          </div>
+                        )}
                       </td>
                       <td className="px-lg py-md text-right font-bold tabular-nums">
                         <span

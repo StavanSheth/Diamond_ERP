@@ -7,6 +7,7 @@ export interface BaseModalProps {
   subtitle?: string;
   icon?: string;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
+  zIndex?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
 }
@@ -27,13 +28,14 @@ export const BaseModal: React.FC<BaseModalProps> = ({
   subtitle,
   icon,
   maxWidth = 'md',
+  zIndex = 'z-50',
   children,
   footer,
 }) => {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-inverse-surface/40 backdrop-blur-sm p-md overflow-y-auto animate-fade-in">
+    <div className={`fixed inset-0 ${zIndex} flex items-center justify-center bg-inverse-surface/40 backdrop-blur-sm p-md overflow-y-auto animate-fade-in`}>
       <div
         className={`bg-surface-container-lowest w-full ${maxWidthMap[maxWidth]} rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] border border-outline-variant flex flex-col my-auto max-h-[90vh] overflow-hidden animate-fade-in-up`}
       >

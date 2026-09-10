@@ -60,10 +60,11 @@ export class PartyController {
           phone: p.phone || '',
           email: p.email || '',
           address: p.address || '',
+          gstin: p.gstin || '',
           brokeragePercentage: p.brokeragePercentage ? Number(p.brokeragePercentage) : 0,
           outstandingBalance,
           lastTxDate,
-          notes: ''
+          notes: p.notes || ''
         };
       });
       res.json({ success: true, data: mapped, total });
@@ -92,6 +93,8 @@ export class PartyController {
           phone: req.body.phone,
           email: req.body.email,
           address: req.body.address,
+          gstin: req.body.gstin ? String(req.body.gstin).trim().toUpperCase() : undefined,
+          notes: req.body.notes ? String(req.body.notes).trim() : undefined,
           brokeragePercentage: req.body.brokeragePercentage ? parseFloat(req.body.brokeragePercentage) : 0,
         }
       });
@@ -111,6 +114,12 @@ export class PartyController {
         email: req.body.email,
         address: req.body.address,
       };
+      if (req.body.gstin !== undefined) {
+        data.gstin = req.body.gstin ? String(req.body.gstin).trim().toUpperCase() : null;
+      }
+      if (req.body.notes !== undefined) {
+        data.notes = req.body.notes ? String(req.body.notes).trim() : null;
+      }
       if (req.body.brokeragePercentage !== undefined) {
         data.brokeragePercentage = req.body.brokeragePercentage ? parseFloat(req.body.brokeragePercentage) : 0;
       }

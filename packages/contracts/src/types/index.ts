@@ -169,6 +169,7 @@ export interface PartyItem {
   address?: string;
   city?: string;
   contactPerson?: string;
+  gstin?: string;
   brokeragePercentage?: number;
   outstandingBalance?: number;
   lastTxDate?: string | Date;

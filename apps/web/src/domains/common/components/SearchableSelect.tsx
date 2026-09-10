@@ -25,6 +25,8 @@ export interface SearchableSelectProps<T = any> {
   allowClear?: boolean;
   className?: string;
   triggerClassName?: string;
+  onAddNew?: () => void;
+  addNewText?: string;
 }
 
 export function SearchableSelect<T = any>({
@@ -40,6 +42,8 @@ export function SearchableSelect<T = any>({
   allowClear = true,
   className = '',
   triggerClassName = '',
+  onAddNew,
+  addNewText,
 }: SearchableSelectProps<T>) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -301,6 +305,23 @@ export function SearchableSelect<T = any>({
               })
             )}
           </div>
+
+          {onAddNew && (
+            <div className="p-xs border-t border-outline-variant/60 bg-surface-bright sticky bottom-0 z-10">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsOpen(false);
+                  onAddNew();
+                }}
+                className="w-full flex items-center justify-center gap-xs px-sm py-1.5 rounded-lg bg-primary/5 hover:bg-primary/10 text-primary text-xs font-bold transition-colors border border-primary/20 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                <span>{addNewText || 'Add New'}</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

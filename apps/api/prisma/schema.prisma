@@ -144,6 +144,8 @@ model Party {
   phone     String?
   email     String?
   address   String?
+  gstin     String?
+  notes     String?
   brokeragePercentage Decimal? @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

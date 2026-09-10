@@ -11,6 +11,7 @@ import { TransactionPaymentSection } from './TransactionPaymentSection';
 import { TransactionItemsSection } from './TransactionItemsSection';
 import { SearchableSelect, SearchOption } from '../../common/components/SearchableSelect';
 import { getPartyTypeConfig, isBrokerType } from '../../parties/types/partyTypes';
+import { PartyModal } from '../../parties/components/PartyModal';
 
 interface TransactionModalProps {
   open: boolean;
@@ -54,6 +55,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
   const [allRepairs, setAllRepairs] = useState<any[]>([]);
   const [allDiamonds, setAllDiamonds] = useState<any[]>([]);
   const [selectedLedgerId, setSelectedLedgerId] = useState(draftPayload.ledgerId || '');
+  const [isAddPartyModalOpen, setIsAddPartyModalOpen] = useState(false);
 
   // Item lines state
   const [items, setItems] = useState<any[]>(draftPayload.items || []);
@@ -90,6 +92,33 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
       }
     }
   }, [isBroker, brokeragePercentage, totalTransactionValue]);
+
+  const handleCreatePartyFromTxn = async (partyData: any) => {
+    try {
+      const res = await api.createParty(partyData);
+      if (res.success && res.data) {
+        const newParty = {
+          ...res.data,
+          id: res.data.id,
+          partyId: res.data.id,
+          name: res.data.name,
+          partyName: res.data.name,
+          type: res.data.partyType,
+          partyType: res.data.partyType,
+          brokeragePercentage: res.data.brokeragePercentage ? Number(res.data.brokeragePercentage) : 0,
+        };
+        setParties((prev) => [newParty, ...prev]);
+        setPartyId(newParty.id);
+        if (isBrokerType(newParty.partyType) && newParty.brokeragePercentage > 0) {
+          setBrokeragePercentage(String(newParty.brokeragePercentage));
+        }
+        setIsAddPartyModalOpen(false);
+      }
+    } catch (err: any) {
+      console.error('Failed to create party from transaction modal:', err);
+      throw err;
+    }
+  };
 
   // Draft integration
   const currentPayload = useMemo(() => ({
@@ -251,10 +280,13 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
     return parties.map((p) => {
       const id = p.partyId || p.id;
       const cfg = getPartyTypeConfig(p.type || p.partyType);
+      const subparts = [];
+      if (p.gstin) subparts.push(`GST: ${p.gstin}`);
+      if (p.nickname || p.phone) subparts.push(p.nickname || p.phone);
       return {
         value: id,
         label: p.partyName || p.name,
-        sublabel: p.nickname || p.phone || undefined,
+        sublabel: subparts.length > 0 ? subparts.join(' • ') : undefined,
         badge: {
           text: cfg.badgeText,
           className: cfg.badgeClass,
@@ -515,7 +547,18 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
 
             {/* Party */}
             <div className="flex flex-col gap-sm">
-              <label className="text-sm font-bold text-on-surface-variant">{t('Party')}</label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-on-surface-variant">{t('Party')}</label>
+                <button
+                  type="button"
+                  onClick={() => setIsAddPartyModalOpen(true)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary-focus hover:underline"
+                  title="Add a new account / party directly"
+                >
+                  <span className="material-symbols-outlined text-[15px]">person_add</span>
+                  {t('+ Add Account')}
+                </button>
+              </div>
               <div className="flex items-center gap-sm">
                 <div className="w-10 h-10 rounded-lg bg-[#FFF3E0] text-[#E65100] flex items-center justify-center shrink-0">
                   <span className="material-symbols-outlined text-[20px]">person</span>
@@ -526,8 +569,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
                     value={partyId}
                     onChange={(val) => setPartyId(val)}
                     placeholder={t('Select Party')}
-                    searchPlaceholder="Search party name, code, or type..."
+                    searchPlaceholder="Search party name, code, GSTIN, or type..."
                     icon="person"
+                    onAddNew={() => setIsAddPartyModalOpen(true)}
+                    addNewText="+ Add New Account / Party"
                   />
                 </div>
               </div>
@@ -600,6 +645,17 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
             await handleSubmit();
           }}
         />
+
+        {/* Nested Party Creation Modal */}
+        {isAddPartyModalOpen && (
+          <PartyModal
+            open={isAddPartyModalOpen}
+            party={null}
+            zIndex="z-[60]"
+            onClose={() => setIsAddPartyModalOpen(false)}
+            onSubmit={handleCreatePartyFromTxn}
+          />
+        )}
       </div>
     </div>
   );

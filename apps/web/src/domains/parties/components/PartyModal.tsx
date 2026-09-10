@@ -5,11 +5,12 @@ import { PARTY_TYPES, isBrokerType } from '../types/partyTypes';
 interface PartyModalProps {
   open: boolean;
   party: any | null;
+  zIndex?: string;
   onClose: () => void;
   onSubmit: (data: any, id?: string) => Promise<void>;
 }
 
-export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, onSubmit }) => {
+export const PartyModal: React.FC<PartyModalProps> = ({ open, party, zIndex, onClose, onSubmit }) => {
   const [saving, setSaving] = useState(false);
   const [partyName, setPartyName] = useState('');
   const [type, setType] = useState('CUSTOMER');
@@ -18,6 +19,7 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
+  const [gstin, setGstin] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +41,7 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
         setPhone(party.phone || '');
         setEmail(party.email || '');
         setAddress(party.address || '');
+        setGstin(party.gstin || '');
         setNotes(party.notes || '');
       } else {
         setPartyName('');
@@ -48,6 +51,7 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
         setPhone('');
         setEmail('');
         setAddress('');
+        setGstin('');
         setNotes('');
       }
       setError(null);
@@ -77,6 +81,7 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
           phone: phone.trim() || undefined,
           email: email.trim() || undefined,
           address: address.trim() || undefined,
+          gstin: gstin.trim().toUpperCase() || undefined,
           notes: notes.trim() || undefined,
         },
         party?.partyId || party?.id
@@ -119,6 +124,7 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
       subtitle={party ? `Manage profile for ${party.partyName || party.name}` : 'Register a new customer, vendor, or workshop.'}
       icon="domain"
       maxWidth="lg"
+      zIndex={zIndex}
       footer={footer}
     >
       <form onSubmit={handleSubmit} className="flex flex-col gap-md">
@@ -222,6 +228,20 @@ export const PartyModal: React.FC<PartyModalProps> = ({ open, party, onClose, on
               onChange={(e) => setEmail(e.target.value)}
               placeholder="contact@company.com"
               className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md"
+            />
+          </div>
+
+          <div className="flex flex-col gap-xs col-span-1 md:col-span-2">
+            <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
+              GSTIN Number (Optional)
+            </label>
+            <input
+              type="text"
+              value={gstin}
+              onChange={(e) => setGstin(e.target.value.toUpperCase())}
+              placeholder="e.g. 27AAAAA0000A1Z5"
+              maxLength={15}
+              className="w-full px-md py-sm border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface font-body-md uppercase font-mono tracking-wider"
             />
           </div>
 
