@@ -9,10 +9,14 @@ export default defineConfig({
       '@diamond-erp/contracts': path.resolve(__dirname, '../../packages/contracts/src/index.ts'),
       '@diamond-erp/shared-utils': path.resolve(__dirname, '../../packages/shared-utils/src/index.ts'),
     },
+    dedupe: ['react', 'react-dom'],
   },
   server: {
     port: 5175,
     strictPort: true,
+    fs: {
+      allow: [path.resolve(__dirname, '../..')],
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:3002',
