@@ -15,14 +15,14 @@ const parseArray = (val: any): string[] => {
 export class ReportsService {
 
   async getKPIs() {
-      // 1. Sales vs Purchases
+      // 1. Sales vs Purchases (select only totalValue from items)
       const sales = await prisma.transaction.findMany({
         where: { transactionType: 'SALE' },
-        include: { items: true }
+        select: { items: { select: { totalValue: true } } }
       });
       const purchases = await prisma.transaction.findMany({
         where: { transactionType: 'PURCHASE' },
-        include: { items: true }
+        select: { items: { select: { totalValue: true } } }
       });
 
       const totalSalesValue = sales.reduce((acc, t) => acc + t.items.reduce((sum, item) => sum + Number(item.totalValue || 0), 0), 0);
@@ -33,9 +33,10 @@ export class ReportsService {
         { name: 'Sales', value: totalSalesValue }
       ];
 
-      // 2. Inventory by Category
+      // 2. Inventory by Category (project only needed aggregation columns)
       const items = await prisma.diamondItem.findMany({
-        where: { status: 'AVAILABLE' }
+        where: { status: 'AVAILABLE' },
+        select: { category: true, currentValue: true, certificateStatus: true }
       });
 
       const categories = items.reduce((acc: any, item) => {
@@ -195,12 +196,25 @@ export class ReportsService {
         const transactions = await prisma.transaction.findMany({
           where: txnWhere,
           include: {
-            party: true,
-            ledger: { include: { stock: true } },
+            party: { select: { name: true, partyType: true } },
+            ledger: { select: { stock: { select: { name: true, stockCode: true } } } },
             items: {
-              include: {
+              select: {
+                id: true,
+                carat: true,
+                ratePerCarat: true,
+                totalValue: true,
                 diamondItem: {
-                  include: { currentCertificate: true }
+                  select: {
+                    itemCode: true,
+                    shape: true,
+                    color: true,
+                    clarity: true,
+                    cut: true,
+                    polish: true,
+                    symmetry: true,
+                    currentCertificate: { select: { reportNumber: true } }
+                  }
                 }
               }
             }
@@ -308,8 +322,11 @@ export class ReportsService {
         });
 
         // Closing stock valuation
-        const allItems = await prisma.diamondItem.findMany({ where: { status: 'AVAILABLE' } });
-        const closingValuation = allItems.reduce((s, it) => s + Number(it.currentValue || 0), 0);
+        const closingAgg = await prisma.diamondItem.aggregate({
+          where: { status: 'AVAILABLE' },
+          _sum: { currentValue: true }
+        });
+        const closingValuation = Number(closingAgg._sum.currentValue || 0);
         const grossMargin = totalSalesVal - totalPurchasesVal;
 
         kpis = [
@@ -356,9 +373,8 @@ export class ReportsService {
         const items = await prisma.diamondItem.findMany({
           where: itemWhere,
           include: {
-            stock: true,
-            currentCertificate: true,
-            repairs: true
+            stock: { select: { name: true } },
+            currentCertificate: { select: { labType: true, reportNumber: true } }
           },
           orderBy: { itemCode: 'asc' }
         });
@@ -441,8 +457,15 @@ export class ReportsService {
         const stocks = await prisma.stock.findMany({
           where: stockWhere,
           include: {
-            diamondItems: true,
-            ledgers: true
+            diamondItems: {
+              select: {
+                carat: true,
+                currentValue: true,
+                status: true,
+                certificateStatus: true,
+                currentCertificateId: true
+              }
+            }
           },
           orderBy: { name: 'asc' }
         });
@@ -514,8 +537,26 @@ export class ReportsService {
 
         const ledgers = await prisma.ledger.findMany({
           include: {
-            stock: { include: { diamondItems: true } },
-            transactions: { include: { items: true } }
+            stock: {
+              select: {
+                name: true,
+                diamondItems: {
+                  select: {
+                    carat: true,
+                    currentValue: true,
+                    status: true
+                  }
+                }
+              }
+            },
+            transactions: {
+              select: {
+                transactionType: true,
+                items: {
+                  select: { carat: true }
+                }
+              }
+            }
           }
         });
 
@@ -594,9 +635,8 @@ export class ReportsService {
             brokerageAmount: { gt: 0 }
           },
           include: {
-            party: true,
-            ledger: { include: { stock: true } },
-            items: true
+            party: { select: { name: true, partyType: true } },
+            items: { select: { totalValue: true } }
           },
           orderBy: { transactionDate: 'desc' }
         });
@@ -661,8 +701,8 @@ export class ReportsService {
             include: {
               transactions: {
                 include: {
-                  ledger: { include: { stock: true } },
-                  items: true
+                  ledger: { select: { stock: { select: { name: true } } } },
+                  items: { select: { totalValue: true } }
                 },
                 orderBy: { transactionDate: 'asc' }
               }
@@ -745,7 +785,12 @@ export class ReportsService {
 
         const parties = await prisma.party.findMany({
           include: {
-            transactions: { include: { items: true } }
+            transactions: {
+              select: {
+                transactionType: true,
+                items: { select: { totalValue: true } }
+              }
+            }
           },
           orderBy: { name: 'asc' }
         });
@@ -810,7 +855,16 @@ export class ReportsService {
 
         const certs = await prisma.certification.findMany({
           include: {
-            diamondItem: { include: { stock: true } }
+            diamondItem: {
+              select: {
+                itemCode: true,
+                carat: true,
+                shape: true,
+                color: true,
+                clarity: true,
+                stock: { select: { name: true } }
+              }
+            }
           },
           orderBy: { createdAt: 'desc' }
         });
@@ -876,8 +930,14 @@ export class ReportsService {
 
         const repairs = await prisma.repair.findMany({
           include: {
-            diamondItem: { include: { stock: true } },
-            vendor: true
+            diamondItem: {
+              select: {
+                itemCode: true,
+                carat: true,
+                stock: { select: { name: true } }
+              }
+            },
+            vendor: { select: { name: true } }
           },
           orderBy: { createdAt: 'desc' }
         });
@@ -937,8 +997,8 @@ export class ReportsService {
             paymentStatus: { in: ['PENDING', 'PARTIAL'] }
           },
           include: {
-            party: true,
-            items: true
+            party: { select: { name: true, partyType: true } },
+            items: { select: { totalValue: true } }
           },
           orderBy: { transactionDate: 'asc' }
         });
@@ -1012,7 +1072,16 @@ export class ReportsService {
 
         const allTxns = await prisma.transaction.findMany({
           where: txnWhere,
-          include: { items: true, party: true }
+          select: {
+            transactionType: true,
+            brokerageAmount: true,
+            items: {
+              select: {
+                totalValue: true,
+                carat: true
+              }
+            }
+          }
         });
 
         const sales = allTxns.filter(t => t.transactionType === 'SALE');
@@ -1023,15 +1092,18 @@ export class ReportsService {
         const totalPurchases = purchases.reduce((s, t) => s + t.items.reduce((sum, it) => sum + Number(it.totalValue || 0), 0), 0);
         const totalPurchasesCarats = purchases.reduce((s, t) => s + t.items.reduce((sum, it) => sum + Number(it.carat || 0), 0), 0);
 
-        const repairs = await prisma.repair.findMany();
-        const totalRepairs = repairs.reduce((s, r) => s + Number(r.cost || 0), 0);
+        const repairAgg = await prisma.repair.aggregate({ _sum: { cost: true } });
+        const totalRepairs = Number(repairAgg._sum.cost || 0);
 
-        const certs = await prisma.certification.findMany();
-        const totalCerts = certs.reduce((s, c) => s + Number(c.cost || 0), 0);
+        const certAgg = await prisma.certification.aggregate({ _sum: { cost: true } });
+        const totalCerts = Number(certAgg._sum.cost || 0);
 
-        const availableItems = await prisma.diamondItem.findMany({ where: { status: 'AVAILABLE' } });
-        const closingStockVal = availableItems.reduce((s, it) => s + Number(it.currentValue || 0), 0);
-        const closingStockCt = availableItems.reduce((s, it) => s + Number(it.carat || 0), 0);
+        const itemAgg = await prisma.diamondItem.aggregate({
+          where: { status: 'AVAILABLE' },
+          _sum: { currentValue: true, carat: true }
+        });
+        const closingStockVal = Number(itemAgg._sum.currentValue || 0);
+        const closingStockCt = Number(itemAgg._sum.carat || 0);
 
         const openingStockVal = 0;
         const openingStockCt = 0;

@@ -93,4 +93,55 @@ describe('Production Remediation Verification Suite', () => {
       expect(headers['Content-Disposition']).toContain('attachment; filename=');
     }, 15000);
   });
+
+  describe('Disaster Recovery & SQLite Operations (Phase 8)', () => {
+    it('successfully executes PRAGMA wal_checkpoint(TRUNCATE) on SQLite', async () => {
+      const { systemPrisma } = await import('../infrastructure/database/prisma');
+      const result = await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      expect(Array.isArray(result)).toBe(true);
+      expect((result as any[]).length).toBeGreaterThan(0);
+    });
+
+    it('creates an online atomic backup via SettingsController.backupDatabase', async () => {
+      const { SettingsController } = await import('../modules/settings/settings.controller');
+      const controller = new SettingsController();
+      let responseData: any = null;
+      const mockRes: any = {
+        json: (data: any) => {
+          responseData = data;
+        },
+        status: () => mockRes,
+      };
+
+      await controller.backupDatabase({} as any, mockRes, (err) => {
+        if (err) throw err;
+      });
+
+      expect(responseData).toBeDefined();
+      expect(responseData.success).toBe(true);
+      expect(responseData.data.filename).toContain('diamond_erp_backup_');
+      expect(responseData.data.sizeBytes).toBeGreaterThan(0);
+      expect(responseData.data.checkpoint).toBe('TRUNCATE');
+    });
+
+    it('successfully runs checkpointWAL via SettingsController', async () => {
+      const { SettingsController } = await import('../modules/settings/settings.controller');
+      const controller = new SettingsController();
+      let responseData: any = null;
+      const mockRes: any = {
+        json: (data: any) => {
+          responseData = data;
+        },
+        status: () => mockRes,
+      };
+
+      await controller.checkpointWAL({} as any, mockRes, (err) => {
+        if (err) throw err;
+      });
+
+      expect(responseData).toBeDefined();
+      expect(responseData.success).toBe(true);
+      expect(responseData.message).toContain('SQLite WAL checkpoint completed');
+    });
+  });
 });

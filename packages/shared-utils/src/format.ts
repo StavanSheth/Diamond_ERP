@@ -35,3 +35,25 @@ export function formatDate(date: string | Date | null | undefined): string {
     day: 'numeric',
   });
 }
+
+/**
+ * Sanitizes cell values to prevent CSV/Formula injection (CWE-1236).
+ * If a string begins with =, +, -, @, \t, or \r, it prepends a single quote.
+ */
+export function sanitizeForSpreadsheet<T>(val: T): T {
+  if (typeof val === 'string') {
+    const trimmed = val.trimStart();
+    if (
+      trimmed.startsWith('=') ||
+      trimmed.startsWith('+') ||
+      trimmed.startsWith('-') ||
+      trimmed.startsWith('@') ||
+      trimmed.startsWith('\t') ||
+      trimmed.startsWith('\r')
+    ) {
+      return `'${val}` as unknown as T;
+    }
+  }
+  return val;
+}
+

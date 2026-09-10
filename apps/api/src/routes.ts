@@ -20,7 +20,7 @@ import diamondRouter from './modules/diamonds/diamond.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import systemRoutes from './modules/system/system.routes';
 import { authenticate } from './middleware/auth';
-import { profileMiddleware } from './middleware/profile';
+import { profileMiddleware, optionalProfileMiddleware } from './middleware/profile';
 import { idempotencyMiddleware } from './middleware/idempotency';
 
 /**
@@ -51,7 +51,7 @@ export function createRoutes(
   router.use('/health', createHealthRouter(healthController));
   router.use('/api/auth', createAuthRouter());
 
-  // ── Protected routes (Authentication + Profile Authorization + Idempotency) ───
+  // ── Protected routes requiring explicit profile context ───────────────
   const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];
 
   router.use('/api/stocks', protectedStack, createStockRouter(stockController));
@@ -60,10 +60,16 @@ export function createRoutes(
   router.use('/api/certificates', protectedStack, createCertificateRouter(certificateController));
   router.use('/api/parties', protectedStack, createPartyRouter(partyController));
   router.use('/api/repairs', protectedStack, createRepairRouter(repairController));
-  router.use('/api/settings', protectedStack, createSettingsRouter(settingsController));
   router.use('/api/diamonds', protectedStack, diamondRouter);
   router.use('/api/reports', protectedStack, reportsRoutes);
-  router.use('/api/system', protectedStack, systemRoutes);
+
+  // ── Protected routes with optional profile context ──────────────────
+  // Settings includes profile listing/switching; system includes admin operations.
+  // These endpoints handle profile context internally when needed.
+  const adminStack = [authenticate, optionalProfileMiddleware, idempotencyMiddleware];
+
+  router.use('/api/settings', adminStack, createSettingsRouter(settingsController));
+  router.use('/api/system', adminStack, systemRoutes);
 
   return router;
 }

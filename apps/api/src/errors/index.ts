@@ -62,3 +62,64 @@ export class DatabaseError extends DomainError {
     super(message, 500, details);
   }
 }
+
+/**
+ * Thrown when optimistic concurrency control detects a conflict.
+ * E.g., two users editing the same transaction simultaneously.
+ * Finding 24: Version field must be enforced as true optimistic concurrency control.
+ */
+export class ConcurrencyConflictError extends DomainError {
+  public readonly currentVersion?: number;
+  public readonly clientVersion?: number;
+
+  constructor(message = 'Concurrent modification detected. Please reload and try again.', currentVersion?: number, clientVersion?: number) {
+    super(message, 409);
+    this.currentVersion = currentVersion;
+    this.clientVersion = clientVersion;
+  }
+}
+
+/**
+ * Thrown when idempotency key reservation or replay fails.
+ * Finding 14-18: Idempotency race conditions and replay semantics.
+ */
+export class IdempotencyConflictError extends DomainError {
+  public readonly idempotencyKey?: string;
+
+  constructor(message = 'Idempotency conflict', idempotencyKey?: string) {
+    super(message, 409);
+    this.idempotencyKey = idempotencyKey;
+  }
+}
+
+/**
+ * Thrown when a business rule or invariant is violated.
+ * E.g., attempting to sell an already-sold diamond, reversing an unreversible transaction.
+ * Finding 22-23: Financial/inventory invariants must be enforced at domain level.
+ */
+export class BusinessRuleError extends DomainError {
+  constructor(message = 'Business rule violation', details?: unknown) {
+    super(message, 422, details);
+  }
+}
+
+/**
+ * Thrown when file storage operations fail.
+ * Finding 31: Certificate DB/file lifecycle needs explicit error handling.
+ */
+export class StorageError extends DomainError {
+  constructor(message = 'Storage operation failed', details?: unknown) {
+    super(message, 500, details);
+  }
+}
+
+/**
+ * Thrown when database is unavailable.
+ * Finding 57: Production startup should fail on DB connection failure.
+ */
+export class DatabaseUnavailableError extends DomainError {
+  constructor(message = 'Database is unavailable. Please try again later.') {
+    super(message, 503);
+  }
+}
+

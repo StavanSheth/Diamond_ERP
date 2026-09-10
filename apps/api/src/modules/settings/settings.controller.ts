@@ -1,8 +1,19 @@
+import fs from 'fs';
+import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, AuthenticationError } from '../../errors';
+import { sanitizeForSpreadsheet } from '@diamond-erp/shared-utils';
+
+function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
+  const sanitized: Record<string, any> = {};
+  for (const [key, value] of Object.entries(row)) {
+    sanitized[key] = typeof value === 'string' ? sanitizeForSpreadsheet(value) : value;
+  }
+  return sanitized as T;
+}
 
 export class SettingsController {
   
@@ -109,7 +120,7 @@ export class SettingsController {
         });
         if (batch.length === 0) break;
         batch.forEach(d => {
-          diamondSheet.addRow({
+          diamondSheet.addRow(sanitizeSpreadsheetRow({
             itemCode: d.itemCode,
             displayName: d.displayName,
             stockCode: d.stock?.stockCode,
@@ -129,7 +140,7 @@ export class SettingsController {
             ratePerCarat: Number(d.ratePerCarat),
             currentValue: Number(d.currentValue),
             status: d.status,
-          }).commit();
+          })).commit();
         });
         diamondSkip += batch.length;
       }
@@ -168,7 +179,7 @@ export class SettingsController {
         { header: 'Currency', key: 'currency', width: 10 },
         { header: 'Is Active', key: 'isActive', width: 10 },
       ];
-      stocks.forEach(s => stockSheet.addRow(s).commit());
+      stocks.forEach(s => stockSheet.addRow(sanitizeSpreadsheetRow(s)).commit());
       stockSheet.commit();
 
       // 3. Locations Sheet
@@ -180,12 +191,12 @@ export class SettingsController {
         { header: 'Parent Location', key: 'parentLocation', width: 25 },
       ];
       locations.forEach(loc => {
-        locationSheet.addRow({
+        locationSheet.addRow(sanitizeSpreadsheetRow({
           name: loc.name,
           stockCode: loc.stock?.stockCode,
           locationType: loc.locationType,
           parentLocation: loc.parentLocation?.name || '',
-        });
+        }));
       });
       locationSheet.commit();
 
@@ -200,10 +211,10 @@ export class SettingsController {
         { header: 'Email', key: 'email', width: 25 },
         { header: 'Address', key: 'address', width: 30 },
       ];
-      parties.forEach(p => partySheet.addRow({
+      parties.forEach(p => partySheet.addRow(sanitizeSpreadsheetRow({
         ...p,
         brokeragePercentage: Number(p.brokeragePercentage || 0),
-      }));
+      })));
       partySheet.commit();
 
       // 5. Ledgers Sheet with Debit, Credit & Closing Balance
@@ -241,7 +252,7 @@ export class SettingsController {
           });
         });
 
-        ledgerSheet.addRow({
+        ledgerSheet.addRow(sanitizeSpreadsheetRow({
           name: l.name,
           stockCode: l.stock?.stockCode,
           ledgerType: l.ledgerType,
@@ -253,7 +264,7 @@ export class SettingsController {
           totalCreditValue,
           closingCarat: openingCarat + totalDebitCarat - totalCreditCarat,
           closingValue: openingValue + totalDebitValue - totalCreditValue,
-        });
+        }));
       });
       ledgerSheet.commit();
 
@@ -266,13 +277,13 @@ export class SettingsController {
         { header: 'Status', key: 'certificateStatus', width: 15 },
         { header: 'Cost', key: 'cost', width: 10 },
       ];
-      certificates.forEach(c => certSheet.addRow({
+      certificates.forEach(c => certSheet.addRow(sanitizeSpreadsheetRow({
         reportNumber: c.reportNumber,
         itemCode: c.diamondItem?.itemCode,
         labType: c.labType,
         certificateStatus: c.certificateStatus,
         cost: c.cost,
-      }));
+      })));
       certSheet.commit();
 
       // 7. Repairs Sheet
@@ -284,13 +295,13 @@ export class SettingsController {
         { header: 'Status', key: 'status', width: 15 },
         { header: 'Cost', key: 'cost', width: 10 },
       ];
-      repairs.forEach(r => repairSheet.addRow({
+      repairs.forEach(r => repairSheet.addRow(sanitizeSpreadsheetRow({
         itemCode: r.diamondItem?.itemCode,
         repairType: r.repairType,
         vendorName: r.vendor?.name,
         status: r.status,
         cost: r.cost,
-      }));
+      })));
       repairSheet.commit();
 
       // 8. Transactions Sheet with Debit, Credit & Closing Balance
@@ -347,7 +358,7 @@ export class SettingsController {
         bal.carat = bal.carat + debitCarats - creditCarats;
         bal.value = bal.value + debitValue - creditValue;
 
-        txnSheet.addRow({
+        txnSheet.addRow(sanitizeSpreadsheetRow({
           transactionNo: t.transactionNo,
           ledgerName: t.ledger?.name,
           stockCode: t.ledger?.stock?.stockCode,
@@ -369,7 +380,7 @@ export class SettingsController {
           paymentStatus: t.paymentStatus,
           paymentDone: Number(t.paymentDone || 0),
           paymentDue: Number(t.paymentDue || 0),
-        });
+        }));
       });
       txnSheet.commit();
 
@@ -386,7 +397,7 @@ export class SettingsController {
       ];
       transactions.forEach(t => {
         t.items?.forEach(i => {
-          txnItemSheet.addRow({
+          txnItemSheet.addRow(sanitizeSpreadsheetRow({
             transactionNo: t.transactionNo,
             itemCode: i.diamondItem?.itemCode || '',
             quantity: Number(i.quantity || 1),
@@ -394,7 +405,7 @@ export class SettingsController {
             ratePerCarat: Number(i.ratePerCarat || 0),
             totalValue: Number(i.totalValue || 0),
             itemAction: i.itemAction || 'IN',
-          });
+          }));
         });
       });
       txnItemSheet.commit();
@@ -624,10 +635,8 @@ export class SettingsController {
 
   getProfiles = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // Lazy import to get current profiles logic
-      const prismaObj = require('../../infrastructure/database/prisma');
-      const profiles = prismaObj.getAllProfiles ? prismaObj.getAllProfiles() : ['Stavan'];
-      const active = prismaObj.getActiveProfile ? prismaObj.getActiveProfile() : 'Stavan';
+      const profiles = getAllProfiles();
+      const active = getActiveProfileOrDefault();
       
       res.json({ success: true, data: { profiles, active } });
     } catch (error) {
@@ -1370,6 +1379,70 @@ export class SettingsController {
         success: true,
         message: `Imported ${totalSuccess} records successfully.${errors.length > 0 ? ` ${errors.length} rows had errors.` : ''}`,
         errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/settings/backup
+   * Creates an atomic, consistent database snapshot.
+   * Flushes WAL via PRAGMA wal_checkpoint(TRUNCATE) first.
+   */
+  backupDatabase = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // 1. Flush SQLite WAL to ensure 100% data consistency
+      await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+
+      // 2. Prepare backup directory
+      const backupsDir = path.resolve(process.cwd(), 'backups');
+      if (!fs.existsSync(backupsDir)) {
+        fs.mkdirSync(backupsDir, { recursive: true });
+      }
+
+      // 3. Format timestamped backup filename
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupFilename = `diamond_erp_backup_${timestamp}.db`;
+      const backupFilePath = path.join(backupsDir, backupFilename);
+
+      // 4. Use SQLite online backup VACUUM INTO if supported, or safe copy
+      try {
+        await systemPrisma.$executeRawUnsafe(`VACUUM INTO '${backupFilePath.replace(/\\/g, '/')}'`);
+      } catch {
+        const dbPath = process.env.DATABASE_URL?.replace('file:', '') || 'Stavan.db';
+        const resolvedDbPath = path.resolve(process.cwd(), dbPath);
+        fs.copyFileSync(resolvedDbPath, backupFilePath);
+      }
+
+      const stats = fs.statSync(backupFilePath);
+
+      res.json({
+        success: true,
+        message: 'Database backup created successfully',
+        data: {
+          filename: backupFilename,
+          sizeBytes: stats.size,
+          timestamp: new Date().toISOString(),
+          checkpoint: 'TRUNCATE'
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/settings/checkpoint
+   * Flushes SQLite Write-Ahead Log to the main database file.
+   */
+  checkpointWAL = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result: any = await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      res.json({
+        success: true,
+        message: 'SQLite WAL checkpoint completed successfully',
+        data: result
       });
     } catch (error) {
       next(error);

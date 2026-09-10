@@ -124,7 +124,8 @@ model Stock {
 model Ledger {
   id           String   @id @default(uuid())
   stockId      String
-  stock        Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  // Security & Integrity (Finding 24): Protect financial ledgers from accidental cascade deletion
+  stock        Stock    @relation(fields: [stockId], references: [id], onDelete: Restrict)
   ledgerType   String
   name         String
   openingCarat Decimal  @default(0)
@@ -158,7 +159,8 @@ model DiamondItem {
   id          String @id @default(uuid())
   itemCode    String @unique // D-000001
   stockId     String
-  stock       Stock  @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  // Security & Integrity (Finding 24): Protect diamond inventory from accidental cascade deletion
+  stock       Stock  @relation(fields: [stockId], references: [id], onDelete: Restrict)
   displayName String
 
   carat   Decimal
@@ -181,6 +183,7 @@ model DiamondItem {
   currentValue Decimal
 
   status     String // AVAILABLE, SOLD, IN_REPAIR, WRITTEN_OFF, IN_TRANSIT, RESERVED
+  version    Int    @default(1) // Optimistic concurrency tracking (Finding 23)
   locationId String?
   location   Location? @relation(fields: [locationId], references: [id])
 
@@ -201,6 +204,9 @@ model DiamondItem {
 
   @@index([stockId])
   @@index([status])
+  @@index([stockId, status])
+  @@index([certificateStatus])
+  @@index([shape, color, clarity])
   @@index([locationId])
 }
 
@@ -252,6 +258,9 @@ model Transaction {
   @@index([transactionType])
   @@index([status])
   @@index([partyId])
+  @@index([partyId, transactionDate])
+  @@index([ledgerId, status])
+  @@index([partyId, paymentStatus])
   @@unique([ledgerId, sequenceNumber])
 }
 
@@ -360,6 +369,8 @@ model Certification {
   updatedAt DateTime @updatedAt
 
   @@index([diamondItemId])
+  @@index([diamondItemId, certificateStatus])
+  @@index([certificateStatus])
 }
 
 model Repair {
@@ -372,7 +383,8 @@ model Repair {
 
   repairType    String // REPOLISH, SETTING_REPAIR, CHIP_REPAIR, SYMMETRY_CORRECTION, SURFACE_REPAIR, OTHER
   vendorPartyId String
-  vendor        Party  @relation(fields: [vendorPartyId], references: [id], onDelete: Cascade)
+  // Integrity: Protect repair records from accidental cascade deletion of vendor party
+  vendor        Party  @relation(fields: [vendorPartyId], references: [id], onDelete: Restrict)
 
   dateSent      DateTime
   dateCompleted DateTime?
@@ -390,12 +402,15 @@ model Repair {
 
   @@index([diamondItemId])
   @@index([status])
+  @@index([diamondItemId, status])
+  @@index([vendorPartyId, status])
 }
 
 model Location {
   id               String     @id @default(uuid())
   stockId          String
-  stock            Stock      @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  // Integrity: Protect stock locations from accidental cascade deletion
+  stock            Stock      @relation(fields: [stockId], references: [id], onDelete: Restrict)
   name             String
   locationType     String
   parentLocationId String?
@@ -463,6 +478,8 @@ model FinancialEntry {
   @@index([transactionId])
   @@index([diamondItemId])
   @@index([partyId])
+  @@index([partyId, createdAt])
+  @@index([entryType, createdAt])
 }
 
 model ItemTransformation {

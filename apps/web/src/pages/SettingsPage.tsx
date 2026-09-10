@@ -4,6 +4,8 @@ import { api } from '../services/api';
 import { useDrafts } from '../hooks/useDrafts';
 import { deleteLocalDraft } from '../services/draftDb';
 import { useAppLock } from '../contexts/AppLockContext';
+import { useAuth } from '../contexts/AuthContext';
+import { downloadBlob } from '../utils/blob';
 import { registerDeviceCredential, formatSessionTimeout } from '../services/deviceAuth';
 
 export const SettingsPage: React.FC = () => {
@@ -19,7 +21,7 @@ export const SettingsPage: React.FC = () => {
     setBackupPin,
     isPlatformAuthSupported,
   } = useAppLock();
-
+  const { switchProfile } = useAuth();
   const [deviceRegistrationStatus, setDeviceRegistrationStatus] = useState<string | null>(null);
 
   const [customUnit, setCustomUnit] = useState<'minutes' | 'hours' | 'days'>('minutes');
@@ -446,6 +448,66 @@ export const SettingsPage: React.FC = () => {
 
             <section className="bg-surface border border-outline-variant rounded-xl p-lg shadow-sm">
               <h3 className="font-title-lg font-bold text-on-surface flex items-center gap-sm mb-lg border-b border-outline-variant pb-sm">
+                <span className="material-symbols-outlined text-primary">domain</span>
+                Workspace &amp; Profile Selection
+              </h3>
+              
+              <div className="flex flex-col gap-md">
+                <p className="font-body-md text-on-surface-variant">
+                  Select your active company profile or create a new isolated tenant database.
+                </p>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-md">
+                  <div className="flex-1 max-w-xs">
+                    <label className="font-caption text-caption font-bold text-on-surface-variant mb-xs block">Active Profile</label>
+                    <select
+                      value={activeProfile}
+                      onChange={async (e) => {
+                        const newProf = e.target.value;
+                        if (newProf && newProf !== activeProfile) {
+                          try {
+                            await api.switchProfile(newProf);
+                            switchProfile(newProf);
+                            setActiveProfile(newProf);
+                            window.location.reload();
+                          } catch (err: any) {
+                            alert(err.message || 'Failed to switch profile');
+                          }
+                        }
+                      }}
+                      className="w-full px-md py-sm border border-outline-variant rounded-md bg-surface-container-lowest focus:outline-none focus:border-primary text-on-surface font-semibold"
+                    >
+                      {profiles.map(p => (
+                        <option key={p} value={p}>{p} {p === activeProfile ? '(Active)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewProfileName('');
+                      setNewProfileCallback(() => async (name: string) => {
+                        try {
+                          await api.switchProfile(name);
+                          switchProfile(name);
+                          setActiveProfile(name);
+                          window.location.reload();
+                        } catch (err: any) {
+                          alert(err.message || 'Failed to create profile');
+                        }
+                      });
+                      setNewProfileModalOpen(true);
+                    }}
+                    className="mt-4 sm:mt-auto px-md py-sm bg-primary hover:bg-[#0D47A1] text-white rounded-md font-bold text-sm transition-colors flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">add_business</span>
+                    New Profile
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="bg-surface border border-outline-variant rounded-xl p-lg shadow-sm">
+              <h3 className="font-title-lg font-bold text-on-surface flex items-center gap-sm mb-lg border-b border-outline-variant pb-sm">
                 <span className="material-symbols-outlined text-primary">store</span>
                 Company Information
               </h3>
@@ -689,13 +751,7 @@ export const SettingsPage: React.FC = () => {
                       setExporting(true);
                       try {
                         const blob = await api.exportExcel();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `Diamond_Inventory_Export_${new Date().toISOString().split('T')[0]}.xlsx`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
+                        downloadBlob(blob, `Diamond_Inventory_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
                       } catch(e: any) {
                         alert(e.message || 'Export failed');
                       } finally {
@@ -714,13 +770,7 @@ export const SettingsPage: React.FC = () => {
                     onClick={async () => {
                       try {
                         const blob = await api.downloadTemplate();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `Import_Template.xlsx`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
+                        downloadBlob(blob, `Import_Template.xlsx`);
                       } catch(e: any) {
                         alert(e.message || 'Download template failed');
                       }
@@ -857,13 +907,7 @@ export const SettingsPage: React.FC = () => {
                 setExporting(true);
                 try {
                   const blob = await api.exportExcel();
-                  const url = window.URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `PreImport_Backup_${new Date().toISOString().split('T')[0]}.xlsx`;
-                  document.body.appendChild(a);
-                  a.click();
-                  a.remove();
+                  downloadBlob(blob, `PreImport_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
                 } catch(e: any) {
                   alert(e.message || 'Backup failed');
                 } finally {
@@ -886,13 +930,7 @@ export const SettingsPage: React.FC = () => {
                   onClick={async () => {
                     try {
                       const blob = await api.downloadTemplate();
-                      const url = window.URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `Import_Template.xlsx`;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
+                      downloadBlob(blob, `Import_Template.xlsx`);
                     } catch(e: any) {
                       alert(e.message || 'Download template failed');
                     }

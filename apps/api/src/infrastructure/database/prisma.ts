@@ -50,10 +50,14 @@ export interface CanonicalProfile {
 const configuredProfiles = new Map<string, CanonicalProfile>();
 
 function initConfiguredProfiles() {
+  // Profile sources (in priority order):
+  // 1. Default profile from config
+  // 2. Allowed profiles from config file
+  // 3. CONFIGURED_PROFILES environment variable
+  // NOTE: Hardcoded profile names were removed (Finding 3).
+  // Profile registry should be seeded from config/DB, not source code.
   const allowed = new Set<string>([
     defaultProfile,
-    'Stavan',
-    'Stuti',
     ...(config.allowedProfiles || []),
   ]);
 
@@ -77,7 +81,13 @@ function initConfiguredProfiles() {
 initConfiguredProfiles();
 
 /**
- * Register a canonical profile programmatically (e.g. for testing or dynamic tenant provisioning).
+ * Register a canonical profile programmatically.
+ * 
+ * WARNING: This is a PRIVILEGED operation. In production, profile creation
+ * should be gated behind authorization, audit logging, and proper provisioning
+ * workflows. This function exists for testing and bootstrap scenarios.
+ * 
+ * Finding 4: Profile creation should not be a casual utility operation.
  */
 export function registerProfile(profile: { code: string; name?: string; dbPath?: string }): CanonicalProfile {
   if (!PROFILE_REGEX.test(profile.code)) {
@@ -100,6 +110,10 @@ export function registerProfile(profile: { code: string; name?: string; dbPath?:
     name: profile.name || profile.code,
     dbPath: canonicalDbPath,
   };
+
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(`[SECURITY] Profile "${profile.code}" registered programmatically in production. Ensure this is authorized.`);
+  }
 
   configuredProfiles.set(key, canonical);
   return canonical;
@@ -284,7 +298,34 @@ export function runWithProfile<T>(profileCode: string, fn: () => T | Promise<T>)
   });
 }
 
+/**
+ * Get the active profile for the current request context.
+ * 
+ * SECURITY (Finding 2.1): This function throws if no profile context exists,
+ * rather than silently falling back to a default. This prevents business
+ * operations from accidentally executing against the wrong tenant.
+ * 
+ * If you need a fallback for profile-agnostic operations, use
+ * getActiveProfileOrDefault() instead.
+ */
 export function getActiveProfile(): string {
+  const store = requestContext.getStore();
+  const profile = store?.profileCode || store?.profileId;
+  if (!profile) {
+    throw new Error(
+      'No active profile context. Business operations require an explicit profile scope. ' +
+      'Ensure the request passes through profileMiddleware with a valid X-Profile-Id header.'
+    );
+  }
+  return profile;
+}
+
+/**
+ * Get the active profile or fall back to the default.
+ * Use ONLY for operations that genuinely do not require tenant scoping
+ * (e.g., system health checks, profile listing).
+ */
+export function getActiveProfileOrDefault(): string {
   const store = requestContext.getStore();
   return store?.profileCode || store?.profileId || defaultProfile;
 }
@@ -292,10 +333,14 @@ export function getActiveProfile(): string {
 // ── Proxy ───────────────────────────────────────────────────────────────
 // All business modules import `prisma` (the default export). This proxy forwards
 // every property/method access to whichever PrismaClient is active for the current request context.
+// 
+// NOTE: The proxy uses getActiveProfileOrDefault() because it may be accessed
+// during startup or in contexts where AsyncLocalStorage hasn't been established.
+// Business services that need strict tenant isolation should call
+// getActiveProfile() directly to ensure a profile context exists.
 const prismaProxy = new Proxy({} as PrismaClient, {
   get(_target, prop) {
-    const store = requestContext.getStore();
-    const profileId = store?.profileCode || store?.profileId || defaultProfile;
+    const profileId = getActiveProfileOrDefault();
     const activeClient = getClientForProfile(profileId);
 
     const value = (activeClient as any)[prop];

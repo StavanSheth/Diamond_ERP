@@ -1,12 +1,11 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger.config';
 
 import { config, validateConfig } from './config';
+import { fileStorageService } from './infrastructure/storage/file-storage.service';
 import { logger } from './infrastructure/logging';
 import { StockController } from './modules/stocks/stock.controller';
 import { HealthController } from './modules/system/health.controller';
@@ -21,8 +20,9 @@ import { requestIdMiddleware } from './middleware/request-id';
 import { performanceMiddleware } from './middleware/performance';
 import { errorHandler } from './middleware/error-handler';
 import { corsMiddleware } from './middleware/cors';
+import { enforceContentType } from './middleware/content-type';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
-import prisma, { disconnectAllClients } from './infrastructure/database/prisma';
+import prisma, { systemPrisma, disconnectAllClients } from './infrastructure/database/prisma';
 
 /**
  * Bootstrap and start the application.
@@ -45,19 +45,25 @@ async function bootstrap(): Promise<void> {
 
   logger.info(`Port: ${config.port} | Retry: ${config.retry.maxAttempts} attempts, ${config.retry.baseDelayMs}ms base delay`);
 
-  // 2. Database connection check
+  // 2. Database connection check - MUST fail fast if database is unreachable (Finding 57)
   try {
     await prisma.$connect();
     logger.info('Connected to SQLite database via Prisma');
   } catch (err) {
-    logger.error('Failed to connect to database', undefined, err);
+    logger.error('FATAL: Failed to connect to database during bootstrap', undefined, err);
+    process.exit(1);
   }
 
-  // 3. Seed default admin user and default profile if database is uninitialized
-  try {
-    await authService.seedDefaultAdmin();
-  } catch (err) {
-    logger.warn(`Failed to seed default admin: ${err}`);
+  // 3. Seed default admin user and default profile if database is uninitialized (Finding 58)
+  // Controlled by environment / non-production to avoid unexpected state mutation in production
+  if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true' || process.env.NODE_ENV !== 'production') {
+    try {
+      await authService.seedDefaultAdmin();
+    } catch (err) {
+      logger.warn(`Failed to seed default admin: ${err}`);
+    }
+  } else {
+    logger.info('Auto-seeding default admin is disabled in production.');
   }
 
   // 4. Controllers
@@ -76,6 +82,7 @@ async function bootstrap(): Promise<void> {
   // 6. Register middleware (order matters)
   app.use(requestIdMiddleware);
   app.use(corsMiddleware);
+  app.use('/api', enforceContentType);
 
   // Security Headers via Helmet
   app.use(
@@ -139,12 +146,8 @@ async function bootstrap(): Promise<void> {
   });
   app.use('/api/settings/factory-reset', factoryResetLimiter);
 
-  // Uploads directory setup (certificates, etc.)
-  const uploadsDir = path.join(__dirname, '../uploads');
-  const certsDir = path.join(uploadsDir, 'certs');
-  if (!fs.existsSync(certsDir)) {
-    fs.mkdirSync(certsDir, { recursive: true });
-  }
+  // Uploads directory setup — delegated to FileStorageService (single source of truth)
+  fileStorageService.ensureUploadsDir();
 
   // 7. Swagger UI (only in development)
   if (process.env.NODE_ENV !== 'production') {
@@ -185,6 +188,13 @@ async function bootstrap(): Promise<void> {
 
     server.close(async () => {
       logger.info('HTTP server stopped accepting new requests.');
+
+      try {
+        await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+        logger.info('SQLite WAL checkpoint (TRUNCATE) completed successfully.');
+      } catch (walErr) {
+        logger.warn('Warning: Could not flush SQLite WAL during shutdown: ' + String(walErr));
+      }
 
       try {
         await disconnectAllClients();

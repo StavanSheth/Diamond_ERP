@@ -1,121 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip as RechartsTooltip,
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Legend
-} from 'recharts';
 import { api } from '../services/api';
-import { formatCurrency } from '../utils/format';
 import { EntityPreloader } from '../domains/common/components/EntityPreloader';
 import { SHAPES, COLORS, CLARITIES, CUTS, SYMMETRIES, POLISHES } from '../types/stock';
 
-const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
-
-// Aliases for backward compatibility within this file
-const SHAPE_OPTIONS = SHAPES;
-const COLOR_OPTIONS = COLORS;
-const CLARITY_OPTIONS = CLARITIES;
-const CUT_OPTIONS = CUTS;
-const SYMMETRY_OPTIONS = SYMMETRIES;
-const POLISH_OPTIONS = POLISHES;
-
-const FY_OPTIONS = [
-  { id: '2024-25', label: 'FY 24-25 (01 Apr 2024 – 31 Mar 2025)' },
-  { id: '2025-26', label: 'FY 25-26 (01 Apr 2025 – 31 Mar 2026)' },
-  { id: '2026-27', label: 'FY 26-27 (01 Apr 2026 – 31 Mar 2027)' },
-  { id: 'ALL_TIME', label: 'All Time History' }
-];
-
-const PARTY_TYPE_OPTIONS = [
-  { id: 'CLIENT', label: 'Client / Customer' },
-  { id: 'SUPPLIER', label: 'Supplier' },
-  { id: 'BROKER', label: 'Broker' },
-  { id: 'MIX', label: 'Mix (Broker & Client)' }
-];
-
-const STATUS_OPTIONS = [
-  { id: 'AVAILABLE', label: 'Available / Active' },
-  { id: 'SOLD', label: 'Sold / Completed' },
-  { id: 'MEMO', label: 'Memo / Consignment' },
-  { id: 'IN_REPAIR', label: 'In Workshop / Repair' },
-  { id: 'ARCHIVED', label: 'Archived' }
-];
-
-interface QuickPreset {
-  id: string;
-  title: string;
-  badge: string;
-  badgeBg: string;
-  badgeText: string;
-  reportType: string;
-  icon: string;
-  desc: string;
-  hasYearSelector?: boolean;
-}
-
-const QUICK_PRESETS: QuickPreset[] = [
-  {
-    id: 'preset-fy-statement',
-    title: 'Financial Year (FY)',
-    badge: 'Statutory Filing',
-    badgeBg: 'bg-blue-50 border-blue-200',
-    badgeText: 'text-blue-700',
-    reportType: 'FY_25_26',
-    icon: 'account_balance',
-    desc: 'Annual statement with Debit (Dr / In), Credit (Cr / Out), running balances & brokerage breakdown',
-    hasYearSelector: true
-  },
-  {
-    id: 'preset-pl-statement',
-    title: 'Profit & Loss (P&L)',
-    badge: 'Banking Standard',
-    badgeBg: 'bg-emerald-50 border-emerald-200',
-    badgeText: 'text-emerald-700',
-    reportType: 'PROFIT_AND_LOSS',
-    icon: 'query_stats',
-    desc: 'Audited banking schedule: Revenue, COGS with inventory adjustment, Gross Margin & EBITDA',
-    hasYearSelector: true
-  },
-  {
-    id: 'preset-physical-audit',
-    title: 'Stock Reconciliation Audit',
-    badge: 'Compliance & Audit',
-    badgeBg: 'bg-purple-50 border-purple-200',
-    badgeText: 'text-purple-700',
-    reportType: 'AUDIT_RECONCILIATION',
-    icon: 'fact_check',
-    desc: 'Verify ledger book balance vs physical verified carat weight with discrepancy tolerances'
-  },
-  {
-    id: 'preset-stone-register',
-    title: 'Granular Stone Register',
-    badge: 'Item-Level 4Cs',
-    badgeBg: 'bg-indigo-50 border-indigo-200',
-    badgeText: 'text-indigo-700',
-    reportType: 'INVENTORY_ITEMS',
-    icon: 'diamond',
-    desc: 'Inventory stone register covering all stones with 4Cs, certificates, status & valuations'
-  },
-  {
-    id: 'preset-brokerage-audit',
-    title: 'Brokerage Commission Audit',
-    badge: 'Broker Ledger',
-    badgeBg: 'bg-amber-50 border-amber-200',
-    badgeText: 'text-amber-700',
-    reportType: 'BROKERAGE',
-    icon: 'handshake',
-    desc: 'Brokered transaction audit, % commissions, and Inclusive vs Exclusive payouts'
-  }
-];
+import {
+  QUICK_PRESETS,
+  type QuickPreset,
+} from '../domains/reports/reportDefinitions';
+import { ReportPresetCards } from '../domains/reports/components/ReportPresetCards';
+import { ReportFilterSection } from '../domains/reports/components/ReportFilterSection';
+import { ReportAnalyticsCharts } from '../domains/reports/components/ReportAnalyticsCharts';
 
 export const ReportsPage: React.FC = () => {
   const { t } = useTranslation();
@@ -200,8 +95,6 @@ export const ReportsPage: React.FC = () => {
   // Auxiliary dropdown lists
   const [stocksList, setStocksList] = useState<any[]>([]);
   const [partiesList, setPartiesList] = useState<any[]>([]);
-  const [partySearch, setPartySearch] = useState<string>('');
-  const [stockSearch, setStockSearch] = useState<string>('');
 
   // Report Preview Data & Loading
   const [previewLoading, setPreviewLoading] = useState<boolean>(true);
@@ -501,19 +394,6 @@ export const ReportsPage: React.FC = () => {
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, currentPage, pageSize]);
 
-  // Filtered party and stock lists for filter drawers
-  const displayedParties = useMemo(() => {
-    if (!partySearch.trim()) return partiesList;
-    const q = partySearch.toLowerCase();
-    return partiesList.filter(p => (p.name || '').toLowerCase().includes(q) || (p.partyType || '').toLowerCase().includes(q));
-  }, [partiesList, partySearch]);
-
-  const displayedStocks = useMemo(() => {
-    if (!stockSearch.trim()) return stocksList;
-    const q = stockSearch.toLowerCase();
-    return stocksList.filter(s => (s.name || '').toLowerCase().includes(q) || (s.stockCode || '').toLowerCase().includes(q));
-  }, [stocksList, stockSearch]);
-
   return (
     <div className="flex-1 flex flex-col h-full bg-[#FAFAFC] overflow-hidden">
       {/* ═══════════════════════════════════════════════════════════════
@@ -605,554 +485,71 @@ export const ReportsPage: React.FC = () => {
         {/* ═══════════════════════════════════════════════════════════════
             QUICK STATUTORY & AUDIT PRESETS
             ═══════════════════════════════════════════════════════════════ */}
-        <section className="no-print">
-          <div className="flex items-center justify-between mb-2.5">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              {t('Quick Launch Statutory Statements & Presets')}
-            </h2>
-            <span className="text-[11px] text-slate-400">
-              {t('Click any card to auto-configure filters')}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            {QUICK_PRESETS.map((preset, idx) => {
-              const isActive = reportType === preset.reportType;
-              const topBorderColor = [
-                'border-t-indigo-600',
-                'border-t-emerald-600',
-                'border-t-amber-500',
-                'border-t-purple-600',
-                'border-t-sky-500'
-              ][idx % 5];
-              return (
-                <div
-                  key={preset.id}
-                  onClick={() => handleApplyPreset(preset)}
-                  className={`p-3.5 rounded-xl border-x border-b border-black/[0.08] ${topBorderColor} border-t-[3.5px] cursor-pointer transition-all relative group flex flex-col justify-between ${
-                    isActive
-                      ? 'bg-indigo-50/50 ring-2 ring-indigo-200/60 shadow-sm'
-                      : 'bg-white hover:border-black/20 hover:shadow-xs'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className={`p-1.5 rounded-lg ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-indigo-50 group-hover:text-indigo-600'}`}>
-                        <span className="material-symbols-outlined text-[18px] block">{preset.icon}</span>
-                      </span>
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${preset.badgeBg} ${preset.badgeText}`}>
-                        {preset.badge}
-                      </span>
-                    </div>
-                    <h3 className="text-xs font-bold text-slate-900 line-clamp-1">{preset.title}</h3>
-                    <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
-                      {preset.desc}
-                    </p>
-
-                    {/* Interactive Year Selector right on the card for FY and P&L */}
-                    {preset.hasYearSelector && (
-                      <div className="mt-2.5 pt-2 border-t border-black/[0.06] flex flex-wrap gap-1 items-center" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-[9px] font-bold text-slate-400 uppercase mr-0.5">FY:</span>
-                        {[
-                          { id: '2024-25', label: '24-25' },
-                          { id: '2025-26', label: '25-26' },
-                          { id: '2026-27', label: '26-27' },
-                          { id: 'ALL_TIME', label: 'All' }
-                        ].map((fy) => {
-                          const isFySel = selectedFYs.includes(fy.id) && isActive;
-                          return (
-                            <button
-                              key={fy.id}
-                              type="button"
-                              onClick={() => {
-                                setReportType(preset.reportType);
-                                setSelectedFYs([fy.id]);
-                              }}
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-all ${
-                                isFySel
-                                  ? 'bg-indigo-600 border-indigo-600 text-white shadow-2xs'
-                                  : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:text-indigo-600'
-                              }`}
-                            >
-                              {fy.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-3 pt-2 border-t border-black/[0.06] flex items-center justify-between text-[11px] font-medium text-indigo-600">
-                    <span>{isActive ? t('Active Selection') : t('Select Report')}</span>
-                    <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+        <ReportPresetCards
+          reportType={reportType}
+          selectedFYs={selectedFYs}
+          onApplyPreset={handleApplyPreset}
+          onSelectFY={(rt, fyId) => {
+            setReportType(rt);
+            setSelectedFYs([fyId]);
+          }}
+        />
 
         {/* ═══════════════════════════════════════════════════════════════
             ADVANCED MULTI-SELECT CHECKBOX FILTER PANELS
             ═══════════════════════════════════════════════════════════════ */}
-        {showAdvancedFilters && (
-          <section id="advanced-filters-section" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-5 transition-all no-print animate-fade-in-up">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-600 text-[22px]">tune</span>
-                <h3 className="text-sm font-bold text-slate-900">
-                  {t('Comprehensive Report Filters & Specifications')}
-                </h3>
-                {activeFiltersCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                    {activeFiltersCount} {t('Active')}
-                  </span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={handleResetAllFilters}
-                className="text-xs font-semibold text-rose-600 hover:text-rose-800"
-              >
-                {t('Reset All Filters to Default')}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-5 text-xs">
-              
-              {/* Panel 1: Financial Years & Accounting Presets */}
-              <div className="space-y-3 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200">
-                <span className="font-bold text-slate-800 block uppercase tracking-wider text-[11px]">
-                  {t('1. Financial Year(s) (FY Checkboxes)')}
-                </span>
-                <div className="space-y-1.5">
-                  {FY_OPTIONS.map((fy) => (
-                    <label key={fy.id} className="flex items-center gap-2 cursor-pointer text-slate-700 hover:text-slate-900">
-                      <input
-                        type="checkbox"
-                        checked={selectedFYs.includes(fy.id)}
-                        onChange={() => toggleItem(selectedFYs, setSelectedFYs, fy.id)}
-                        className="rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span className="font-medium text-[11px]">{fy.label}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {/* Primary Report Type selector */}
-                <div className="pt-2 border-t border-slate-200">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    {t('Statement Format / Nature')}
-                  </label>
-                  <select
-                    value={reportType}
-                    onChange={(e) => setReportType(e.target.value)}
-                    className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg p-2 text-slate-800"
-                  >
-                    <option value="PROFIT_AND_LOSS">Profit & Loss (P&L) Statement (Banking Standard)</option>
-                    <option value="FY_25_26">Trading Statement (Debit / Credit / Balances)</option>
-                    <option value="AUDIT_RECONCILIATION">Stock Reconciliation Audit</option>
-                    <option value="INVENTORY_ITEMS">Granular Stone Register (4Cs)</option>
-                    <option value="INVENTORY_SUMMARY">Stock Master (Parcel Level)</option>
-                    <option value="BROKERAGE">Brokerage Commission Audit</option>
-                    <option value="PARTY_STATEMENT">Party Ledger Statements</option>
-                    <option value="CERTIFICATES">Lab Certification Register</option>
-                    <option value="REPAIRS">Workshop Repairs Register</option>
-                    <option value="AGING_DUES">Payment Due & Aging Report</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Panel 2: Parties & Party Types */}
-              <div className="space-y-3 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200">
-                <span className="font-bold text-slate-800 block uppercase tracking-wider text-[11px]">
-                  {t('2. Party Types & Counterparties')}
-                </span>
-                
-                {/* Party Type Checkboxes */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {PARTY_TYPE_OPTIONS.map((pt) => (
-                    <label key={pt.id} className="flex items-center gap-1.5 cursor-pointer text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={selectedPartyTypes.includes(pt.id)}
-                        onChange={() => toggleItem(selectedPartyTypes, setSelectedPartyTypes, pt.id)}
-                        className="rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span className="font-medium text-[11px]">{pt.label}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {/* Counterparty Search & Multi-select */}
-                <div className="pt-2 border-t border-slate-200">
-                  <input
-                    type="text"
-                    placeholder={t('Search parties...')}
-                    value={partySearch}
-                    onChange={(e) => setPartySearch(e.target.value)}
-                    className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded mb-1.5"
-                  />
-                  <div className="max-h-28 overflow-y-auto space-y-1 bg-white p-2 rounded border border-slate-200">
-                    {displayedParties.map((p) => (
-                      <label key={p.id} className="flex items-center gap-1.5 text-[11px] cursor-pointer hover:bg-slate-50">
-                        <input
-                          type="checkbox"
-                          checked={selectedPartyIds.includes(p.id)}
-                          onChange={() => toggleItem(selectedPartyIds, setSelectedPartyIds, p.id)}
-                          className="rounded text-indigo-600"
-                        />
-                        <span className="truncate">{p.name} ({p.partyType || 'CLIENT'})</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Panel 3: Stocks & Statuses */}
-              <div className="space-y-3 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200">
-                <span className="font-bold text-slate-800 block uppercase tracking-wider text-[11px]">
-                  {t('3. Stocks & Status Checkboxes')}
-                </span>
-
-                {/* Status Checkboxes */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {STATUS_OPTIONS.map((st) => (
-                    <label key={st.id} className="flex items-center gap-1.5 cursor-pointer text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={selectedStatuses.includes(st.id)}
-                        onChange={() => toggleItem(selectedStatuses, setSelectedStatuses, st.id)}
-                        className="rounded text-indigo-600"
-                      />
-                      <span className="font-medium text-[11px]">{st.label}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {/* Stock Search & Multi-select */}
-                <div className="pt-2 border-t border-slate-200">
-                  <input
-                    type="text"
-                    placeholder={t('Search stocks...')}
-                    value={stockSearch}
-                    onChange={(e) => setStockSearch(e.target.value)}
-                    className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded mb-1.5"
-                  />
-                  <div className="max-h-28 overflow-y-auto space-y-1 bg-white p-2 rounded border border-slate-200">
-                    {displayedStocks.map((s) => (
-                      <label key={s.id} className="flex items-center gap-1.5 text-[11px] cursor-pointer hover:bg-slate-50">
-                        <input
-                          type="checkbox"
-                          checked={selectedStockIds.includes(s.id)}
-                          onChange={() => toggleItem(selectedStockIds, setSelectedStockIds, s.id)}
-                          className="rounded text-indigo-600"
-                        />
-                        <span className="truncate">{s.name || s.stockName}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Panel 4: Payment Due & Aging Filter */}
-              <div className="space-y-3 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200">
-                <span className="font-bold text-slate-800 block uppercase tracking-wider text-[11px]">
-                  {t('4. Payment Due & Aging')}
-                </span>
-                
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    {t('Payment Direction')}
-                  </label>
-                  <select
-                    value={paymentDirection}
-                    onChange={(e) => setPaymentDirection(e.target.value)}
-                    className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg p-2 text-slate-800"
-                  >
-                    <option value="ALL">{t('All Directions (Default)')}</option>
-                    <option value="CLIENTS_DUE">{t('Clients Due (To Receive)')}</option>
-                    <option value="VENDORS_DUE">{t('Vendors Due (To Pay)')}</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    {t('Overdue Aging Period')}
-                  </label>
-                  <select
-                    value={agingDays}
-                    onChange={(e) => setAgingDays(e.target.value)}
-                    className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg p-2 text-slate-800"
-                  >
-                    <option value="">{t('Any Due (Default)')}</option>
-                    <option value="15">{t('> 15 Days Overdue')}</option>
-                    <option value="30">{t('> 30 Days Overdue')}</option>
-                    <option value="45">{t('> 45 Days Overdue')}</option>
-                    <option value="60">{t('> 60 Days Overdue')}</option>
-                  </select>
-                </div>
-
-                {/* Special Toggles */}
-                <div className="pt-2 border-t border-slate-200 space-y-1.5">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={hasCert}
-                      onChange={(e) => setHasCert(e.target.checked)}
-                      className="rounded text-indigo-600"
-                    />
-                    <span className="font-semibold text-slate-700">{t('Has Certified Items')}</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={hasRepair}
-                      onChange={(e) => setHasRepair(e.target.checked)}
-                      className="rounded text-indigo-600"
-                    />
-                    <span className="font-semibold text-slate-700">{t('Has Items in Repair')}</span>
-                  </label>
-                </div>
-              </div>
-
-            </div>
-
-            {/* ═══════════════════════════════════════════════════════════
-                DIAMOND 4Cs & SPECIFICATIONS MULTI-SELECT CHECKBOXES
-                ═══════════════════════════════════════════════════════════ */}
-            <div className="border-t border-slate-200 pt-4 space-y-3">
-              <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] block">
-                {t('Diamond 4Cs & Specifications (Multi-Select Pills)')}
-              </span>
-
-              {/* Shape Checkboxes */}
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Shape:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {SHAPE_OPTIONS.map((sh) => {
-                    const isSel = selectedShapes.includes(sh);
-                    return (
-                      <button
-                        key={sh}
-                        type="button"
-                        onClick={() => toggleItem(selectedShapes, setSelectedShapes, sh)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                          isSel
-                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                            : 'bg-white border-slate-300 text-slate-700 hover:border-indigo-300'
-                        }`}
-                      >
-                        {sh}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Color Checkboxes */}
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Color:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {COLOR_OPTIONS.map((col) => {
-                    const isSel = selectedColors.includes(col);
-                    return (
-                      <button
-                        key={col}
-                        type="button"
-                        onClick={() => toggleItem(selectedColors, setSelectedColors, col)}
-                        className={`w-7 h-7 rounded-lg text-xs font-bold border flex items-center justify-center transition-all ${
-                          isSel
-                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                            : 'bg-white border-slate-300 text-slate-700 hover:border-indigo-300'
-                        }`}
-                      >
-                        {col}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Clarity Checkboxes */}
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Clarity:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {CLARITY_OPTIONS.map((cl) => {
-                    const isSel = selectedClarities.includes(cl);
-                    return (
-                      <button
-                        key={cl}
-                        type="button"
-                        onClick={() => toggleItem(selectedClarities, setSelectedClarities, cl)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                          isSel
-                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                            : 'bg-white border-slate-300 text-slate-700 hover:border-indigo-300'
-                        }`}
-                      >
-                        {cl}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Cut, Polish, Symmetry Checkboxes */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Cut:</span>
-                  <div className="flex gap-1.5">
-                    {CUT_OPTIONS.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => toggleItem(selectedCuts, setSelectedCuts, c)}
-                        className={`px-2 py-1 rounded text-xs font-semibold border ${
-                          selectedCuts.includes(c) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Polish:</span>
-                  <div className="flex gap-1.5">
-                    {POLISH_OPTIONS.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => toggleItem(selectedPolishes, setSelectedPolishes, p)}
-                        className={`px-2 py-1 rounded text-xs font-semibold border ${
-                          selectedPolishes.includes(p) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Symmetry:</span>
-                  <div className="flex gap-1.5">
-                    {SYMMETRY_OPTIONS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => toggleItem(selectedSymmetries, setSelectedSymmetries, s)}
-                        className={`px-2 py-1 rounded text-xs font-semibold border ${
-                          selectedSymmetries.includes(s) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Ranges: Carat Weight & Price */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Carat Range:</span>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      placeholder="Min Ct"
-                      value={minCarat}
-                      onChange={(e) => setMinCarat(e.target.value)}
-                      className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded"
-                    />
-                    <span className="text-slate-400">–</span>
-                    <input
-                      type="number"
-                      placeholder="Max Ct"
-                      value={maxCarat}
-                      onChange={(e) => setMaxCarat(e.target.value)}
-                      className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Price Range (₹):</span>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      placeholder="Min ₹"
-                      value={minPrice}
-                      onChange={(e) => setMinPrice(e.target.value)}
-                      className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded"
-                    />
-                    <span className="text-slate-400">–</span>
-                    <input
-                      type="number"
-                      placeholder="Max ₹"
-                      value={maxPrice}
-                      onChange={(e) => setMaxPrice(e.target.value)}
-                      className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Category:</span>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="w-full p-1.5 text-xs bg-white border border-slate-300 rounded"
-                  >
-                    <option value="ALL">All Categories</option>
-                    <option value="SINGLE">Single Stone</option>
-                    <option value="PARCEL">Parcel / Lot</option>
-                  </select>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Sticky Action Footer */}
-            <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/90 -mx-5 -mb-5 p-4 rounded-b-2xl">
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <span className="material-symbols-outlined text-[18px] text-indigo-600">filter_alt</span>
-                <span><strong>{activeFiltersCount}</strong> {t('active filter criteria configured')}</span>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleResetAllFilters}
-                  className="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition-all"
-                >
-                  {t('Reset Filters')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedFilters(false)}
-                  className="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition-all"
-                >
-                  {t('Close')}
-                </button>
-                <button
-                  type="button"
-                  id="btn-apply-filters-panel"
-                  onClick={() => {
-                    setShowAdvancedFilters(false);
-                    fetchReport();
-                    const tableEl = document.getElementById('report-data-table-section');
-                    if (tableEl) tableEl.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  className="px-4 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow flex items-center gap-1.5 transition-all active:scale-[0.98]"
-                >
-                  <span className="material-symbols-outlined text-[18px]">check_circle</span>
-                  {t('Apply Filters & Update Table')}
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
+        <ReportFilterSection
+          showAdvancedFilters={showAdvancedFilters}
+          setShowAdvancedFilters={setShowAdvancedFilters}
+          activeFiltersCount={activeFiltersCount}
+          handleResetAllFilters={handleResetAllFilters}
+          selectedFYs={selectedFYs}
+          setSelectedFYs={setSelectedFYs}
+          reportType={reportType}
+          setReportType={setReportType}
+          selectedPartyTypes={selectedPartyTypes}
+          setSelectedPartyTypes={setSelectedPartyTypes}
+          selectedPartyIds={selectedPartyIds}
+          setSelectedPartyIds={setSelectedPartyIds}
+          selectedStockIds={selectedStockIds}
+          setSelectedStockIds={setSelectedStockIds}
+          selectedStatuses={selectedStatuses}
+          setSelectedStatuses={setSelectedStatuses}
+          partiesList={partiesList}
+          stocksList={stocksList}
+          toggleItem={toggleItem}
+          paymentDirection={paymentDirection}
+          setPaymentDirection={setPaymentDirection}
+          agingDays={agingDays}
+          setAgingDays={setAgingDays}
+          hasCert={hasCert}
+          setHasCert={setHasCert}
+          hasRepair={hasRepair}
+          setHasRepair={setHasRepair}
+          selectedShapes={selectedShapes}
+          setSelectedShapes={setSelectedShapes}
+          selectedColors={selectedColors}
+          setSelectedColors={setSelectedColors}
+          selectedClarities={selectedClarities}
+          setSelectedClarities={setSelectedClarities}
+          selectedCuts={selectedCuts}
+          setSelectedCuts={setSelectedCuts}
+          selectedPolishes={selectedPolishes}
+          setSelectedPolishes={setSelectedPolishes}
+          selectedSymmetries={selectedSymmetries}
+          setSelectedSymmetries={setSelectedSymmetries}
+          minCarat={minCarat}
+          setMinCarat={setMinCarat}
+          maxCarat={maxCarat}
+          setMaxCarat={setMaxCarat}
+          minPrice={minPrice}
+          setMinPrice={setMinPrice}
+          maxPrice={maxPrice}
+          setMaxPrice={setMaxPrice}
+          category={category}
+          setCategory={setCategory}
+          onApplyFilters={fetchReport}
+        />
 
         {/* ═══════════════════════════════════════════════════════════════
             DYNAMIC STATUTORY & FINANCIAL KPIS
@@ -1205,83 +602,11 @@ export const ReportsPage: React.FC = () => {
         {/* ═══════════════════════════════════════════════════════════════
             VISUAL ANALYTICS CHARTS (Collapsible)
             ═══════════════════════════════════════════════════════════════ */}
-        {showAnalytics && analyticsData && (
-          <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs transition-all no-print">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-600 text-[20px]">insights</span>
-                {t('Diamond Inventory & Financial Visual Analytics')}
-              </h2>
-              <button onClick={() => setShowAnalytics(false)} className="text-slate-400 hover:text-slate-600 text-xs">
-                {t('Close')}
-              </button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
-                <h3 className="text-xs font-bold text-slate-700 mb-2">{t('Sales vs Purchases (Value ₹)')}</h3>
-                <div className="h-48 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={analyticsData.salesVsPurchases} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 10 }} tickFormatter={(val) => `₹${(val / 100000).toFixed(1)}L`} />
-                      <RechartsTooltip formatter={(val: any) => formatCurrency(Number(val) || 0)} />
-                      <Bar dataKey="value" fill="#3B82F6" radius={[4, 4, 0, 0]} maxBarSize={45} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
-                <h3 className="text-xs font-bold text-slate-700 mb-2">{t('Inventory by Category (₹ Value)')}</h3>
-                <div className="h-48 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={analyticsData.inventoryByCategory}
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={65}
-                        dataKey="value"
-                        nameKey="name"
-                      >
-                        {analyticsData.inventoryByCategory?.map((_: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip formatter={(val: any) => formatCurrency(Number(val) || 0)} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="border border-slate-100 rounded-xl p-4 bg-slate-50/40">
-                <h3 className="text-xs font-bold text-slate-700 mb-2">{t('Certification Status (Stone Count)')}</h3>
-                <div className="h-48 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={analyticsData.certificationStatus}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={35}
-                        outerRadius={65}
-                        dataKey="value"
-                        nameKey="name"
-                      >
-                        {analyticsData.certificationStatus?.map((_: any, index: number) => (
-                          <Cell key={`cell-cert-${index}`} fill={['#10B981', '#94A3B8'][index % 2]} />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
+        <ReportAnalyticsCharts
+          showAnalytics={showAnalytics}
+          analyticsData={analyticsData}
+          onClose={() => setShowAnalytics(false)}
+        />
 
         {/* ═══════════════════════════════════════════════════════════════
             DATA PREVIEW TABLE: ROW SELECTION, EXPANSION, EXACT ACCOUNTING COLUMNS

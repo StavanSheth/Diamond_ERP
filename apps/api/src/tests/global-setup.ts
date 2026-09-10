@@ -18,6 +18,15 @@ export default function setup() {
       },
       stdio: 'inherit'
     });
+
+    const defaultDbPath = path.join(__dirname, '../../Stavan.db');
+    const walPath = path.join(__dirname, '../../Stavan.db-wal');
+    const shmPath = path.join(__dirname, '../../Stavan.db-shm');
+    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch {}
+    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch {}
+    if (fs.existsSync(dbPath)) {
+      fs.copyFileSync(dbPath, defaultDbPath);
+    }
   } catch (error) {
     console.error('Failed to setup test database:', error);
     throw error;

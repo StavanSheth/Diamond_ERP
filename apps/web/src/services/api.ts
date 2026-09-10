@@ -1,542 +1,101 @@
-import { ApiResponse, StockItem, CreateStockDTO, UpdateStockDTO, DashboardData, HealthResponse, LedgerEntry, LedgerStockOption } from '../types/stock';
+/**
+ * API Client Facade for Diamond ERP Frontend.
+ *
+ * Re-exports modular domain API clients while maintaining full backward
+ * compatibility with existing consumers of `api`.
+ */
 
-const BASE_URL = '';
+export * from './api/client';
+export * from './api/stocks.api';
+export * from './api/ledger.api';
+export * from './api/certificates.api';
+export * from './api/parties.api';
+export * from './api/repairs.api';
+export * from './api/reports.api';
+export * from './api/settings.api';
+export * from './api/auth.api';
+
+import { stocksApi, buildFilterQueryString } from './api/stocks.api';
+import { ledgerApi } from './api/ledger.api';
+import { certificatesApi } from './api/certificates.api';
+import { partiesApi } from './api/parties.api';
+import { repairsApi } from './api/repairs.api';
+import { reportsApi } from './api/reports.api';
+import { settingsApi } from './api/settings.api';
+import { authApi } from './api/auth.api';
+import { AdvancedItemFilters } from '../types/stock';
+
+export { buildFilterQueryString, type AdvancedItemFilters };
 
 /**
- * API client for DiamondERP backend.
- * Uses fetch with proper error handling.
+ * Aggregated singleton API object conforming to the existing client interface.
  */
-function getAuthHeaders(includeContentType = true): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (includeContentType) {
-    headers['Content-Type'] = 'application/json';
-  }
-  const token = localStorage.getItem('token');
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  const profileId = localStorage.getItem('profileId');
-  if (profileId) {
-    headers['X-Profile-Id'] = profileId;
-  }
-  return headers;
-}
-
-export interface ApiRequestOptions extends RequestInit {
-  timeoutMs?: number;
-}
-
-async function request<T>(url: string, options?: ApiRequestOptions): Promise<T> {
-  const headers = { ...getAuthHeaders(true), ...(options?.headers || {}) };
-  const timeoutMs = options?.timeoutMs || 30000;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const signal = options?.signal || controller.signal;
-
-  try {
-    const res = await fetch(`${BASE_URL}${url}`, {
-      ...options,
-      headers,
-      signal,
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (res.status === 401) {
-      if (!url.includes('/api/auth/logout')) {
-        window.dispatchEvent(new Event('unauthorized'));
-      }
-      throw new ApiError(data.error || 'Unauthorized', 401, data);
-    }
-
-    if (!res.ok) {
-      throw new ApiError(data.error || `Request failed with status ${res.status}`, res.status, data);
-    }
-
-    return data as T;
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      throw new ApiError(`Request timed out after ${timeoutMs}ms`, 408);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function requestBlob(url: string, options?: ApiRequestOptions): Promise<Blob> {
-  const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
-  const timeoutMs = options?.timeoutMs || 60000;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const signal = options?.signal || controller.signal;
-
-  try {
-    const res = await fetch(`${BASE_URL}${url}`, {
-      ...options,
-      headers,
-      signal,
-    });
-
-    if (res.status === 401) {
-      if (!url.includes('/api/auth/logout')) {
-        window.dispatchEvent(new Event('unauthorized'));
-      }
-      throw new ApiError('Unauthorized', 401);
-    }
-
-    if (!res.ok) {
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const errorJson = await res.json().catch(() => ({}));
-        throw new ApiError(errorJson.error || errorJson.message || `Request failed with status ${res.status}`, res.status, errorJson);
-      }
-      const text = await res.text().catch(() => '');
-      throw new ApiError(text || `Request failed with status ${res.status}`, res.status);
-    }
-
-    return res.blob();
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      throw new ApiError(`Download request timed out after ${timeoutMs}ms`, 408);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function requestUpload<T>(url: string, formData: FormData, options?: ApiRequestOptions): Promise<T> {
-  const headers = { ...getAuthHeaders(false), ...(options?.headers || {}) };
-  const timeoutMs = options?.timeoutMs || 120000; // 2 minutes for uploads
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const signal = options?.signal || controller.signal;
-
-  try {
-    const res = await fetch(`${BASE_URL}${url}`, {
-      method: 'POST',
-      ...options,
-      headers,
-      body: formData,
-      signal,
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (res.status === 401) {
-      window.dispatchEvent(new Event('unauthorized'));
-      throw new ApiError(data.error || 'Unauthorized', 401, data);
-    }
-
-    if (!res.ok) {
-      throw new ApiError(data.error || `Upload failed with status ${res.status}`, res.status, data);
-    }
-
-    return data as T;
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      throw new ApiError(`Upload timed out after ${timeoutMs}ms`, 408);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly data?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
-
-export interface AdvancedItemFilters {
-  category?: string;
-  transactionType?: string;
-  shape?: string;
-  color?: string;
-  clarity?: string;
-  cut?: string;
-  symmetry?: string;
-  polish?: string;
-  minCarat?: string;
-  maxCarat?: string;
-  minPrice?: string;
-  maxPrice?: string;
-  paymentDirection?: string;
-  agingDays?: string;
-}
-
-const buildFilterQueryString = (filters?: AdvancedItemFilters) => {
-  if (!filters) return '';
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (value && value !== 'All' && value !== '') {
-      params.append(key, value);
-    }
-  });
-  const qs = params.toString();
-  return qs ? `?${qs}` : '';
-};
-
 export const api = {
-  /** Get all stock items */
-  getStocks(filters?: AdvancedItemFilters): Promise<ApiResponse<StockItem[]>> {
-    return request(`/api/stocks${buildFilterQueryString(filters)}`);
-  },
+  // Stocks & Diamonds
+  getStocks: stocksApi.getStocks,
+  createStock: stocksApi.createStock,
+  updateStock: stocksApi.updateStock,
+  deleteStock: stocksApi.deleteStock,
+  getDashboard: stocksApi.getDashboard,
+  getHealth: stocksApi.getHealth,
+  getStockItems: stocksApi.getStockItems,
+  createStockItem: stocksApi.createStockItem,
+  updateStockItem: stocksApi.updateStockItem,
+  deleteStockItem: stocksApi.deleteStockItem,
+  getDiamonds: stocksApi.getDiamonds,
+  getDiamondById: stocksApi.getDiamondById,
 
-  /** Create a new stock item */
-  createStock(dto: CreateStockDTO): Promise<ApiResponse<StockItem[]>> {
-    return request('/api/stocks', {
-      method: 'POST',
-      body: JSON.stringify(dto),
-    });
-  },
+  // Ledger
+  getLedger: ledgerApi.getLedger,
+  getPaymentSummary: ledgerApi.getPaymentSummary,
+  getLedgerStocks: ledgerApi.getLedgerStocks,
+  getLedgerParties: ledgerApi.getLedgerParties,
+  postLedger: ledgerApi.postLedger,
+  updateLedger: ledgerApi.updateLedger,
+  deleteLedger: ledgerApi.deleteLedger,
 
-  /** Update a stock item */
-  updateStock(id: string, dto: UpdateStockDTO): Promise<ApiResponse<StockItem[]>> {
-    return request(`/api/stocks/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      body: JSON.stringify(dto),
-    });
-  },
+  // Certificates
+  getCertificates: certificatesApi.getCertificates,
+  createCertificate: certificatesApi.createCertificate,
+  updateCertificate: certificatesApi.updateCertificate,
+  deleteCertificate: certificatesApi.deleteCertificate,
+  uploadCertificateFile: certificatesApi.uploadCertificateFile,
+  openCertificatePdf: certificatesApi.openCertificatePdf,
+  getUnlinkedCertificates: certificatesApi.getUnlinkedCertificates,
+  linkCertificate: certificatesApi.linkCertificate,
 
-  /** Delete a stock item */
-  deleteStock(id: string): Promise<ApiResponse<StockItem[]>> {
-    return request(`/api/stocks/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-  },
+  // Parties
+  getParties: partiesApi.getParties,
+  createParty: partiesApi.createParty,
+  updateParty: partiesApi.updateParty,
+  deleteParty: partiesApi.deleteParty,
 
-  /** Get dashboard KPIs */
-  getDashboard(): Promise<ApiResponse<DashboardData>> {
-    return request('/api/dashboard');
-  },
+  // Repairs
+  getRepairs: repairsApi.getRepairs,
+  createRepair: repairsApi.createRepair,
+  updateRepair: repairsApi.updateRepair,
+  deleteRepair: repairsApi.deleteRepair,
 
-  /** Health check */
-  getHealth(): Promise<HealthResponse> {
-    return request('/health');
-  },
+  // Reports
+  getReports: reportsApi.getReports,
+  getReportPreview: reportsApi.getReportPreview,
+  downloadReportExcel: reportsApi.downloadReportExcel,
 
-  /** Get ledger entries, optionally filtered by stockId, partyId, itemCode, paymentStatus, agingDays, and paymentDirection */
-  getLedger(stockId?: string, partyId?: string, itemCode?: string, paymentStatus?: string, agingDays?: string | number, paymentDirection?: string): Promise<{ success: boolean; data: LedgerEntry[]; count: number }> {
-    const params = new URLSearchParams();
-    if (stockId) params.append('stockId', stockId);
-    if (partyId) params.append('partyId', partyId);
-    if (itemCode) params.append('itemCode', itemCode);
-    if (paymentStatus) params.append('paymentStatus', paymentStatus);
-    if (agingDays) params.append('agingDays', String(agingDays));
-    if (paymentDirection) params.append('paymentDirection', paymentDirection);
-    
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return request(`/api/ledger${qs}`);
-  },
+  // Settings & System
+  getSettings: settingsApi.getSettings,
+  updateSettings: settingsApi.updateSettings,
+  getProfiles: settingsApi.getProfiles,
+  switchProfile: settingsApi.switchProfile,
+  factoryReset: settingsApi.factoryReset,
+  exportExcel: settingsApi.exportExcel,
+  downloadTemplate: settingsApi.downloadTemplate,
+  importExcel: settingsApi.importExcel,
+  getActivationStatus: settingsApi.getActivationStatus,
+  activateApp: settingsApi.activateApp,
 
-  /** Get ledger payment summary with optional aging filter */
-  getPaymentSummary(stockId?: string, partyId?: string, itemCode?: string, agingDays?: string | number): Promise<{ success: boolean; data: { payableDue: number; payablePaid: number; receivableDue: number; receivableCollected: number; aging?: any } }> {
-    const params = new URLSearchParams();
-    if (stockId) params.append('stockId', stockId);
-    if (partyId) params.append('partyId', partyId);
-    if (itemCode) params.append('itemCode', itemCode);
-    if (agingDays) params.append('agingDays', String(agingDays));
-    
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return request(`/api/ledger/payment-summary${qs}`);
-  },
-
-  /** Get stock names for filter dropdown */
-  getLedgerStocks(): Promise<{ success: boolean; data: LedgerStockOption[] }> {
-    return request('/api/ledger/stocks');
-  },
-
-  /** Get party names for transaction dropdown */
-  getLedgerParties(): Promise<{ success: boolean; data: { partyId: string; partyName: string; type: string }[] }> {
-    return request('/api/ledger/parties');
-  },
-
-  /** Create transaction */
-  postLedger(data: any): Promise<any> {
-    return request('/api/ledger', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Update transaction */
-  updateLedger(id: string, data: any): Promise<any> {
-    return request(`/api/ledger/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-
-  /**
-   * Delete transaction - Note: Historical transactions are immutable in the ledger.
-   * Attempting to delete will be rejected by the backend. Use a reversal transaction instead.
-   */
-  deleteLedger(id: string): Promise<any> {
-    return request(`/api/ledger/${id}`, {
-      method: 'DELETE',
-    });
-  },
-
-  /** Get Stock Items for a Stock ID */
-  getStockItems(stockId: string): Promise<{ success: boolean; data: any[] }> {
-    return request(`/api/stocks/${stockId}/items`);
-  },
-
-  /** Create a Stock Item */
-  createStockItem(stockId: string, data: any): Promise<any> {
-    return request(`/api/stocks/${stockId}/items`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Update a Stock Item */
-  updateStockItem(stockId: string, itemId: string, data: any): Promise<any> {
-    return request(`/api/stocks/${stockId}/items/${itemId}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Delete a Stock Item */
-  deleteStockItem(stockId: string, itemId: string): Promise<any> {
-    return request(`/api/stocks/${stockId}/items/${itemId}`, {
-      method: 'DELETE',
-    });
-  },
-
-  /** Get all certificates */
-  getCertificates(filters?: AdvancedItemFilters): Promise<{ success: boolean; data: any[] }> {
-    return request(`/api/certificates${buildFilterQueryString(filters)}`);
-  },
-
-  /** Create a certificate */
-  createCertificate(data: any): Promise<any> {
-    return request('/api/certificates', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Update a certificate */
-  updateCertificate(id: string, data: any): Promise<any> {
-    return request(`/api/certificates/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Delete a certificate */
-  deleteCertificate(id: string): Promise<any> {
-    return request(`/api/certificates/${id}`, {
-      method: 'DELETE',
-    });
-  },
-
-  /** Upload certificate file */
-  uploadCertificateFile(file: File): Promise<{ success: boolean; data: { path: string } }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    return requestUpload('/api/certificates/upload', formData);
-  },
-
-  /** Open Certificate PDF Securely */
-  async openCertificatePdf(id: string): Promise<void> {
-    const blob = await requestBlob(`/api/certificates/${id}/file`);
-    const url = window.URL.createObjectURL(blob);
-    window.open(url, '_blank');
-  },
-
-  // --- PARTIES ---
-  getParties(): Promise<{ success: boolean; data: any[] }> {
-    return request('/api/parties');
-  },
-  createParty(data: any): Promise<any> {
-    return request('/api/parties', { method: 'POST', body: JSON.stringify(data) });
-  },
-  updateParty(id: string, data: any): Promise<any> {
-    return request(`/api/parties/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-  },
-  deleteParty(id: string): Promise<any> {
-    return request(`/api/parties/${id}`, { method: 'DELETE' });
-  },
-
-  /** Get all repairs */
-  getRepairs(filters?: AdvancedItemFilters): Promise<{ success: boolean; data: any[] }> {
-    return request(`/api/repairs${buildFilterQueryString(filters)}`);
-  },
-  createRepair(data: any): Promise<any> {
-    return request('/api/repairs', { method: 'POST', body: JSON.stringify(data) });
-  },
-  updateRepair(id: string, data: any): Promise<any> {
-    return request(`/api/repairs/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-  },
-  deleteRepair(id: string): Promise<any> {
-    return request(`/api/repairs/${id}`, { method: 'DELETE' });
-  },
-
-  // --- SETTINGS ---
-  getSettings(): Promise<{ success: boolean; data: Record<string, string> }> {
-    return request('/api/settings');
-  },
-
-  getReports(): Promise<any> {
-    return request('/api/reports');
-  },
-
-  getReportPreview(params?: Record<string, any>): Promise<{
-    success: boolean;
-    title: string;
-    subtitle: string;
-    columns: Array<{ key: string; header: string; align?: 'left' | 'center' | 'right'; width?: number }>;
-    rows: any[];
-    kpis: Array<{ label: string; value: string | number; color?: string }>;
-    entityProfile?: any;
-  }> {
-    const searchParams = new URLSearchParams();
-    if (params) {
-      Object.entries(params).forEach(([k, v]) => {
-        if (Array.isArray(v)) {
-          if (v.length > 0) searchParams.append(k, v.join(','));
-        } else if (v !== undefined && v !== null && v !== '') {
-          searchParams.append(k, String(v));
-        }
-      });
-    }
-    const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    return request(`/api/reports/preview${qs}`);
-  },
-
-  async downloadReportExcel(params?: Record<string, any>, customFilename?: string): Promise<void> {
-    const searchParams = new URLSearchParams();
-    if (params) {
-      Object.entries(params).forEach(([k, v]) => {
-        if (Array.isArray(v)) {
-          if (v.length > 0) searchParams.append(k, v.join(','));
-        } else if (v !== undefined && v !== null && v !== '') {
-          searchParams.append(k, String(v));
-        }
-      });
-    }
-    const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    const blob = await requestBlob(`/api/reports/export/excel${qs}`);
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = customFilename || `DiamondERP_${params?.reportType || 'Report'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  },
-
-  updateSettings(data: Record<string, string>): Promise<any> {
-    return request('/api/settings', { method: 'PUT', body: JSON.stringify(data) });
-  },
-
-  /** Get individual diamonds in a stock parcel */
-  getDiamonds(stockId?: string, filters?: AdvancedItemFilters): Promise<{ success: boolean; data: any[] }> {
-    const filterQs = buildFilterQueryString(filters).replace('?', '&');
-    const qs = stockId ? `?stockId=${encodeURIComponent(stockId)}${filterQs}` : buildFilterQueryString(filters);
-    return request(`/api/diamonds${qs}`);
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // DATA MANAGEMENT & PROFILES API
-  // ═══════════════════════════════════════════════════════════════
-
-  getProfiles(): Promise<{ success: boolean; data: { profiles: string[], active: string } }> {
-    return request('/api/settings/profiles');
-  },
-  switchProfile(profileName: string): Promise<any> {
-    return request('/api/settings/profile', { method: 'POST', body: JSON.stringify({ profileName }) });
-  },
-  factoryReset(): Promise<any> {
-    return request('/api/settings/factory-reset', { method: 'POST' });
-  },
-
-  /** Export data to Excel */
-  exportExcel(): Promise<Blob> {
-    return requestBlob('/api/settings/export/excel');
-  },
-
-  /** Download Excel template */
-  downloadTemplate(): Promise<Blob> {
-    return requestBlob('/api/settings/export/template');
-  },
-
-  /** Import data from Excel */
-  async importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    return requestUpload(`/api/settings/import/excel?mode=${mode}`, formData);
-  },
-
-  /** Get lifetime activation / master lock status */
-  getActivationStatus(): Promise<{ success: boolean; isActivated: boolean }> {
-    return request<{ success: boolean; isActivated: boolean }>('/api/system/activation-status');
-  },
-
-  /** Activate application with master password */
-  activateApp(password: string): Promise<{ success: boolean; message?: string }> {
-    return request<{ success: boolean; message?: string }>('/api/system/activate', {
-      method: 'POST',
-      body: JSON.stringify({ password }),
-    });
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // AUTHENTICATION API
-  // ═══════════════════════════════════════════════════════════════
-
-  login(username: string, password: string): Promise<{ success: boolean; data: { user: any; token: string } }> {
-    return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
-  },
-
-  bootstrapUser(data: any, secret?: string): Promise<{ success: boolean; data: any }> {
-    const headers: Record<string, string> = {};
-    if (secret) {
-      headers['X-Bootstrap-Secret'] = secret;
-    }
-    return request('/api/auth/bootstrap', {
-      method: 'POST',
-      body: JSON.stringify(data),
-      headers,
-    });
-  },
-
-  getMe(): Promise<{ success: boolean; data: any }> {
-    return request('/api/auth/me');
-  },
-
-  logout(): Promise<{ success: boolean; message: string }> {
-    return request('/api/auth/logout', { method: 'POST' });
-  },
-
-  getUnlinkedCertificates(): Promise<{ success: boolean; data: any[] }> {
-    return request('/api/certificates/unlinked');
-  },
-
-  getDiamondById(id: string): Promise<{ success: boolean; data: any }> {
-    return request(`/api/diamonds/${id}`);
-  },
-
-  linkCertificate(certId: string, diamondItemId: string): Promise<any> {
-    return request(`/api/certificates/${certId}/link`, {
-      method: 'POST',
-      body: JSON.stringify({ diamondItemId }),
-    });
-  },
+  // Auth
+  login: authApi.login,
+  bootstrapUser: authApi.bootstrapUser,
+  getMe: authApi.getMe,
+  logout: authApi.logout,
 };

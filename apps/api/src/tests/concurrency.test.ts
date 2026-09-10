@@ -14,7 +14,7 @@ import { CertificateController } from '../modules/certificates/certificate.contr
 import { PartyController } from '../modules/parties/party.controller';
 import { RepairController } from '../modules/repairs/repair.controller';
 import { SettingsController } from '../modules/settings/settings.controller';
-import prisma, { systemPrisma, registerProfile, runWithProfile, disconnectAllClients } from '../infrastructure/database/prisma';
+import prisma, { systemPrisma, registerProfile, runWithProfile, disconnectAllClients, getActiveProfile, getActiveProfileOrDefault, defaultProfile } from '../infrastructure/database/prisma';
 import { authService } from '../modules/auth/auth.service';
 import { transactionService } from '../modules/transactions/transaction.service';
 import { inventoryService } from '../modules/inventory/inventory.service';
@@ -294,6 +294,32 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
 
       expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
+    });
+
+    it('Missing X-Profile-Id header on required profile endpoint returns 400 Bad Request with PROFILE_CONTEXT_REQUIRED', async () => {
+      const res = await request(app)
+        .get('/api/stocks')
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.code).toBe('PROFILE_CONTEXT_REQUIRED');
+      expect(res.body.error).toContain('Profile context required');
+    });
+
+    it('Profile-agnostic endpoint /api/settings/profiles succeeds without X-Profile-Id header', async () => {
+      const res = await request(app)
+        .get('/api/settings/profiles')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toBeDefined();
+    });
+
+    it('getActiveProfile() throws outside of profile context, while getActiveProfileOrDefault() returns default', () => {
+      expect(() => getActiveProfile()).toThrow(/No active profile context/);
+      expect(getActiveProfileOrDefault()).toBe(defaultProfile);
     });
   });
 
@@ -855,7 +881,7 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
             ratePerCarat: 5000,
             currentValue: 5000,
             status: 'AVAILABLE',
-            certificateStatus: 'CERTIFIED',
+            certificateStatus: 'RECEIVED',
           },
         });
         diamond1Id = d1.id;
@@ -874,7 +900,7 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
             ratePerCarat: 4000,
             currentValue: 4800,
             status: 'AVAILABLE',
-            certificateStatus: 'CERTIFIED',
+            certificateStatus: 'RECEIVED',
           },
         });
         diamond2Id = d2.id;

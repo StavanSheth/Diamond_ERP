@@ -5,6 +5,10 @@ import { deleteLocalDraft } from '../../../services/draftDb';
 import { useTranslation } from 'react-i18next';
 import { TransactionHeader } from './TransactionHeader';
 import { TransactionRemarks } from './TransactionRemarks';
+import { TransactionFooter } from './TransactionFooter';
+import { TransactionBrokerageSection } from './TransactionBrokerageSection';
+import { TransactionPaymentSection } from './TransactionPaymentSection';
+import { TransactionItemsSection } from './TransactionItemsSection';
 import { SearchableSelect, SearchOption } from '../../common/components/SearchableSelect';
 import { getPartyTypeConfig, isBrokerType } from '../../parties/types/partyTypes';
 
@@ -547,463 +551,55 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
           </div>
 
           {/* Brokerage Commission Section */}
-          {isBroker && (
-            <div className="flex flex-col gap-md bg-purple-50/80 p-md rounded-xl border border-purple-200 animate-fade-in shadow-2xs">
-              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-sm">
-                <div className="flex items-center gap-sm">
-                  <div className="w-10 h-10 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
-                    <span className="material-symbols-outlined text-[22px]">handshake</span>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-purple-950 flex items-center gap-1.5">
-                      Brokerage Commission
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${selectedPartyConfig.badgeClass}`}>
-                        {selectedPartyConfig.badgeText}
-                      </span>
-                    </h4>
-                    <p className="text-xs text-purple-700">
-                      Calculated on Deal Value: <span className="font-bold font-mono">₹{totalTransactionValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                    </p>
-                  </div>
-                </div>
+          <TransactionBrokerageSection
+            isBroker={isBroker}
+            selectedPartyConfig={selectedPartyConfig}
+            totalTransactionValue={totalTransactionValue}
+            brokerageType={brokerageType}
+            setBrokerageType={setBrokerageType}
+            brokeragePercentage={brokeragePercentage}
+            setBrokeragePercentage={setBrokeragePercentage}
+            brokerageAmount={brokerageAmount}
+            setBrokerageAmount={setBrokerageAmount}
+          />
 
-                {/* Inclusive vs Exclusive Segmented Selector */}
-                <div className="flex items-center bg-white p-1 rounded-xl border border-purple-300 shadow-2xs">
-                  <button
-                    type="button"
-                    onClick={() => setBrokerageType('INCLUSIVE')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                      brokerageType === 'INCLUSIVE'
-                        ? 'bg-purple-700 text-white shadow-xs'
-                        : 'text-purple-900 hover:bg-purple-100/60'
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-[14px]">
-                      {brokerageType === 'INCLUSIVE' ? 'check_circle' : 'radio_button_unchecked'}
-                    </span>
-                    Inclusive (Default)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBrokerageType('EXCLUSIVE')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                      brokerageType === 'EXCLUSIVE'
-                        ? 'bg-purple-700 text-white shadow-xs'
-                        : 'text-purple-900 hover:bg-purple-100/60'
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-[14px]">
-                      {brokerageType === 'EXCLUSIVE' ? 'check_circle' : 'radio_button_unchecked'}
-                    </span>
-                    Exclusive
-                  </button>
-                </div>
-              </div>
-
-              {/* Rate and Amount Inputs & Explanation */}
-              <div className="flex flex-wrap items-center justify-between gap-md pt-2 border-t border-purple-200/70">
-                <div className="flex flex-wrap items-center gap-md">
-                  <div className="flex items-center gap-xs">
-                    <label className="text-xs font-bold text-purple-900 shrink-0">Brokerage Rate (%):</label>
-                    <div className="relative w-28">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="100"
-                        value={brokeragePercentage}
-                        onChange={(e) => setBrokeragePercentage(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full pl-sm pr-6 py-1.5 border border-purple-300 rounded-lg text-sm bg-white font-bold text-purple-950 focus:ring-2 focus:ring-purple-400 focus:outline-none"
-                      />
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-purple-700">%</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-xs">
-                    <label className="text-xs font-bold text-purple-900 shrink-0">Commission (₹):</label>
-                    <div className="relative w-36">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-purple-700">₹</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={brokerageAmount}
-                        onChange={(e) => setBrokerageAmount(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full pl-6 pr-sm py-1.5 border border-purple-300 rounded-lg text-sm bg-white font-bold text-purple-950 focus:ring-2 focus:ring-purple-400 focus:outline-none shadow-2xs"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Live Formula / Breakdown Note */}
-                <div className="text-xs text-purple-900 bg-purple-100/70 px-3 py-1.5 rounded-lg border border-purple-200 font-medium">
-                  {brokerageType === 'INCLUSIVE' ? (
-                    <span>
-                      <strong>Inclusive:</strong> Brokerage is deducted from deal total. Net goods value: <strong className="font-mono text-purple-950">₹{Math.max(0, totalTransactionValue - (parseFloat(brokerageAmount) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
-                    </span>
-                  ) : (
-                    <span>
-                      <strong>Exclusive:</strong> Brokerage is added on top. Total settlement amount: <strong className="font-mono text-purple-950">₹{(totalTransactionValue + (parseFloat(brokerageAmount) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {(txnType === 'SALE' || txnType === 'PURCHASE') && (
-            <div className="flex flex-col md:flex-row gap-lg bg-primary-container/30 p-md rounded-xl border border-primary-container">
-              <div className="flex-1 min-w-[200px]">
-                <label className="block text-sm font-bold text-on-surface-variant mb-1">{t('Payment Status')}</label>
-                <select
-                  value={paymentStatus}
-                  onChange={(e) => setPaymentStatus(e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary focus:border-primary font-medium"
-                >
-                  <option value="PENDING">{t('Payment Left / Due')}</option>
-                  <option value="PARTIAL">{t('Partial')}</option>
-                  <option value="COMPLETED">{t('Payment Done')}</option>
-                </select>
-              </div>
-              {(paymentStatus === 'PARTIAL' || paymentStatus === 'COMPLETED') && (
-                <div className="flex-1 min-w-[200px]">
-                  <label className="block text-sm font-bold text-on-surface-variant mb-1">Amount Paid (₹)</label>
-                  <input
-                    type="number"
-                    value={paymentDone}
-                    onChange={(e) => setPaymentDone(e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary focus:border-primary font-medium"
-                    placeholder="0.00"
-                  />
-                </div>
-              )}
-            </div>
-          )}
+          {/* Payment Section */}
+          <TransactionPaymentSection
+            txnType={txnType}
+            paymentStatus={paymentStatus}
+            setPaymentStatus={setPaymentStatus}
+            paymentDone={paymentDone}
+            setPaymentDone={setPaymentDone}
+          />
 
           {/* Transaction Items Section */}
-          <div className="bg-[#F4F7FA] border border-outline-variant/60 rounded-xl p-lg flex flex-col gap-lg shadow-inner">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-sm">
-                <div className="w-8 h-8 rounded-lg bg-[#E3F2FD] text-[#1976D2] flex items-center justify-center">
-                  <span className="material-symbols-outlined text-[20px]">diamond</span>
-                </div>
-                <div>
-                  <h3 className="font-bold text-on-surface m-0 text-base">{t('Transaction Items')}</h3>
-                </div>
-              </div>
-              <button 
-                onClick={handleAddItem}
-                className="text-[#1976D2] border border-[#1976D2] bg-white hover:bg-[#E3F2FD] px-md py-sm rounded-lg flex items-center gap-xs font-bold transition-colors text-sm shadow-sm"
-              >
-                <span className="material-symbols-outlined text-[18px]">add</span> {t('Add Another Item')}
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-md">
-              {items.map((item, idx) => (
-                <div key={idx} className="flex flex-col gap-md bg-white p-lg rounded-xl border border-outline-variant shadow-sm relative transition-all hover:shadow-md">
-                  
-                  {items.length > 1 && (
-                    <button onClick={() => handleRemoveItem(idx)} className="absolute right-4 top-4 text-error border border-error/30 bg-error/5 hover:bg-error/10 p-1.5 rounded-lg flex items-center justify-center transition-colors shadow-sm">
-                      <span className="material-symbols-outlined text-[18px]">delete</span>
-                    </button>
-                  )}
-                  
-                  {/* Primary Row */}
-                  <div className={`flex flex-wrap gap-md items-end w-full ${items.length > 1 ? 'pr-12' : ''}`}>
-                    {(txnType === 'SALE' || txnType === 'REPAIR_OUT' || txnType === 'REPAIR_IN' || txnType === 'CERTIFICATION' || txnType === 'CERTIFICATION_IN') && (
-                      <div className="flex-1 min-w-[240px]">
-                        <label className="text-xs font-bold text-on-surface-variant mb-1 block">Select Existing Diamond</label>
-                        <SearchableSelect
-                          options={diamondOptions}
-                          value={item.existingDiamondId}
-                          onChange={(val) => handleItemChange(idx, 'existingDiamondId', val)}
-                          placeholder="Search diamond..."
-                          searchPlaceholder="Type stone ID, shape, carat..."
-                          icon="diamond"
-                        />
-                      </div>
-                    )}
-                    
-                    <div className="flex-1 min-w-[150px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block flex items-center">Name</label>
-                      <input type="text" value={item.name || ''} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'name', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md focus:border-primary focus:ring-1 text-sm font-medium ${item.existingDiamondId ? 'bg-gray-100' : ''}`} placeholder="Item Name" />
-                    </div>
-                    
-                    <div className="w-[100px]">
-                      <label className="text-xs font-bold text-error mb-1 block flex items-center">Carat <span className="ml-1">*</span></label>
-                      <input type="number" value={item.carat} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'carat', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md focus:border-primary focus:ring-1 text-sm font-medium ${item.existingDiamondId ? 'bg-gray-100' : ''}`} placeholder="0.00" />
-                    </div>
-                    <div className="flex-1 min-w-[120px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Category</label>
-                      <select value={item.category} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'category', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                        <option value="SINGLE">Single</option>
-                        <option value="MIX">Mix / Parcel</option>
-                      </select>
-                    </div>
-                    {item.category === 'MIX' && (
-                      <>
-                        <div className="flex-1 min-w-[120px]">
-                          <label className="text-xs font-bold text-on-surface-variant mb-1 block">Cert. State</label>
-                          <select value={item.certificationState} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'certificationState', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                            <option value="">Select...</option>
-                            <option value="CERTIFIED">Certified</option>
-                            <option value="NON_CERTIFIED">Non-Certified</option>
-                          </select>
-                        </div>
-                        {item.certificationState && (
-                          <div className="flex-1 min-w-[120px]">
-                            <label className="text-xs font-bold text-on-surface-variant mb-1 block">Polish State</label>
-                            <select value={item.polishState} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'polishState', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                              <option value="">Select...</option>
-                              <option value="ROUGH">Rough</option>
-                              <option value="POLISHED">Polished</option>
-                            </select>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <div className="flex-1 min-w-[100px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Shape</label>
-                      <select value={item.shape} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'shape', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                        {['Round', 'Princess', 'Cushion', 'Emerald', 'Oval', 'Pear'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[80px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Color</label>
-                      <select value={item.color} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'color', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                        {['D', 'E', 'F', 'G', 'H', 'I', 'J'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[80px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Clarity</label>
-                      <select value={item.clarity} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'clarity', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                        {['FL', 'IF', 'VVS1', 'VVS2', 'VS1', 'VS2', 'SI1'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[80px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Cut</label>
-                      <select value={item.cut} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'cut', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : 'bg-white'}`}>
-                        {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[80px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Sym.</label>
-                      <select value={item.symmetry} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'symmetry', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md bg-white text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : ''}`}>
-                        {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[80px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Pol.</label>
-                      <select value={item.polish} disabled={!!item.existingDiamondId} onChange={e => handleItemChange(idx, 'polish', e.target.value)} className={`w-full p-2 border border-outline-variant rounded-md bg-white text-sm focus:border-primary focus:ring-1 ${item.existingDiamondId ? 'bg-gray-100' : ''}`}>
-                        {['EX', 'VG', 'G', 'F', 'P'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[100px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Rate / Ct (₹)</label>
-                      <input type="number" value={item.ratePerCarat} onChange={e => handleItemChange(idx, 'ratePerCarat', e.target.value)} className="w-full p-2 border border-outline-variant rounded-md focus:border-primary focus:ring-1 text-sm font-medium" placeholder="0.00" />
-                    </div>
-                    <div className="flex-1 min-w-[100px]">
-                      <label className="text-xs font-bold text-on-surface-variant mb-1 block">Total Value (₹)</label>
-                      <input type="number" value={item.totalValue} readOnly className="w-full p-2 border border-outline-variant rounded-md bg-[#FAFAFA] font-bold text-primary text-sm shadow-inner" placeholder="0.00" />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col md:flex-row gap-lg w-full mt-2">
-                    {/* Inline Certificate Linking */}
-                    {(txnType === 'PURCHASE' || txnType === 'CERTIFICATION' || txnType === 'CERTIFICATION_IN') && (
-                      <div className="flex-1 border border-[#A5D6A7] bg-[#F1F8E9]/60 rounded-xl p-md flex flex-col gap-md transition-colors hover:bg-[#F1F8E9]">
-                        <div className="flex items-center justify-between">
-                           <div className="flex items-center gap-xs text-[#2E7D32]">
-                             <span className="material-symbols-outlined text-[18px]">verified_user</span>
-                             <span className="font-bold text-sm">Certification {txnType === 'CERTIFICATION_IN' ? 'Receipt' : '(Optional)'}</span>
-                           </div>
-                           <span className="material-symbols-outlined text-[18px] text-[#A5D6A7]">expand_less</span>
-                        </div>
-                        <div className="flex flex-wrap gap-md items-end w-full">
-                          {txnType === 'CERTIFICATION_IN' ? (
-                            <div className="flex-1 min-w-[150px]">
-                              <label className="text-xs font-bold text-on-surface-variant mb-1 block">Pending Certificate</label>
-                              <select value={item.linkedCertificateId} onChange={e => handleItemChange(idx, 'linkedCertificateId', e.target.value)} className="w-full p-2 border border-[#C8E6C9] rounded-md bg-white text-sm focus:border-[#4CAF50] focus:ring-1">
-                                <option value="">Select Pending...</option>
-                                {allCerts.filter(c => c.diamondItemId === item.existingDiamondId && c.certificateStatus === 'PENDING').map(cert => (
-                                  <option key={cert.id} value={cert.id}>{cert.labType} - {cert.name || 'Unnamed'}</option>
-                                ))}
-                              </select>
-                            </div>
-                          ) : (
-                            <>
-                              {unlinkedCerts.length > 0 && txnType === 'PURCHASE' && (
-                                <div className="flex-1 min-w-[120px]">
-                                  <label className="text-xs font-bold text-on-surface-variant mb-1 block">Existing Cert</label>
-                                  <select value={item.linkedCertificateId} onChange={e => handleItemChange(idx, 'linkedCertificateId', e.target.value)} className="w-full p-2 border border-[#C8E6C9] rounded-md bg-white text-sm focus:border-[#4CAF50] focus:ring-1">
-                                    <option value="">None</option>
-                                    {unlinkedCerts.map(cert => (
-                                      <option key={cert.certificateId} value={cert.certificateId}>{cert.reportNumber || cert.certificateId}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-[100px]">
-                                <label className="text-xs font-bold text-on-surface-variant mb-1 block">Cert. Lab</label>
-                                <select value={item.labType} onChange={e => handleItemChange(idx, 'labType', e.target.value)} className="w-full p-2 border border-[#C8E6C9] rounded-md bg-white text-sm focus:border-[#4CAF50] focus:ring-1">
-                                  <option value="">None</option>
-                                  {['GIA', 'IGI', 'HRD', 'OTHER'].map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                              </div>
-                            </>
-                          )}
-                          
-                          {(item.labType || txnType === 'CERTIFICATION_IN') && (
-                            <>
-                              {txnType !== 'CERTIFICATION_IN' && (
-                                <div className="flex-1 min-w-[150px]">
-                                  <label className="text-xs font-bold text-on-surface-variant mb-1 block">Report / Notes</label>
-                                  <input type="text" value={item.internalNotes} onChange={e => handleItemChange(idx, 'internalNotes', e.target.value)} className="w-full p-2 border border-[#C8E6C9] rounded-md text-sm focus:border-[#4CAF50] focus:ring-1" placeholder="Report # or notes..." />
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-[100px]">
-                                <label className="text-xs font-bold text-on-surface-variant mb-1 block">{txnType === 'CERTIFICATION_IN' ? 'Final Cost (₹)' : 'Est. Cost (₹)'}</label>
-                                <div className="relative">
-                                  <span className="absolute left-2.5 top-2 text-on-surface-variant text-sm">₹</span>
-                                  <input type="number" value={item.certCost} onChange={e => handleItemChange(idx, 'certCost', e.target.value)} className="w-full pl-6 pr-2 py-2 border border-[#C8E6C9] rounded-md text-sm focus:border-[#4CAF50] focus:ring-1" placeholder="0.00" />
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Inline Repair Linking */}
-                    {(txnType === 'PURCHASE' || txnType === 'REPAIR_OUT' || txnType === 'REPAIR_IN') && (
-                      <div className="flex-1 border border-[#CE93D8] bg-[#F3E5F5]/60 rounded-xl p-md flex flex-col gap-md transition-colors hover:bg-[#F3E5F5]">
-                        <div className="flex items-center justify-between">
-                           <div className="flex items-center gap-xs text-[#6A1B9A]">
-                             <span className="material-symbols-outlined text-[18px]">build</span>
-                             <span className="font-bold text-sm">Repair {txnType === 'REPAIR_IN' ? 'Receipt' : '(Optional)'}</span>
-                           </div>
-                           <span className="material-symbols-outlined text-[18px] text-[#CE93D8]">expand_less</span>
-                        </div>
-                        <div className="flex flex-wrap gap-md items-end w-full">
-                          {txnType === 'REPAIR_IN' ? (
-                            <div className="flex-1 min-w-[150px]">
-                              <label className="text-xs font-bold text-on-surface-variant mb-1 block">Pending Repair</label>
-                              <select value={item.linkedRepairId} onChange={e => handleItemChange(idx, 'linkedRepairId', e.target.value)} className="w-full p-2 border border-[#E1BEE7] rounded-md bg-white text-sm focus:border-[#9C27B0] focus:ring-1">
-                                <option value="">Select Pending...</option>
-                                {allRepairs.filter(r => r.diamondItemId === item.existingDiamondId && (r.status === 'PENDING' || r.status === 'IN_PROGRESS')).map(rep => (
-                                  <option key={rep.id} value={rep.id}>{rep.repairType} - {rep.name || 'Unnamed'}</option>
-                                ))}
-                              </select>
-                            </div>
-                          ) : (
-                            <div className="flex-1 min-w-[120px]">
-                              <label className="text-xs font-bold text-on-surface-variant mb-1 block">Repair Type</label>
-                              <select value={item.repairType} onChange={e => handleItemChange(idx, 'repairType', e.target.value)} className="w-full p-2 border border-[#E1BEE7] rounded-md bg-white text-sm focus:border-[#9C27B0] focus:ring-1">
-                                <option value="">No Repair</option>
-                                {['Polishing', 'Cutting', 'Boiling', 'Symmetry', 'Other'].map(s => <option key={s} value={s}>{s}</option>)}
-                              </select>
-                            </div>
-                          )}
-                          
-                          {(item.repairType || txnType === 'REPAIR_IN') && (
-                            <>
-                              {txnType !== 'REPAIR_IN' && (
-                                <div className="flex-1 min-w-[150px]">
-                                  <label className="text-xs font-bold text-on-surface-variant mb-1 block">Vendor</label>
-                                  <select value={item.repairVendorId} onChange={e => handleItemChange(idx, 'repairVendorId', e.target.value)} className="w-full p-2 border border-[#E1BEE7] rounded-md bg-white text-sm focus:border-[#9C27B0] focus:ring-1">
-                                    <option value="">Select Vendor</option>
-                                    {parties.filter(p => p.type === 'WORKSHOP' || p.partyName?.toUpperCase().includes('WORKSHOP')).map(p => (
-                                      <option key={p.partyId} value={p.partyId}>{p.partyName}</option>
-                                    ))}
-                                    {parties.map(p => (
-                                      <option key={p.partyId} value={p.partyId}>{p.partyName}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-[100px]">
-                                <label className="text-xs font-bold text-on-surface-variant mb-1 block">{txnType === 'REPAIR_IN' ? 'Final Cost (₹)' : 'Est. Cost (₹)'}</label>
-                                <div className="relative">
-                                  <span className="absolute left-2.5 top-2 text-on-surface-variant text-sm">₹</span>
-                                  <input type="number" value={item.repairCost} onChange={e => handleItemChange(idx, 'repairCost', e.target.value)} className="w-full pl-6 pr-2 py-2 border border-[#E1BEE7] rounded-md text-sm focus:border-[#9C27B0] focus:ring-1" placeholder="0.00" />
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <button 
-              onClick={handleAddItem}
-              className="w-full py-3 border border-dashed border-[#1976D2]/50 text-[#1976D2] bg-white hover:bg-[#E3F2FD]/50 rounded-xl flex items-center justify-center gap-xs font-bold transition-all mt-2"
-            >
-              <span className="material-symbols-outlined text-[20px]">add_circle</span> Add Another Item
-            </button>
-          </div>
+          <TransactionItemsSection
+            txnType={txnType}
+            items={items}
+            handleAddItem={handleAddItem}
+            handleRemoveItem={handleRemoveItem}
+            handleItemChange={handleItemChange}
+            diamondOptions={diamondOptions}
+            allCerts={allCerts}
+            unlinkedCerts={unlinkedCerts}
+            allRepairs={allRepairs}
+            parties={parties}
+          />
           
           {/* Remarks Section */}
           <TransactionRemarks remarks={remarks} setRemarks={setRemarks} />
         </div>
 
         {/* Footer */}
-        <div className="px-xl py-lg border-t border-outline-variant bg-[#FAFAFA] rounded-b-2xl flex items-center justify-between shrink-0 flex-wrap gap-md">
-          <div className="flex items-center gap-md">
-            {/* Total Items */}
-            <div className="flex items-center gap-md bg-white border border-[#E3F2FD] px-md py-2 rounded-xl shadow-sm min-w-[140px]">
-              <span className="material-symbols-outlined text-[#1976D2] text-[24px]">diamond</span>
-              <div className="flex flex-col">
-                <span className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider">Total Items</span>
-                <span className="text-base font-extrabold text-on-surface">{items.length}</span>
-              </div>
-            </div>
-            {/* Total Carat */}
-            <div className="flex items-center gap-md bg-white border border-[#F3E5F5] px-md py-2 rounded-xl shadow-sm min-w-[140px]">
-              <span className="material-symbols-outlined text-[#8E24AA] text-[24px]">scale</span>
-              <div className="flex flex-col">
-                <span className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider">Total Carat</span>
-                <span className="text-base font-extrabold text-on-surface">{items.reduce((acc, curr) => acc + (parseFloat(curr.carat) || 0), 0).toFixed(2)} ct</span>
-              </div>
-            </div>
-            {/* Est. Total Value */}
-            <div className="flex items-center gap-md bg-white border border-[#E8F5E9] px-md py-2 rounded-xl shadow-sm min-w-[140px]">
-              <span className="material-symbols-outlined text-[#2E7D32] text-[24px]">payments</span>
-              <div className="flex flex-col">
-                <span className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider">Est. Total Value</span>
-                <span className="text-base font-extrabold text-on-surface">₹ {items.reduce((acc, curr) => acc + (parseFloat(curr.totalValue) || 0), 0).toFixed(2)}</span>
-              </div>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-md ml-auto">
-            <div className="flex-1" />
-            
-            <button
-              onClick={onClose}
-              disabled={saving}
-              className="px-lg py-2.5 font-bold text-on-surface bg-white border border-outline-variant hover:bg-surface-container rounded-lg transition-colors flex items-center gap-xs shadow-sm disabled:opacity-50"
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span> {t('Cancel')}
-            </button>
-            <button
-              onClick={async () => {
-                await forceServerSync();
-                await handleSubmit();
-              }}
-              disabled={saving}
-              className="px-xl py-2.5 font-bold bg-[#3949AB] hover:bg-[#283593] text-white rounded-lg transition-colors flex items-center gap-sm disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-            >
-              <span className="material-symbols-outlined text-[18px]">lock</span>
-              {saving ? 'Saving...' : t('Save Transaction')}
-              {!saving && <span className="material-symbols-outlined text-[20px]">arrow_forward</span>}
-            </button>
-          </div>
-        </div>
+        <TransactionFooter
+          items={items}
+          saving={saving}
+          onClose={onClose}
+          onSave={async () => {
+            await forceServerSync();
+            await handleSubmit();
+          }}
+        />
       </div>
     </div>
   );

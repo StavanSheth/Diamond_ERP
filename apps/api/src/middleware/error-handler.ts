@@ -11,6 +11,11 @@ import {
   ConflictError,
   RateLimitError,
   DatabaseError,
+  ConcurrencyConflictError,
+  IdempotencyConflictError,
+  BusinessRuleError,
+  StorageError,
+  DatabaseUnavailableError,
 } from '../errors';
 
 // Re-export error classes for backward compatibility
@@ -23,6 +28,11 @@ export {
   ConflictError,
   RateLimitError,
   DatabaseError,
+  ConcurrencyConflictError,
+  IdempotencyConflictError,
+  BusinessRuleError,
+  StorageError,
+  DatabaseUnavailableError,
 };
 
 /**
@@ -51,6 +61,13 @@ export function errorHandler(
     if (err instanceof ConflictError) {
       if (err.currentVersion !== undefined) body.currentVersion = err.currentVersion;
       if (err.clientVersion !== undefined) body.clientVersion = err.clientVersion;
+    }
+    if (err instanceof ConcurrencyConflictError) {
+      if (err.currentVersion !== undefined) body.currentVersion = err.currentVersion;
+      if (err.clientVersion !== undefined) body.clientVersion = err.clientVersion;
+    }
+    if (err instanceof IdempotencyConflictError) {
+      if (err.idempotencyKey !== undefined) body.idempotencyKey = err.idempotencyKey;
     }
     res.status(err.statusCode).json(body);
     return;

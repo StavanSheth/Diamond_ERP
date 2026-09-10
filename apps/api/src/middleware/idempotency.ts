@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
-import prisma, { getActiveProfile } from '../infrastructure/database/prisma';
+import prisma, { getActiveProfileOrDefault } from '../infrastructure/database/prisma';
 import { logger } from '../infrastructure/logging';
 import { AuthenticatedRequest } from './auth';
 
@@ -53,7 +53,7 @@ export async function idempotencyMiddleware(
 
   const authReq = req as AuthenticatedRequest;
   const userId = authReq.user?.id || 'anonymous';
-  const profileId = getActiveProfile();
+  const profileId = getActiveProfileOrDefault();
   const requestHash = computeRequestHash(req.body);
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24-hour retention
 
@@ -95,25 +95,49 @@ export async function idempotencyMiddleware(
       });
 
       if (existing) {
-        // If expired, remove and allow retry
+        // Finding 16: Atomic handling of expired idempotency keys
         if (existing.expiresAt <= new Date()) {
-          await prisma.idempotencyKey.delete({
+          const casExpired = await prisma.idempotencyKey.updateMany({
             where: {
-              userId_profileId_key: { userId, profileId, key },
+              userId,
+              profileId,
+              key,
+              expiresAt: { lte: new Date() },
             },
-          }).catch(() => null);
-          return next();
+            data: {
+              status: 'PENDING',
+              requestHash,
+              expiresAt,
+              method: req.method,
+              path: req.path,
+              statusCode: null,
+              responseBody: null,
+            },
+          });
+
+          if (casExpired.count === 0) {
+            // Another concurrent request claimed this expired key
+            res.status(409).json({
+              success: false,
+              error: 'A request with this idempotency key is currently being processed. Please retry shortly.',
+              code: 'IDEMPOTENCY_KEY_LOCKED',
+            });
+            return;
+          }
+
+          reservationSuccess = true;
         }
 
-        // Verify request method and path match original request
-        if (existing.method !== req.method || existing.path !== req.path) {
-          res.status(422).json({
-            success: false,
-            error: 'Idempotency key reuse across different HTTP methods or endpoints is prohibited.',
-            code: 'IDEMPOTENCY_KEY_MISMATCH',
-          });
-          return;
-        }
+        if (!reservationSuccess) {
+          // Verify request method and path match original request
+          if (existing.method !== req.method || existing.path !== req.path) {
+            res.status(422).json({
+              success: false,
+              error: 'Idempotency key reuse across different HTTP methods or endpoints is prohibited.',
+              code: 'IDEMPOTENCY_KEY_MISMATCH',
+            });
+            return;
+          }
 
         // Verify request payload hash matches original request
         if (existing.requestHash && existing.requestHash !== requestHash) {
@@ -144,27 +168,59 @@ export async function idempotencyMiddleware(
           return;
         }
 
-        // If FAILED: allow retry by updating status back to PENDING
+        // Finding 15: Atomic CAS for FAILED -> PENDING to prevent concurrent double-execution
         if (existing.status === 'FAILED') {
-          await prisma.idempotencyKey.update({
+          const casFailed = await prisma.idempotencyKey.updateMany({
             where: {
-              userId_profileId_key: { userId, profileId, key },
+              userId,
+              profileId,
+              key,
+              status: 'FAILED',
             },
             data: {
               status: 'PENDING',
               requestHash,
               expiresAt,
             },
-          }).catch(() => null);
+          });
+
+          if (casFailed.count === 0) {
+            // Another concurrent request already claimed the retry
+            res.status(409).json({
+              success: false,
+              error: 'A retry for this idempotency key is currently being processed. Please retry shortly.',
+              code: 'IDEMPOTENCY_KEY_LOCKED',
+            });
+            return;
+          }
         }
       }
     }
+  }
 
     // 3. We hold the PENDING reservation. Intercept res.json to atomically finalize the record.
     const originalJson = res.json.bind(res);
     res.json = function (body: any): Response {
       const statusCode = res.statusCode;
       const isSuccess = statusCode >= 200 && statusCode < 300;
+
+      // Response compaction (Finding 18): Avoid storing unbounded JSON in SQLite
+      let responseBodyString: string;
+      try {
+        const serialized = JSON.stringify(body);
+        if (serialized.length > 64 * 1024) {
+          responseBodyString = JSON.stringify({
+            success: body?.success ?? true,
+            compacted: true,
+            message: body?.message || 'Response compacted for idempotency cache (>64KB)',
+            data: body?.data?.id ? { id: body.data.id } : undefined,
+          });
+        } else {
+          responseBodyString = serialized;
+        }
+      } catch {
+        responseBodyString = JSON.stringify({ success: isSuccess });
+      }
 
       // Atomically update DB record before flushing response to client
       (async () => {
@@ -176,7 +232,7 @@ export async function idempotencyMiddleware(
             data: {
               status: isSuccess ? 'SUCCESS' : 'FAILED',
               statusCode,
-              responseBody: JSON.stringify(body),
+              responseBody: responseBodyString,
             },
           });
         } catch (err: any) {
@@ -194,4 +250,25 @@ export async function idempotencyMiddleware(
     logger.error(`[Idempotency] Unexpected error processing key "${key}": ${error}`);
     next();
   }
+}
+
+/**
+ * Middleware factory requiring an explicit Idempotency-Key header on mutating HTTP requests.
+ * Finding 14: Financial mutations must require idempotency keys to prevent duplicate posting.
+ */
+export function requireIdempotency(options?: { message?: string }): (req: Request, res: Response, next: NextFunction) => void {
+  return function requireIdempotencyHandler(req: Request, res: Response, next: NextFunction): void {
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      const rawKey = req.header('idempotency-key') || req.header('x-idempotency-key');
+      if (!rawKey || rawKey.trim() === '') {
+        res.status(400).json({
+          success: false,
+          error: options?.message || 'Idempotency-Key header is required for this operation.',
+          code: 'IDEMPOTENCY_KEY_REQUIRED',
+        });
+        return;
+      }
+    }
+    next();
+  };
 }

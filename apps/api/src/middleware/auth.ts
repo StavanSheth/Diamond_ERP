@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { authService, AuthenticatedUser, ROLES } from '../modules/auth/auth.service';
 import { RequestWithId } from './request-id';
 import { systemPrisma, getAllProfiles } from '../infrastructure/database/prisma';
+import { logger } from '../infrastructure/logging';
 
 /**
  * Extends Express Request with authenticated user information.
@@ -148,8 +149,8 @@ export async function optionalAuthenticate(
           profiles: authorizedProfiles,
         };
       }
-    } catch {
-      // Ignore DB errors for optional auth
+    } catch (err: any) {
+      logger.warn(`[optionalAuthenticate] Ignored error during optional auth: ${err?.message || err}`);
     }
   }
 

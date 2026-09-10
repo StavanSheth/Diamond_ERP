@@ -191,7 +191,19 @@ export async function hashPin(pin: string, saltInput?: string): Promise<string> 
 }
 
 /**
- * Verifies an input PIN against a stored PBKDF2 hash (with legacy SHA-256 fallback).
+ * Constant-time comparison between two strings to prevent timing attacks (Finding 52).
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+/**
+ * Verifies an input PIN against a stored PBKDF2 hash using constant-time comparison (Finding 52).
  */
 export async function verifyPin(pin: string, storedHash: string): Promise<boolean> {
   if (!pin || !storedHash) return false;
@@ -200,7 +212,7 @@ export async function verifyPin(pin: string, storedHash: string): Promise<boolea
   if (parts.length === 2) {
     const [saltB64] = parts;
     const computed = await hashPin(pin, saltB64);
-    return computed === storedHash;
+    return constantTimeEqual(computed, storedHash);
   }
 
   // Legacy unsalted fallback for existing stored screen lock hashes
@@ -211,7 +223,7 @@ export async function verifyPin(pin: string, storedHash: string): Promise<boolea
     const legacyHex = Array.from(new Uint8Array(legacyBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
-    return legacyHex === storedHash;
+    return constantTimeEqual(legacyHex, storedHash);
   } catch {
     return false;
   }

@@ -159,20 +159,39 @@ export const AppLockProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [deviceCredentialId, isPlatformAuthSupported]);
 
+  const [pinFailedAttempts, setPinFailedAttempts] = useState<number>(0);
+  const [pinLockoutUntil, setPinLockoutUntil] = useState<number | null>(null);
+
   const unlockWithPin = useCallback(async (pin: string): Promise<{ success: boolean; error?: string }> => {
     if (!backupPinHash) {
       return { success: false, error: 'No backup PIN has been configured.' };
     }
+
+    if (pinLockoutUntil && Date.now() < pinLockoutUntil) {
+      const remainingSec = Math.ceil((pinLockoutUntil - Date.now()) / 1000);
+      return { success: false, error: `Too many failed attempts. Screen locked for ${remainingSec}s.` };
+    }
+
     const isValid = await verifyPin(pin, backupPinHash);
     if (isValid) {
+      setPinFailedAttempts(0);
+      setPinLockoutUntil(null);
       setIsLocked(false);
       localStorage.removeItem(STORAGE_KEYS.LOCKED);
       lastActiveRef.current = Date.now();
       localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
       return { success: true };
     }
-    return { success: false, error: 'Incorrect PIN. Please try again.' };
-  }, [backupPinHash]);
+
+    const nextAttempts = pinFailedAttempts + 1;
+    setPinFailedAttempts(nextAttempts);
+    if (nextAttempts >= 5) {
+      const lockoutTime = Date.now() + 60000; // 60s cooldown
+      setPinLockoutUntil(lockoutTime);
+      return { success: false, error: 'Too many failed PIN attempts. Locked out for 60 seconds.' };
+    }
+    return { success: false, error: `Incorrect PIN. ${5 - nextAttempts} attempts remaining before temporary lockout.` };
+  }, [backupPinHash, pinFailedAttempts, pinLockoutUntil]);
 
   const enableAppLock = useCallback(async (options: {
     timeoutMinutes?: number;

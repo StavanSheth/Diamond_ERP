@@ -6,13 +6,38 @@ import { logger } from '../../infrastructure/logging';
 import { AuthenticationError, AuthorizationError, ConflictError, ValidationError } from '../../errors';
 
 // ── Configuration ───────────────────────────────────────────────────────
-let JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
-const BCRYPT_ROUNDS = 12;
+export const AUTH_CONFIG = {
+  ACCESS_TOKEN_TTL: process.env.JWT_EXPIRES_IN || '24h',
+  SESSION_TTL_MS: 24 * 60 * 60 * 1000, // 24 hours
+  BCRYPT_ROUNDS: 12,
+  MIN_PASSWORD_LENGTH: 12,
+  MAX_FAILED_LOGIN_ATTEMPTS: 5,
+  LOCKOUT_DURATION_MS: 15 * 60 * 1000, // 15 minutes
+};
 
-// In non-production testing, allow a safe fallback secret if not set
-if (!JWT_SECRET && process.env.NODE_ENV !== 'production') {
-  JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long-diamond-erp';
+/**
+ * Resolves the JWT signing secret according to strict environment rules.
+ * Finding 6.1: Production MUST provide JWT_SECRET (>= 32 chars).
+ * Non-production environments use explicit fallback secrets.
+ */
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (secret) {
+    if (process.env.NODE_ENV === 'production' && secret.length < 32) {
+      throw new Error('FATAL: JWT_SECRET must be at least 32 characters in production.');
+    }
+    return secret;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL: JWT_SECRET environment variable is missing. ' +
+      'Production server cannot start without a secure JWT signing secret.'
+    );
+  }
+  if (process.env.NODE_ENV === 'test') {
+    return process.env.TEST_JWT_SECRET || 'test-jwt-secret-at-least-32-chars-long-diamond-erp';
+  }
+  return process.env.DEVELOPMENT_JWT_SECRET || 'dev-jwt-secret-at-least-32-chars-long-diamond-erp';
 }
 
 /**
@@ -29,9 +54,16 @@ export function validateAuthConfig(): void {
       );
     }
   } else if (!secret) {
-    logger.warn('JWT_SECRET not explicitly set in environment. Using development fallback secret.');
+    logger.warn('JWT_SECRET not explicitly set in environment. Using non-production fallback secret.');
   }
 }
+
+// ── In-Memory Account Brute-Force Tracker (Finding 10) ───────────────────
+interface AccountAttemptRecord {
+  failures: number;
+  lockoutUntil?: Date;
+}
+const accountAttempts = new Map<string, AccountAttemptRecord>();
 
 // ── Types ───────────────────────────────────────────────────────────────
 export interface AuthTokenPayload {
@@ -88,7 +120,7 @@ export class AuthService {
    * Hash a plaintext password with bcrypt.
    */
   async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, BCRYPT_ROUNDS);
+    return bcrypt.hash(password, AUTH_CONFIG.BCRYPT_ROUNDS);
   }
 
   /**
@@ -102,12 +134,9 @@ export class AuthService {
    * Generate a JWT access token.
    */
   generateToken(payload: AuthTokenPayload): string {
-    const secret = JWT_SECRET || process.env.JWT_SECRET;
-    if (!secret) {
-      throw new Error('JWT_SECRET is not configured');
-    }
+    const secret = getJwtSecret();
     return jwt.sign(payload, secret, {
-      expiresIn: JWT_EXPIRES_IN,
+      expiresIn: AUTH_CONFIG.ACCESS_TOKEN_TTL,
     } as jwt.SignOptions);
   }
 
@@ -116,16 +145,26 @@ export class AuthService {
    * Returns null if invalid or expired.
    */
   verifyToken(token: string): AuthTokenPayload | null {
-    const secret = JWT_SECRET || process.env.JWT_SECRET;
-    if (!secret) {
-      throw new Error('JWT_SECRET is not configured');
-    }
+    const secret = getJwtSecret();
     try {
       const decoded = jwt.verify(token, secret) as AuthTokenPayload;
       return decoded;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Records a failed login attempt for account-based brute force protection.
+   */
+  private recordFailedAttempt(username: string): void {
+    const record = accountAttempts.get(username) || { failures: 0 };
+    record.failures += 1;
+    if (record.failures >= AUTH_CONFIG.MAX_FAILED_LOGIN_ATTEMPTS) {
+      record.lockoutUntil = new Date(Date.now() + AUTH_CONFIG.LOCKOUT_DURATION_MS);
+      logger.warn(`Account "${username}" temporarily locked out due to ${record.failures} consecutive failures.`);
+    }
+    accountAttempts.set(username, record);
   }
 
   /**
@@ -139,6 +178,14 @@ export class AuthService {
   ): Promise<LoginResult> {
     const normalizedUsername = username.toLowerCase().trim();
 
+    // Account-level brute-force check (Finding 10)
+    const attemptRecord = accountAttempts.get(normalizedUsername);
+    if (attemptRecord?.lockoutUntil && attemptRecord.lockoutUntil > new Date()) {
+      const remainingMinutes = Math.ceil((attemptRecord.lockoutUntil.getTime() - Date.now()) / 60000);
+      logger.warn(`Login rejected: account "${normalizedUsername}" is locked for ${remainingMinutes} more minute(s).`);
+      throw new AuthenticationError('Account is temporarily locked due to repeated failed login attempts. Please try again later.');
+    }
+
     // Query from system/primary database
     const user = await systemPrisma.user.findUnique({
       where: { username: normalizedUsername },
@@ -150,15 +197,20 @@ export class AuthService {
     });
 
     if (!user || !user.isActive) {
+      this.recordFailedAttempt(normalizedUsername);
       logger.warn(`Failed login attempt: user not found or inactive`);
       throw new AuthenticationError('Invalid username or password');
     }
 
     const isValid = await this.verifyPassword(password, user.passwordHash);
     if (!isValid) {
+      this.recordFailedAttempt(normalizedUsername);
       logger.warn(`Failed login attempt for account ID: ${user.id}`);
       throw new AuthenticationError('Invalid username or password');
     }
+
+    // Login succeeded: reset brute force failure counter
+    accountAttempts.delete(normalizedUsername);
 
     // Determine accessible profiles
     let accessibleProfiles: string[] = [];
@@ -176,7 +228,7 @@ export class AuthService {
     const tokenHash = hashToken(sessionSecret);
 
     // Persist session in database ATOMICALLY - if session creation fails, login MUST fail
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const expiresAt = new Date(Date.now() + AUTH_CONFIG.SESSION_TTL_MS);
     try {
       await systemPrisma.session.create({
         data: {
@@ -202,11 +254,15 @@ export class AuthService {
       sessionId,
     });
 
-    // Update last login timestamp
-    await systemPrisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-    }).catch(() => null);
+    // Update last login timestamp with explicit logging (Finding 8)
+    try {
+      await systemPrisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
+    } catch (updateErr: any) {
+      logger.warn(`Failed to record lastLoginAt for user ${user.id}: ${updateErr?.message || updateErr}`);
+    }
 
     logger.info(`User logged in: ${user.username} (role: ${user.role}, profiles: [${accessibleProfiles.join(', ')}])`);
 
@@ -237,8 +293,8 @@ export class AuthService {
       throw new ValidationError(`Invalid role: ${role}. Valid roles: ${Object.values(ROLES).join(', ')}`);
     }
 
-    if (password.length < 8) {
-      throw new ValidationError('Password must be at least 8 characters long');
+    if (password.length < AUTH_CONFIG.MIN_PASSWORD_LENGTH) {
+      throw new ValidationError(`Password must be at least ${AUTH_CONFIG.MIN_PASSWORD_LENGTH} characters long`);
     }
 
     const normalizedUsername = username.toLowerCase().trim();

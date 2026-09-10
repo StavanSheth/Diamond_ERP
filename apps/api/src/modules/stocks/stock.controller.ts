@@ -56,26 +56,63 @@ export class StockController {
           include: {
             ledgers: true,
             diamondItems: {
-              where: diamondWhere
+              where: diamondWhere,
+              select: {
+                carat: true,
+                currentValue: true,
+                certificateStatus: true,
+                polish: true,
+                status: true,
+                category: true,
+              }
             }
           }
         })
       ]);
       
       const mappedStocks = stocks.map(stock => {
-        const activeItems = stock.diamondItems.filter(i => i.status !== 'SOLD' && i.status !== 'WRITTEN_OFF');
-        const caratWeight = activeItems.reduce((sum, item) => sum + Number(item.carat), 0);
-        const totalValue = activeItems.reduce((sum, item) => sum + Number(item.currentValue), 0);
-        
-        const certifiedCount = stock.diamondItems.filter(i => i.certificateStatus === 'ISSUED').length;
-        const nonCertifiedCount = stock.diamondItems.filter(i => i.certificateStatus !== 'ISSUED').length;
-        const roughCount = stock.diamondItems.filter(i => i.polish === 'ROUGH').length;
-        const polishedCount = stock.diamondItems.filter(i => i.polish !== 'ROUGH' && i.polish !== null).length;
-        const repairCount = stock.diamondItems.filter(i => i.status === 'IN_REPAIR').length;
-        const soldCount = stock.diamondItems.filter(i => i.status === 'SOLD').length;
-        const singleCount = stock.diamondItems.filter(i => i.category === 'SINGLE').length;
-        const parcelCount = stock.diamondItems.filter(i => i.category === 'PARCEL').length;
-        const roughCategoryCount = stock.diamondItems.filter(i => i.category === 'ROUGH').length;
+        let activeCount = 0;
+        let caratWeight = 0;
+        let totalValue = 0;
+        let certifiedCount = 0;
+        let nonCertifiedCount = 0;
+        let roughCount = 0;
+        let polishedCount = 0;
+        let repairCount = 0;
+        let soldCount = 0;
+        let singleCount = 0;
+        let parcelCount = 0;
+        let roughCategoryCount = 0;
+
+        for (const item of stock.diamondItems) {
+          if (item.status !== 'SOLD' && item.status !== 'WRITTEN_OFF') {
+            activeCount++;
+            caratWeight += Number(item.carat);
+            totalValue += Number(item.currentValue);
+          }
+          if (item.certificateStatus === 'ISSUED') {
+            certifiedCount++;
+          } else {
+            nonCertifiedCount++;
+          }
+          if (item.polish === 'ROUGH') {
+            roughCount++;
+          } else if (item.polish !== null) {
+            polishedCount++;
+          }
+          if (item.status === 'IN_REPAIR') {
+            repairCount++;
+          } else if (item.status === 'SOLD') {
+            soldCount++;
+          }
+          if (item.category === 'SINGLE') {
+            singleCount++;
+          } else if (item.category === 'PARCEL') {
+            parcelCount++;
+          } else if (item.category === 'ROUGH') {
+            roughCategoryCount++;
+          }
+        }
         
         let stockStatus = 'ACTIVE';
         if (!stock.isActive) {
@@ -103,7 +140,7 @@ export class StockController {
           totalValue: totalValue,
           status: stockStatus,
           remarks: stock.description,
-          itemCount: activeItems.length,
+          itemCount: activeCount,
           certifiedCount,
           nonCertifiedCount,
           roughCount,

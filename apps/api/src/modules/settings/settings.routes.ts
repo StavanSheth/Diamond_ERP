@@ -36,6 +36,10 @@ export function createSettingsRouter(controller: SettingsController): Router {
   router.get('/profiles', authorize('profile.read'), controller.getProfiles);
   router.post('/profile', authorize('profile.switch'), controller.switchProfile);
 
+  // Database backup and SQLite WAL maintenance
+  router.post('/backup', authorize('database.export'), controller.backupDatabase);
+  router.post('/checkpoint', authorize('settings.update'), controller.checkpointWAL);
+
   // Factory reset: SUPER_ADMIN only + additional re-authentication in controller
   router.post('/factory-reset', requireRole('SUPER_ADMIN'), controller.factoryReset);
 

@@ -1,7 +1,8 @@
 import { Prisma, DiamondItem } from '@prisma/client';
 import prisma from '../../infrastructure/database/prisma';
 import { validateTransition } from '../../models/inventory-state-machine';
-import { ConflictError, NotFoundError, ValidationError } from '../../errors';
+import { validateTransactionTransition, isTransactionMutable } from '../../models/transaction-state-machine';
+import { ConflictError, NotFoundError, ValidationError, BusinessRuleError, ConcurrencyConflictError } from '../../errors';
 import { 
   TransactionType, 
   ItemEventType, 
@@ -529,13 +530,18 @@ class TransactionService {
 
       const isExistingItem = Boolean(item.diamondItemId || item.existingDiamondId);
       if (isExistingItem) {
-        // Optimistic concurrency locking to prevent double movement / double sale
+        // Optimistic concurrency locking to prevent double movement / double sale (Finding 23)
+        const diamondVersion = (existingDiamond as any).version || 1;
         const updated = await tx.diamondItem.updateMany({
           where: { 
             id: diamondItemId as string,
-            status: statusBefore
+            status: statusBefore,
+            version: diamondVersion,
           },
-          data: updateData
+          data: {
+            ...updateData,
+            version: { increment: 1 },
+          }
         });
 
         if (updated.count === 0) {
@@ -573,6 +579,17 @@ class TransactionService {
       });
     }
 
+    // Create AuditEvent in the same transaction boundary (Findings 73 & 74)
+    await tx.auditEvent.create({
+      data: {
+        entityType: 'TRANSACTION',
+        entityId: transaction.id,
+        eventType: `TRANSACTION_${transactionType}`,
+        description: `${transactionType} transaction ${transactionNo} created with ${items.length} item(s)`,
+        performedBy: createdBy || 'system',
+      }
+    });
+
     return await tx.transaction.findUnique({
       where: { id: transaction.id },
       include: { items: true, inventoryMovements: true, financialEntries: true }
@@ -607,13 +624,16 @@ class TransactionService {
       });
       if (!oldTxn) throw new Error('Transaction not found');
       
-      // Phase 10: Immutable posted transactions
+      // Phase 10 & Finding 22: Immutable posted / terminal transactions
       if (oldTxn.status === 'POSTED') {
-        throw new Error('Transaction is POSTED and immutable. Use a reversal transaction instead.');
+        throw new BusinessRuleError('Transaction is POSTED and immutable. Use a reversal transaction instead.');
+      }
+      if (!isTransactionMutable(oldTxn.status)) {
+        throw new BusinessRuleError(`Transaction in status "${oldTxn.status}" is immutable. Use a reversal transaction instead.`);
       }
 
       if (payload.expectedVersion !== undefined && oldTxn.version !== payload.expectedVersion) {
-        throw new ConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, payload.expectedVersion);
+        throw new ConcurrencyConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, payload.expectedVersion);
       }
 
       for (const item of oldTxn.items) {
@@ -682,13 +702,24 @@ class TransactionService {
     return await prisma.$transaction(async (tx) => {
       const oldTxn = await tx.transaction.findUnique({ where: { id } });
       if (!oldTxn) throw new NotFoundError('Transaction not found');
-      if (oldTxn.status === 'AUTHORIZED' || oldTxn.status === 'POSTED') {
-        throw new ConflictError('Transaction is already authorized');
+      const transition = validateTransactionTransition(oldTxn.status, 'AUTHORIZED');
+      if (!transition.valid) {
+        throw new ConflictError(transition.error || 'Transaction cannot be authorized in its current state');
       }
       
       if (expectedVersion !== undefined && oldTxn.version !== expectedVersion) {
-        throw new ConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, expectedVersion);
+        throw new ConcurrencyConflictError('Concurrency conflict: Transaction has been modified by another process.', oldTxn.version, expectedVersion);
       }
+
+      await tx.auditEvent.create({
+        data: {
+          entityType: 'TRANSACTION',
+          entityId: id,
+          eventType: 'TRANSACTION_AUTHORIZED',
+          description: `Transaction ${oldTxn.transactionNo} authorized. Reason: ${authorizationReason || 'None'}`,
+          performedBy: authorizedBy || 'system',
+        }
+      });
 
       return await tx.transaction.update({
         where: { id },

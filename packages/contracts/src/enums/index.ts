@@ -28,6 +28,15 @@ export enum TransactionType {
   TRANSFORMATION = 'TRANSFORMATION',
 }
 
+export enum TransactionStatus {
+  DRAFT = 'DRAFT',
+  PENDING_AUTHORIZATION = 'PENDING_AUTHORIZATION',
+  AUTHORIZED = 'AUTHORIZED',
+  POSTED = 'POSTED',
+  CANCELLED = 'CANCELLED',
+  REVERSED = 'REVERSED',
+}
+
 export enum TransactionItemAction {
   IN = 'IN',
   OUT = 'OUT',

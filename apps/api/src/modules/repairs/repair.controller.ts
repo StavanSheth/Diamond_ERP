@@ -3,6 +3,7 @@ import prisma from '../../infrastructure/database/prisma';
 import { repairService } from '../repairs/repair.service';
 import { buildDiamondWhereClause } from '../../utils/filter.utils';
 import { ValidationError, NotFoundError } from '../../errors';
+import { parseSafeNumber } from '@diamond-erp/shared-utils';
 
 export class RepairController {
   getRepairs = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -106,7 +107,7 @@ export class RepairController {
         vendorId,
         repairType || 'Polishing',
         null,
-        parseFloat(estCost || 0),
+        parseSafeNumber(estCost, { defaultValue: 0, fieldName: 'estCost' }),
         'SYSTEM'
       );
 
@@ -152,11 +153,11 @@ export class RepairController {
         if (normalizedStatus !== undefined) updateData.status = normalizedStatus;
         if (repairType !== undefined) updateData.repairType = repairType;
         if (vendorId !== undefined) updateData.vendorPartyId = vendorId;
-        if (estCost !== undefined) updateData.cost = parseFloat(estCost);
+        if (estCost !== undefined) updateData.cost = parseSafeNumber(estCost, { fieldName: 'estCost' });
         if (dueDate !== undefined) updateData.dateSent = new Date(dueDate);
         if (completedOn !== undefined) updateData.dateCompleted = new Date(completedOn);
         if (remarks !== undefined) updateData.remarks = remarks;
-        if (caratAfter !== undefined) updateData.caratAfter = parseFloat(caratAfter);
+        if (caratAfter !== undefined) updateData.caratAfter = parseSafeNumber(caratAfter, { fieldName: 'caratAfter' });
 
         const repairRecord = await tx.repair.update({
           where: { id },
@@ -167,7 +168,7 @@ export class RepairController {
         if (normalizedStatus === 'COMPLETED' || normalizedStatus === 'CANCELLED') {
           const diamondUpdateData: any = { status: 'AVAILABLE' };
           if (normalizedStatus === 'COMPLETED' && caratAfter) {
-            diamondUpdateData.carat = parseFloat(caratAfter);
+            diamondUpdateData.carat = parseSafeNumber(caratAfter, { fieldName: 'caratAfter' });
           }
 
           await tx.diamondItem.update({
@@ -183,7 +184,7 @@ export class RepairController {
                 movementType: 'REPAIR_IN',
                 toStockId: diamond?.stockId,
                 toLocationId: diamond?.locationId,
-                caratMoved: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
+                caratMoved: caratAfter ? parseSafeNumber(caratAfter, { fieldName: 'caratAfter' }) : currentRepair.caratBefore,
                 quantity: 1,
                 movementDate: completedOn ? new Date(completedOn) : new Date(),
                 reason: remarks || 'Completed repair returned to available inventory',
@@ -198,7 +199,7 @@ export class RepairController {
                 eventDate: completedOn ? new Date(completedOn) : new Date(),
                 partyId: currentRepair.vendorPartyId,
                 caratBefore: currentRepair.caratBefore,
-                caratAfter: caratAfter ? parseFloat(caratAfter) : currentRepair.caratBefore,
+                caratAfter: caratAfter ? parseSafeNumber(caratAfter, { fieldName: 'caratAfter' }) : currentRepair.caratBefore,
                 statusBefore: 'IN_REPAIR',
                 statusAfter: 'AVAILABLE',
                 createdBy: 'SYSTEM',

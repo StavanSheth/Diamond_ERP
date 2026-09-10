@@ -90,3 +90,46 @@ export function reconcileTotals(
 
   return { isValid: true, caratDifference: caratDiff, valueDifference: valueDiff };
 }
+
+/**
+ * Safe numeric parser that rejects NaN, Infinity, negative values (by default),
+ * and enforces finite bounds to eliminate injection of malformed numbers (Finding 61).
+ */
+export function parseSafeNumber(
+  val: unknown,
+  options: {
+    min?: number;
+    max?: number;
+    allowNegative?: boolean;
+    defaultValue?: number;
+    fieldName?: string;
+  } = {}
+): number {
+  const { min, max, allowNegative = false, defaultValue, fieldName = 'value' } = options;
+
+  if (val === undefined || val === null || val === '') {
+    if (defaultValue !== undefined) return defaultValue;
+    throw new Error(`Missing required numeric field: ${fieldName}`);
+  }
+
+  const num = typeof val === 'number' ? val : Number(val);
+
+  if (!Number.isFinite(num) || Number.isNaN(num)) {
+    throw new Error(`Invalid ${fieldName}: must be a finite number`);
+  }
+
+  if (!allowNegative && num < 0) {
+    throw new Error(`Invalid ${fieldName}: cannot be negative (got ${num})`);
+  }
+
+  if (min !== undefined && num < min) {
+    throw new Error(`Invalid ${fieldName}: must be at least ${min} (got ${num})`);
+  }
+
+  if (max !== undefined && num > max) {
+    throw new Error(`Invalid ${fieldName}: cannot exceed ${max} (got ${num})`);
+  }
+
+  return num;
+}
+
