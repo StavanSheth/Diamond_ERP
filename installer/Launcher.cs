@@ -89,7 +89,8 @@ namespace DiamondERP.App
             {
                 try
                 {
-                    File.AppendAllText(@"C:\Projects\ERP - Copy\Test\TestV3.0\app_crash.log",
+                    string crashLogPath = Path.Combine(_appDir ?? AppDomain.CurrentDomain.BaseDirectory, "app_crash.log");
+                    File.AppendAllText(crashLogPath,
                         DateTime.Now.ToString("o") + " [MainCatch] " + ex.ToString() + Environment.NewLine);
                 }
                 catch { }
@@ -245,7 +246,7 @@ namespace DiamondERP.App
                 try
                 {
                     // 1. Start API if not running
-                    if (!IsPortActive("http://localhost:3002/api/health") && !IsPortActive("http://localhost:3002/"))
+                    if (!IsPortActive("http://localhost:3002/health") && !IsPortActive("http://localhost:3002/api/health") && !IsPortActive("http://localhost:3002/"))
                     {
                         UpdateStatus("Starting backend database & API service...");
                         ProcessStartInfo apiInfo = new ProcessStartInfo
