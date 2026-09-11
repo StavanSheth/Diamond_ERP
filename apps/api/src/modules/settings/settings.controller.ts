@@ -645,23 +645,86 @@ export class SettingsController {
     }
   };
 
-  switchProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  createProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { profileName } = req.body;
-      if (!profileName) {
+      if (!profileName || typeof profileName !== 'string') {
         res.status(400).json({ success: false, message: 'Profile name is required' });
         return;
       }
       
-      const prismaObj = require('../../infrastructure/database/prisma');
-      const profiles = prismaObj.getAllProfiles ? prismaObj.getAllProfiles() : ['Stavan'];
-      
-      if (!profiles.includes(profileName)) {
-        res.status(404).json({ success: false, message: `Profile database for ${profileName} not found` });
+      const cleanName = profileName.trim();
+      if (!/^[a-zA-Z0-9_-]{1,50}$/.test(cleanName)) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Profile name must be 1-50 alphanumeric characters (hyphens and underscores allowed)' 
+        });
+        return;
+      }
+
+      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const canonical = registerProfile({ code: cleanName });
+      await getClientForProfileAsync(cleanName);
+
+      try {
+        await systemPrisma.profile.upsert({
+          where: { code: cleanName },
+          update: { isActive: true },
+          create: { code: cleanName, name: cleanName, dbPath: canonical.dbPath, isActive: true },
+        });
+      } catch {
+        // ignore
+      }
+
+      const allProfiles = getAllProfiles();
+      res.json({
+        success: true,
+        message: `Profile "${cleanName}" created successfully`,
+        data: { active: cleanName, profiles: allProfiles },
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  switchProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { profileName } = req.body;
+      if (!profileName || typeof profileName !== 'string') {
+        res.status(400).json({ success: false, message: 'Profile name is required' });
         return;
       }
       
-      res.json({ success: true, message: `Verified profile: ${profileName}` });
+      const cleanName = profileName.trim();
+      if (!/^[a-zA-Z0-9_-]{1,50}$/.test(cleanName)) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Profile name must be 1-50 alphanumeric characters (hyphens and underscores allowed)' 
+        });
+        return;
+      }
+
+      // Auto-register and provision profile database if not yet present
+      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const canonical = registerProfile({ code: cleanName });
+      await getClientForProfileAsync(cleanName);
+
+      try {
+        await systemPrisma.profile.upsert({
+          where: { code: cleanName },
+          update: { isActive: true },
+          create: { code: cleanName, name: cleanName, dbPath: canonical.dbPath, isActive: true },
+        });
+      } catch {
+        // ignore
+      }
+
+      const allProfiles = getAllProfiles();
+      res.json({ 
+        success: true, 
+        message: `Verified profile: ${cleanName}`,
+        data: { active: cleanName, profiles: allProfiles }
+      });
     } catch (error) {
       next(error);
     }

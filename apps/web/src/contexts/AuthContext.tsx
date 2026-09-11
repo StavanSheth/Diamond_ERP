@@ -113,6 +113,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const switchProfile = (newProfileId: string) => {
     sessionStore.setProfileId(newProfileId);
     setProfileIdState(newProfileId);
+    setUser((prev) => (prev ? {
+      ...prev,
+      profiles: Array.from(new Set([...(prev.profiles || []), newProfileId])),
+    } : prev));
   };
 
   const logout = async () => {

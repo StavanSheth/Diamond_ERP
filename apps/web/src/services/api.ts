@@ -85,6 +85,7 @@ export const api = {
   getSettings: settingsApi.getSettings,
   updateSettings: settingsApi.updateSettings,
   getProfiles: settingsApi.getProfiles,
+  createProfile: settingsApi.createProfile,
   switchProfile: settingsApi.switchProfile,
   factoryReset: settingsApi.factoryReset,
   exportExcel: settingsApi.exportExcel,

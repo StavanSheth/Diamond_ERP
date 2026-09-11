@@ -13,6 +13,10 @@ export const settingsApi = {
     return request('/api/settings/profiles');
   },
 
+  createProfile(profileName: string): Promise<any> {
+    return request('/api/settings/profiles', { method: 'POST', body: JSON.stringify({ profileName }) });
+  },
+
   switchProfile(profileName: string): Promise<any> {
     return request('/api/settings/profile', { method: 'POST', body: JSON.stringify({ profileName }) });
   },

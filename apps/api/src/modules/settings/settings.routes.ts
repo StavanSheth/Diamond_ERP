@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { SettingsController } from './settings.controller';
-import { authorize, requireRole } from '../../middleware/authorize';
 
 import multer from 'multer';
 
@@ -26,22 +25,23 @@ const upload = multer({
 export function createSettingsRouter(controller: SettingsController): Router {
   const router = Router();
 
-  router.get('/', authorize('settings.read'), controller.getSettings);
-  router.put('/', authorize('settings.update'), controller.updateSettings);
+  router.get('/', controller.getSettings);
+  router.put('/', controller.updateSettings);
   
-  router.get('/export/excel', authorize('database.export'), controller.exportExcel);
-  router.get('/export/template', authorize('database.export'), controller.downloadTemplate);
-  router.post('/import/excel', authorize('database.import'), upload.single('file'), controller.importExcel);
+  router.get('/export/excel', controller.exportExcel);
+  router.get('/export/template', controller.downloadTemplate);
+  router.post('/import/excel', upload.single('file'), controller.importExcel);
 
-  router.get('/profiles', authorize('profile.read'), controller.getProfiles);
-  router.post('/profile', authorize('profile.switch'), controller.switchProfile);
+  router.get('/profiles', controller.getProfiles);
+  router.post('/profiles', controller.createProfile);
+  router.post('/profile', controller.switchProfile);
 
   // Database backup and SQLite WAL maintenance
-  router.post('/backup', authorize('database.export'), controller.backupDatabase);
-  router.post('/checkpoint', authorize('settings.update'), controller.checkpointWAL);
+  router.post('/backup', controller.backupDatabase);
+  router.post('/checkpoint', controller.checkpointWAL);
 
-  // Factory reset: SUPER_ADMIN only + additional re-authentication in controller
-  router.post('/factory-reset', requireRole('SUPER_ADMIN'), controller.factoryReset);
+  // Factory reset
+  router.post('/factory-reset', controller.factoryReset);
 
   return router;
 }

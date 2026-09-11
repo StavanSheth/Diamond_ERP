@@ -1,6 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import { AuthenticatedRequest } from './auth';
-import { RequestWithId } from './request-id';
 import { ROLES, Role } from '../modules/auth/auth.service';
 
 // ── Permission Definitions ──────────────────────────────────────────────
@@ -8,7 +6,7 @@ import { ROLES, Role } from '../modules/auth/auth.service';
  * Maps each role to its allowed permissions.
  * Permissions use the format: resource.action
  */
-const ROLE_PERMISSIONS: Record<Role, Set<string>> = {
+export const ROLE_PERMISSIONS: Record<Role, Set<string>> = {
   [ROLES.SUPER_ADMIN]: new Set([
     // All permissions
     'stock.read', 'stock.create', 'stock.update', 'stock.archive',
@@ -121,77 +119,28 @@ const ROLE_PERMISSIONS: Record<Role, Set<string>> = {
  * @example
  * router.post('/stocks', authenticate, authorize('stock.create'), controller.createStock);
  */
-export function authorize(permission: string) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const requestId = (req as RequestWithId).requestId || 'unknown';
-    const user = (req as AuthenticatedRequest).user;
-
-    if (!user) {
-      res.status(401).json({
-        success: false,
-        error: 'Authentication required.',
-        requestId,
-      });
-      return;
-    }
-
-    const role = user.role as Role;
-    const permissions = ROLE_PERMISSIONS[role];
-
-    if (!permissions || !permissions.has(permission)) {
-      res.status(403).json({
-        success: false,
-        error: `Forbidden. You do not have permission to perform this action (requires: ${permission}).`,
-        requestId,
-      });
-      return;
-    }
-
+export function authorize(_permission: string) {
+  return (_req: Request, _res: Response, next: NextFunction): void => {
+    // RBAC removed: allow all actions for all users
     next();
   };
 }
 
 /**
  * Middleware that restricts access to specific roles.
- * 
- * @param allowedRoles - Array of roles that are allowed
- * @returns Express middleware function
- * 
- * @example
- * router.post('/factory-reset', authenticate, requireRole('SUPER_ADMIN'), controller.factoryReset);
+ * RBAC REMOVED: Bypasses all role checks and allows execution for all roles.
  */
-export function requireRole(...allowedRoles: string[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const requestId = (req as RequestWithId).requestId || 'unknown';
-    const user = (req as AuthenticatedRequest).user;
-
-    if (!user) {
-      res.status(401).json({
-        success: false,
-        error: 'Authentication required.',
-        requestId,
-      });
-      return;
-    }
-
-    if (!allowedRoles.includes(user.role)) {
-      res.status(403).json({
-        success: false,
-        error: `Forbidden. This action requires one of: ${allowedRoles.join(', ')}.`,
-        requestId,
-      });
-      return;
-    }
-
+export function requireRole(..._allowedRoles: string[]) {
+  return (_req: Request, _res: Response, next: NextFunction): void => {
+    // RBAC removed: allow all roles
     next();
   };
 }
 
 /**
  * Check if a user has a specific permission.
- * Utility function for use in services/controllers.
+ * RBAC REMOVED: Always returns true.
  */
-export function hasPermission(role: string, permission: string): boolean {
-  const permissions = ROLE_PERMISSIONS[role as Role];
-  return permissions ? permissions.has(permission) : false;
+export function hasPermission(_role: string, _permission: string): boolean {
+  return true;
 }

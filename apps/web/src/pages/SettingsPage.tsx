@@ -183,10 +183,13 @@ export const SettingsPage: React.FC = () => {
             {error}
           </div>
         ) : (
-          <form className="max-w-3xl flex flex-col gap-xl pb-32" onSubmit={handleSave}>
+          <form className="w-full pb-32" onSubmit={handleSave}>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start w-full">
+              {/* ── LEFT COLUMN ── */}
+              <div className="flex flex-col gap-6 w-full">
             
-            {/* ══════════════════════════════════════════════════════════ */}
-            {/* SECTION 1: APP LOCK & DEVICE SECURITY                    */}
+                {/* ══════════════════════════════════════════════════════════ */}
+                {/* SECTION 1: APP LOCK & DEVICE SECURITY                    */}
             {/* ══════════════════════════════════════════════════════════ */}
             <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-indigo-600" />
@@ -482,7 +485,7 @@ export const SettingsPage: React.FC = () => {
                 </div>
                 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-md bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
-                  <div className="flex-1 max-w-xs">
+                  <div className="flex-1">
                     <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1 block">Active Profile</label>
                     <select
                       value={activeProfile}
@@ -512,7 +515,7 @@ export const SettingsPage: React.FC = () => {
                       setNewProfileName('');
                       setNewProfileCallback(() => async (name: string) => {
                         try {
-                          await api.switchProfile(name);
+                          await api.createProfile(name);
                           switchProfile(name);
                           setActiveProfile(name);
                           window.location.reload();
@@ -629,9 +632,13 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
             </section>
+              </div>
 
-            {/* ══════════════════════════════════════════════════════════ */}
-            {/* SECTION 5: LANGUAGE & LOCALIZATION                        */}
+              {/* ── RIGHT COLUMN ── */}
+              <div className="flex flex-col gap-6 w-full">
+
+                {/* ══════════════════════════════════════════════════════════ */}
+                {/* SECTION 5: LANGUAGE & LOCALIZATION                        */}
             {/* ══════════════════════════════════════════════════════════ */}
             <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-amber-500" />
@@ -650,7 +657,7 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 
-                <div className="flex flex-col gap-1 max-w-md bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
+                <div className="flex flex-col gap-1 bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
                   <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">{t('Display Language')}</label>
                   <select 
                     value={i18n.language}
@@ -1023,7 +1030,9 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
             </section>
-            
+
+              </div>
+            </div>
           </form>
         )}
       </div>

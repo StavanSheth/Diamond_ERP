@@ -102,15 +102,8 @@ export async function authenticate(
       }
     }
 
-    // Determine profiles user is authorized to access
-    let authorizedProfiles: string[] = [];
-    if (user.role === ROLES.SUPER_ADMIN) {
-      authorizedProfiles = getAllProfiles();
-    } else {
-      authorizedProfiles = user.userProfiles
-        .filter((up) => up.isActive && up.profile.isActive)
-        .map((up) => up.profile.code);
-    }
+    // All users have access to all profiles (RBAC removed)
+    const authorizedProfiles: string[] = getAllProfiles();
 
     (req as AuthenticatedRequest).user = {
       id: user.id,
@@ -155,14 +148,7 @@ export async function optionalAuthenticate(
       });
 
       if (user && user.isActive && user.tokenVersion === payload.tokenVersion) {
-        let authorizedProfiles: string[] = [];
-        if (user.role === ROLES.SUPER_ADMIN) {
-          authorizedProfiles = getAllProfiles();
-        } else {
-          authorizedProfiles = user.userProfiles
-            .filter((up) => up.isActive && up.profile.isActive)
-            .map((up) => up.profile.code);
-        }
+        const authorizedProfiles: string[] = getAllProfiles();
 
         (req as AuthenticatedRequest).user = {
           id: user.id,

@@ -212,15 +212,8 @@ export class AuthService {
     // Login succeeded: reset brute force failure counter
     accountAttempts.delete(normalizedUsername);
 
-    // Determine accessible profiles
-    let accessibleProfiles: string[] = [];
-    if (user.role === ROLES.SUPER_ADMIN) {
-      accessibleProfiles = getAllProfiles();
-    } else {
-      accessibleProfiles = user.userProfiles
-        .filter((up) => up.isActive && up.profile.isActive)
-        .map((up) => up.profile.code);
-    }
+    // Accessible profiles: all profiles accessible to all users (RBAC removed)
+    const accessibleProfiles: string[] = getAllProfiles();
 
     // Generate unique session identifier
     const sessionId = crypto.randomUUID();

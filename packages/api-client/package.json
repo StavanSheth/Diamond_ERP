@@ -1,0 +1,17 @@
+{
+  "name": "@diamond-erp/api-client",
+  "version": "3.0.0",
+  "description": "Type-safe HTTP client for Diamond ERP API. Usable by Web, Mobile, and Windows clients.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "dependencies": {
+    "@diamond-erp/contracts": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

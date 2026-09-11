@@ -233,23 +233,9 @@ export interface RepairItem {
   remarks?: string;
 }
 
-export interface PerformanceMetrics {
-  requestTimeMs: number;
-  processingTimeMs: number;
-  totalTimeMs: number;
-}
+// PerformanceMetrics and ApiResponse have been moved to ../api/responses.ts
+// They are re-exported from the package root via the api barrel export.
 
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  message?: string;
-  error?: string;
-  requestId?: string;
-  timestamp?: string;
-  syncStatus?: 'success' | 'error' | 'partial' | string;
-  lastSyncedAt?: string;
-  performance?: PerformanceMetrics;
-}
 
 export interface DashboardData {
   totalParcels?: number;
