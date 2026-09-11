@@ -59,6 +59,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
   const [allDiamonds, setAllDiamonds] = useState<any[]>([]);
   const [selectedLedgerId, setSelectedLedgerId] = useState(draftPayload.ledgerId || '');
   const [isAddPartyModalOpen, setIsAddPartyModalOpen] = useState(false);
+  const [showBrokerage, setShowBrokerage] = useState(false);
 
   // Item lines state
   const [items, setItems] = useState<any[]>(draftPayload.items || []);
@@ -607,17 +608,46 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
           </div>
 
           {/* Brokerage Commission Section */}
-          <TransactionBrokerageSection
-            isBroker={isBroker}
-            selectedPartyConfig={selectedPartyConfig}
-            totalTransactionValue={totalTransactionValue}
-            brokerageType={brokerageType}
-            setBrokerageType={setBrokerageType}
-            brokeragePercentage={brokeragePercentage}
-            setBrokeragePercentage={setBrokeragePercentage}
-            brokerageAmount={brokerageAmount}
-            setBrokerageAmount={setBrokerageAmount}
-          />
+          {isBroker || (brokerageAmount && Number(brokerageAmount) > 0) || showBrokerage ? (
+            <div className="relative">
+              <TransactionBrokerageSection
+                isBroker={isBroker}
+                selectedPartyConfig={selectedPartyConfig}
+                totalTransactionValue={totalTransactionValue}
+                brokerageType={brokerageType}
+                setBrokerageType={setBrokerageType}
+                brokeragePercentage={brokeragePercentage}
+                setBrokeragePercentage={setBrokeragePercentage}
+                brokerageAmount={brokerageAmount}
+                setBrokerageAmount={setBrokerageAmount}
+              />
+              {!isBroker && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBrokerage(false);
+                    setBrokeragePercentage('');
+                    setBrokerageAmount('');
+                  }}
+                  className="absolute top-3 right-3 text-purple-400 hover:text-purple-700 transition-colors"
+                  title="Remove Brokerage"
+                >
+                  <span className="material-symbols-outlined text-[20px]">close</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex justify-start">
+              <button
+                type="button"
+                onClick={() => setShowBrokerage(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                Add Brokerage
+              </button>
+            </div>
+          )}
 
           {/* Payment Section */}
           <TransactionPaymentSection

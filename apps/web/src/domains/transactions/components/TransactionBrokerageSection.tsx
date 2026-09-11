@@ -23,7 +23,7 @@ export const TransactionBrokerageSection: React.FC<TransactionBrokerageSectionPr
   brokerageAmount,
   setBrokerageAmount,
 }) => {
-  if (!isBroker) return null;
+  // if (!isBroker) return null; // Removed to allow manual addition of brokerage for non-brokers
 
   return (
     <div className="flex flex-col gap-md bg-purple-50/80 p-md rounded-xl border border-purple-200 animate-fade-in shadow-2xs">
