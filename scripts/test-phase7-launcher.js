@@ -198,6 +198,25 @@ async function runSuite() {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // TEST 2b: Security Verification — Removal of Hardcoded Credentials
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n[Step 2b] Verifying removal of hardcoded universal credentials from Launcher.cs...');
+  try {
+    const launcherSource = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'Launcher.cs'), 'utf-8');
+    const hasDefaultPw = launcherSource.includes('DEFAULT_ADMIN_PASSWORD');
+    const hasStavanPw = launcherSource.includes('Stavan@123');
+    const hasAutoSeed = launcherSource.includes('AUTO_SEED_DEFAULT_ADMIN');
+    const cleanSecurity = !hasDefaultPw && !hasStavanPw && !hasAutoSeed;
+    record(
+      'Launcher.cs contains zero hardcoded admin passwords or universal credentials',
+      cleanSecurity,
+      cleanSecurity ? 'Clean (No DEFAULT_ADMIN_PASSWORD or Stavan@123)' : 'Found hardcoded credentials'
+    );
+  } catch (err) {
+    record('Security verification of Launcher.cs', false, err.message);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // TEST 3: Bundled Node.js Runtime in Staging Directory
   // ──────────────────────────────────────────────────────────────────────────
   console.log('\n[Step 3] Verifying bundled Node.js runtime in staging directory...');

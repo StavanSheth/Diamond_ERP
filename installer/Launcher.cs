@@ -45,6 +45,7 @@ namespace DiamondERP.App
         private const string WINDOW_TITLE = "Diamond ERP — Enterprise Suite";
         private const int DEFAULT_PORT = 3002;
         private const string LOOPBACK_HOST = "127.0.0.1";
+        private const int MAX_BACKEND_RESTARTS = 2;
 
         private static string _appDir;
         private static string _dataDir;
@@ -52,6 +53,8 @@ namespace DiamondERP.App
         private static Process _backendProcess;
         private static Process _devWebProcess;
         private static System.Windows.Forms.NotifyIcon _trayIcon;
+        private static int _backendRestartCount = 0;
+        private static volatile bool _isShuttingDown = false;
 
         private WebView2 _webView;
         private Grid _loadingGrid;
@@ -282,11 +285,9 @@ namespace DiamondERP.App
         private static bool DetectProductionMode()
         {
             string appDir = _appDir ?? ResolveApplicationDirectory();
-            // Production mode if built API distribution exists
-            string apiDist1 = Path.Combine(appDir, "api", "dist", "index.js");
-            string apiDist2 = Path.Combine(appDir, "dist", "index.js");
-            string appsApiDist = Path.Combine(appDir, "apps", "api", "dist", "index.js");
-            return File.Exists(apiDist1) || File.Exists(apiDist2) || File.Exists(appsApiDist);
+            // Production mode: authoritative compiled backend entrypoint at api\dist\index.js
+            string canonicalApiDist = Path.Combine(appDir, "api", "dist", "index.js");
+            return File.Exists(canonicalApiDist);
         }
 
         // ── Service Management & Process Lifecycle ─────────────────────────────
@@ -375,8 +376,8 @@ namespace DiamondERP.App
 
                 string nodeExe = Path.Combine(runtimeDir, "node.exe");
 
+                // Canonical production entrypoint: <appDir>\api\dist\index.js
                 string scriptPath = Path.Combine(_appDir, "api", "dist", "index.js");
-                if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "dist", "index.js"); }
 
                 if (!File.Exists(scriptPath))
                 {
@@ -402,13 +403,11 @@ namespace DiamondERP.App
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
 
-                // Inject deterministic production environment variables
+                // Inject deterministic production environment variables (NO universal hardcoded credentials)
                 psi.EnvironmentVariables["NODE_ENV"] = "production";
                 psi.EnvironmentVariables["PORT"] = DEFAULT_PORT.ToString();
                 psi.EnvironmentVariables["HOST"] = LOOPBACK_HOST;
                 psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
-                psi.EnvironmentVariables["AUTO_SEED_DEFAULT_ADMIN"] = "true";
-                psi.EnvironmentVariables["DEFAULT_ADMIN_PASSWORD"] = "Stavan@123";
                 psi.EnvironmentVariables["DIAMOND_DESKTOP_PARENT_PID"] = Process.GetCurrentProcess().Id.ToString();
 
                 _backendProcess = Process.Start(psi);
@@ -476,9 +475,19 @@ namespace DiamondERP.App
             int attempts = 0;
             while (attempts < maxAttempts)
             {
-                if (IsPortActive(probeUrl))
+                if (_isProductionMode)
                 {
-                    return true;
+                    if (IsBackendHealthy(probeUrl))
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    if (IsPortActive(probeUrl))
+                    {
+                        return true;
+                    }
                 }
                 Thread.Sleep(delayMs);
                 attempts++;
@@ -581,31 +590,55 @@ namespace DiamondERP.App
 
         public static void HandleBackendExit()
         {
-            if (_backendProcess != null && _backendProcess.HasExited)
-            {
-                int code = _backendProcess.ExitCode;
-                WriteLog("BackendExited", string.Format("Backend process exited with code: {0}", code));
+            if (_isShuttingDown) return;
 
+            int code = (_backendProcess != null && _backendProcess.HasExited) ? _backendProcess.ExitCode : -1;
+            WriteLog("BackendExited", string.Format("Backend process exited unexpectedly with code: {0}", code));
+
+            // Bounded restart policy: up to 2 controlled attempts
+            if (_isProductionMode && _backendRestartCount < MAX_BACKEND_RESTARTS)
+            {
+                _backendRestartCount++;
+                WriteLog("BackendRestart", string.Format("Attempting controlled backend recovery ({0}/{1})...", _backendRestartCount, MAX_BACKEND_RESTARTS));
+                Thread.Sleep(1000);
                 try
                 {
-                    if (Application.Current != null)
+                    StartBackend();
+                    string healthUrl = string.Format("http://{0}:{1}/health", LOOPBACK_HOST, DEFAULT_PORT);
+                    if (WaitForBackend(healthUrl, 20, 500))
                     {
-                        Application.Current.Dispatcher.Invoke(new Action(() =>
-                        {
-                            if (Application.Current.MainWindow != null && Application.Current.MainWindow.IsVisible)
-                            {
-                                string msg = string.Format("The local Diamond ERP service stopped unexpectedly (exit code {0}).\n\nPlease restart Diamond ERP.", code);
-                                MessageBox.Show(msg, "Service Stopped", MessageBoxButton.OK, MessageBoxImage.Warning);
-                            }
-                        }));
+                        WriteLog("BackendRestart", "Backend successfully recovered and validated healthy.");
+                        return;
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    WriteLog("BackendRestartError", ex.Message);
+                }
             }
+
+            try
+            {
+                if (Application.Current != null)
+                {
+                    Application.Current.Dispatcher.Invoke(new Action(() =>
+                    {
+                        if (Application.Current.MainWindow != null && Application.Current.MainWindow.IsVisible)
+                        {
+                            string msg = string.Format("The local Diamond ERP service stopped unexpectedly (exit code {0}) and could not be recovered.\n\nPlease restart Diamond ERP.", code);
+                            MessageBox.Show(msg, "Diamond ERP Service Failure", MessageBoxButton.OK, MessageBoxImage.Error);
+                            ShutdownBackend();
+                            Application.Current.Shutdown();
+                        }
+                    }));
+                }
+            }
+            catch { }
         }
 
         public static void ShutdownBackend()
         {
+            _isShuttingDown = true;
             WriteLog("Shutdown", "Shutting down application launcher and backend services...");
 
             if (_trayIcon != null)
@@ -678,7 +711,7 @@ namespace DiamondERP.App
             try
             {
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-                request.Timeout = 1200;
+                request.Timeout = 1500;
                 request.Method = "GET";
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 {
@@ -687,7 +720,13 @@ namespace DiamondERP.App
                         using (StreamReader reader = new StreamReader(response.GetResponseStream()))
                         {
                             string body = reader.ReadToEnd();
-                            return body.Contains("\"backend\"") || body.Contains("DiamondERP") || body.Contains("\"status\"");
+                            // Authoritative DiamondERP health contract:
+                            // {"backend":"OK","database":"Connected","status":"ok",...}
+                            bool hasBackend = body.IndexOf("\"backend\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                            bool hasDbConnected = body.IndexOf("\"database\":\"Connected\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                            bool hasStatusOk = body.IndexOf("\"status\":\"ok\"", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                               body.IndexOf("\"status\":\"ready\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                            return hasBackend && hasDbConnected && hasStatusOk;
                         }
                     }
                     return false;

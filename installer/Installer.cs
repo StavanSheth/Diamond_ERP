@@ -760,7 +760,7 @@ namespace DiamondERP.Setup
                     lblTopBannerSubtitle.Text = "Where should DiamondERP be installed?";
                     if (string.IsNullOrEmpty(txtDestPath.Text))
                     {
-                        txtDestPath.Text = appDir;
+                        txtDestPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DiamondERP");
                     }
                     btnNext.Text = "Next >";
                     btnNext.Enabled = true;
@@ -867,7 +867,8 @@ namespace DiamondERP.Setup
             {
                 try
                 {
-                    string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : appDir;
+                    string defaultDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DiamondERP");
+                    string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : defaultDir;
 
                     SetInstallStatus("Validating environment...", 20);
                     AppendLog("[1/4] Validating offline standalone installation environment...");
