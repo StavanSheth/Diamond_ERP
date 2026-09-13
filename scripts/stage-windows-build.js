@@ -98,11 +98,22 @@ async function main() {
   }
 
   // 4. Ensure pristine template.db is generated
-  const testDb = path.join(ROOT_DIR, 'apps', 'api', 'prisma', 'test.db');
+  const stavanDb = path.join(ROOT_DIR, 'apps', 'api', 'Stavan.db');
   const templateDb = path.join(ROOT_DIR, 'apps', 'api', 'prisma', 'template.db');
-  if (fs.existsSync(testDb) && !fs.existsSync(templateDb)) {
-    fs.copyFileSync(testDb, templateDb);
-    log('✔ Created prisma/template.db from test.db');
+  const syncScript = path.join(ROOT_DIR, 'scripts', 'sync-template-db.js');
+  if (fs.existsSync(stavanDb) && fs.existsSync(syncScript)) {
+    try {
+      execSync(`node "${syncScript}"`, { cwd: ROOT_DIR, stdio: 'pipe' });
+      log('✔ Checkpointed and synchronized template.db from pristine Stavan.db');
+    } catch (e) {
+      log('Note: sync-template-db warning: ' + e.message);
+    }
+  } else if (!fs.existsSync(templateDb)) {
+    const testDb = path.join(ROOT_DIR, 'apps', 'api', 'prisma', 'test.db');
+    if (fs.existsSync(testDb)) {
+      fs.copyFileSync(testDb, templateDb);
+      log('✔ Created prisma/template.db from test.db');
+    }
   }
 
   // 5. Clean & prepare staging directory

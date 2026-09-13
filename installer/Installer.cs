@@ -68,9 +68,52 @@ namespace DiamondERP.Setup
                 ? Directory.GetParent(baseDir).FullName
                 : baseDir;
 
-            if (args.Length > 0 && (args[0].Equals("/uninstall", StringComparison.OrdinalIgnoreCase) || args[0].Equals("/u", StringComparison.OrdinalIgnoreCase)))
+            bool isUninstall = false;
+            bool isSilent = false;
+            string customDir = null;
+            bool createDesktop = true;
+            bool createStartMenu = true;
+            bool launchAfter = false;
+
+            for (int i = 0; i < args.Length; i++)
             {
-                PerformUninstall(runningAppDir);
+                string a = args[i];
+                if (a.Equals("/uninstall", StringComparison.OrdinalIgnoreCase) || a.Equals("/u", StringComparison.OrdinalIgnoreCase))
+                {
+                    isUninstall = true;
+                }
+                else if (a.Equals("/silent", StringComparison.OrdinalIgnoreCase) || a.Equals("/s", StringComparison.OrdinalIgnoreCase) || a.Equals("/verysilent", StringComparison.OrdinalIgnoreCase))
+                {
+                    isSilent = true;
+                }
+                else if (a.StartsWith("/dir=", StringComparison.OrdinalIgnoreCase))
+                {
+                    customDir = a.Substring(5).Trim('\"');
+                }
+                else if (a.Equals("/nodesktop", StringComparison.OrdinalIgnoreCase))
+                {
+                    createDesktop = false;
+                }
+                else if (a.Equals("/nostartmenu", StringComparison.OrdinalIgnoreCase))
+                {
+                    createStartMenu = false;
+                }
+                else if (a.Equals("/launch", StringComparison.OrdinalIgnoreCase))
+                {
+                    launchAfter = true;
+                }
+            }
+
+            if (isUninstall)
+            {
+                PerformUninstall(runningAppDir, isSilent);
+                return;
+            }
+
+            if (isSilent)
+            {
+                int exitCode = PerformSilentInstall(runningAppDir, customDir, createDesktop, createStartMenu, launchAfter);
+                Environment.Exit(exitCode);
                 return;
             }
 
@@ -844,7 +887,7 @@ namespace DiamondERP.Setup
                             Directory.CreateDirectory(targetDir);
                         }
                         AppendLog("Deploying full application payload to: " + targetDir);
-                        CopyApplicationPayload(appDir, targetDir);
+                        CopyApplicationPayload(appDir, targetDir, AppendLog);
                     }
 
                     string shortcutTarget = Path.Combine(targetDir, "DiamondERP.exe");
@@ -899,7 +942,7 @@ namespace DiamondERP.Setup
             });
         }
 
-        private void CreateShortcut(string shortcutPath, string targetPath, string workingDir, string iconPath, string description)
+        private static void CreateShortcut(string shortcutPath, string targetPath, string workingDir, string iconPath, string description)
         {
             try
             {
@@ -949,7 +992,8 @@ namespace DiamondERP.Setup
                 p.WaitForExit(30000);
             }
         }
-        private void CopyDirectoryRecursive(string source, string target)
+
+        private static void CopyDirectoryRecursive(string source, string target)
         {
             if (!Directory.Exists(target))
             {
@@ -978,7 +1022,7 @@ namespace DiamondERP.Setup
             }
         }
 
-        private void CopyApplicationPayload(string sourceDir, string targetDir)
+        private static void CopyApplicationPayload(string sourceDir, string targetDir, Action<string> logAction = null)
         {
             string[] rootFiles = new string[]
             {
@@ -996,7 +1040,7 @@ namespace DiamondERP.Setup
                 if (File.Exists(src))
                 {
                     File.Copy(src, Path.Combine(targetDir, rf), true);
-                    AppendLog("  Copied: " + rf);
+                    if (logAction != null) logAction("  Copied: " + rf);
                 }
             }
 
@@ -1006,9 +1050,9 @@ namespace DiamondERP.Setup
                 string srcSub = Path.Combine(sourceDir, sd);
                 if (Directory.Exists(srcSub))
                 {
-                    AppendLog("  Deploying " + sd + "/ payload...");
+                    if (logAction != null) logAction("  Deploying " + sd + "/ payload...");
                     CopyDirectoryRecursive(srcSub, Path.Combine(targetDir, sd));
-                    AppendLog("  ✔ Deployed: " + sd + "/");
+                    if (logAction != null) logAction("  ✔ Deployed: " + sd + "/");
                 }
             }
         }
@@ -1036,19 +1080,90 @@ namespace DiamondERP.Setup
             catch { }
         }
 
-        private static void PerformUninstall(string installDir)
+        public static int PerformSilentInstall(string sourceDir, string targetDir, bool createDesktop, bool createStartMenu, bool launchAfter)
         {
-            var confirm = MessageBox.Show(
-                "Are you sure you want to uninstall DiamondERP Enterprise Suite?\n\n" +
-                "Note: Your local business database records, parcel inventories, and ledgers stored in AppData will be safely preserved.",
-                "DiamondERP Uninstall",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question
-            );
-
-            if (confirm != DialogResult.Yes)
+            try
             {
-                return;
+                if (string.IsNullOrEmpty(targetDir))
+                {
+                    string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                    targetDir = Path.Combine(pf, "DiamondERP");
+                }
+
+                // Upgrade Safety Guard: Ensure target is not pointing to mutable user data dir
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string userAppDataDir = Path.Combine(localAppData, "DiamondERP");
+                if (targetDir.Equals(userAppDataDir, StringComparison.OrdinalIgnoreCase) ||
+                    targetDir.StartsWith(userAppDataDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine("Error: Installation directory cannot be inside user data directory: " + userAppDataDir);
+                    return 1;
+                }
+
+                if (!Directory.Exists(targetDir))
+                {
+                    Directory.CreateDirectory(targetDir);
+                }
+
+                if (!targetDir.Equals(sourceDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    CopyApplicationPayload(sourceDir, targetDir, msg => Console.WriteLine(msg));
+                }
+
+                string shortcutTarget = Path.Combine(targetDir, "DiamondERP.exe");
+                string targetIcon = Path.Combine(targetDir, "app.ico");
+
+                if (createDesktop)
+                {
+                    string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                    CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                    string localDesktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
+                    if (!localDesktop.Equals(desktopPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(localDesktop))
+                    {
+                        CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                    }
+                }
+
+                if (createStartMenu)
+                {
+                    string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+                    string lnkPath = Path.Combine(startMenu, "DiamondERP.lnk");
+                    CreateShortcut(lnkPath, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                }
+
+                RegisterUninstall(targetDir, targetIcon);
+
+                if (launchAfter && File.Exists(shortcutTarget))
+                {
+                    Process.Start(new ProcessStartInfo(shortcutTarget) { WorkingDirectory = targetDir });
+                }
+
+                Console.WriteLine("Installation completed successfully to: " + targetDir);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Silent installation error: " + ex.Message);
+                return 1;
+            }
+        }
+
+        private static void PerformUninstall(string installDir, bool silent = false)
+        {
+            if (!silent)
+            {
+                var confirm = MessageBox.Show(
+                    "Are you sure you want to uninstall DiamondERP Enterprise Suite?\n\n" +
+                    "Note: Your local business database records, parcel inventories, and ledgers stored in AppData will be safely preserved.",
+                    "DiamondERP Uninstall",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                if (confirm != DialogResult.Yes)
+                {
+                    return;
+                }
             }
 
             try
@@ -1080,28 +1195,67 @@ namespace DiamondERP.Setup
 
                 if (!installDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase))
                 {
-                    ProcessStartInfo psi = new ProcessStartInfo
+                    if (silent)
                     {
-                        FileName = "cmd.exe",
-                        Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", installDir),
-                        CreateNoWindow = true,
-                        UseShellExecute = false,
-                        WindowStyle = ProcessWindowStyle.Hidden
-                    };
-                    Process.Start(psi);
+                        try
+                        {
+                            if (Directory.Exists(installDir))
+                            {
+                                Directory.Delete(installDir, true);
+                            }
+                        }
+                        catch
+                        {
+                            ProcessStartInfo psi = new ProcessStartInfo
+                            {
+                                FileName = "cmd.exe",
+                                Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", installDir),
+                                CreateNoWindow = true,
+                                UseShellExecute = false,
+                                WindowStyle = ProcessWindowStyle.Hidden
+                            };
+                            Process.Start(psi);
+                        }
+                    }
+                    else
+                    {
+                        ProcessStartInfo psi = new ProcessStartInfo
+                        {
+                            FileName = "cmd.exe",
+                            Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", installDir),
+                            CreateNoWindow = true,
+                            UseShellExecute = false,
+                            WindowStyle = ProcessWindowStyle.Hidden
+                        };
+                        Process.Start(psi);
+                    }
                 }
 
-                MessageBox.Show(
-                    "DiamondERP has been successfully uninstalled from this computer.\n\n" +
-                    "Your business data in AppData was safely preserved.",
-                    "Uninstall Complete",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                if (!silent)
+                {
+                    MessageBox.Show(
+                        "DiamondERP has been successfully uninstalled from this computer.\n\n" +
+                        "Your business data in AppData was safely preserved.",
+                        "Uninstall Complete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                else
+                {
+                    Console.WriteLine("Uninstall completed successfully.");
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error during uninstallation: " + ex.Message, "Uninstall Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!silent)
+                {
+                    MessageBox.Show("Error during uninstallation: " + ex.Message, "Uninstall Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    Console.Error.WriteLine("Error during uninstallation: " + ex.Message);
+                }
             }
         }
     }

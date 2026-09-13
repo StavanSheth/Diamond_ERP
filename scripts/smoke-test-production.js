@@ -137,7 +137,7 @@ function spawnServer(apiEntry, cwd) {
     HOST: '127.0.0.1',
     DIAMOND_DATA_DIR: TEMP_DATA_DIR,
     DATABASE_URL: `file:${isolatedDbPath}`,
-    DEFAULT_ADMIN_PASSWORD: 'Stavan@123456',
+    DEFAULT_ADMIN_PASSWORD: 'Stavan@123',
     AUTO_SEED_DEFAULT_ADMIN: 'true',
   };
 
@@ -331,7 +331,7 @@ async function runSmokeTests() {
     method: 'POST',
   }, {
     username: 'stavan',
-    password: 'Stavan@123456',
+    password: 'Stavan@123',
   });
 
   const token = loginRes.json?.data?.token;

@@ -336,6 +336,8 @@ namespace DiamondERP.App
                 psi.EnvironmentVariables["PORT"] = DEFAULT_PORT.ToString();
                 psi.EnvironmentVariables["HOST"] = LOOPBACK_HOST;
                 psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
+                psi.EnvironmentVariables["AUTO_SEED_DEFAULT_ADMIN"] = "true";
+                psi.EnvironmentVariables["DEFAULT_ADMIN_PASSWORD"] = "Stavan@123";
 
                 _backendProcess = Process.Start(psi);
                 WriteLog("Backend", string.Format("Started production Node backend (PID: {0}, Runtime: {1})", _backendProcess != null ? _backendProcess.Id : 0, nodeExe));

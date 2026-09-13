@@ -26,6 +26,7 @@
     "stage:windows": "node scripts/stage-windows-build.js",
     "verify:packaging": "node scripts/validate-packaging-readiness.js",
     "test:smoke": "node scripts/smoke-test-production.js",
-    "test:smoke:staged": "node scripts/smoke-test-production.js --staged"
+    "test:smoke:staged": "node scripts/smoke-test-production.js --staged",
+    "test:release": "node scripts/test-phase5-release-readiness.js"
   }
 }
