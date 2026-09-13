@@ -37,6 +37,10 @@ namespace DiamondERP.App
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AttachConsole(int dwProcessId);
+        private const int ATTACH_PARENT_PROCESS = -1;
+
         private const int SW_RESTORE = 9;
         private const string WINDOW_TITLE = "Diamond ERP — Enterprise Suite";
         private const int DEFAULT_PORT = 3002;
@@ -56,6 +60,35 @@ namespace DiamondERP.App
         [STAThread]
         public static void Main(string[] args)
         {
+            // Command-line diagnostics and version inspection
+            if (args != null && args.Length > 0)
+            {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+                try
+                {
+                    var stdout = Console.OpenStandardOutput();
+                    var writer = new StreamWriter(stdout, Console.OutputEncoding) { AutoFlush = true };
+                    Console.SetOut(writer);
+                }
+                catch { }
+
+                if (args[0].Equals("--check-env", StringComparison.OrdinalIgnoreCase))
+                {
+                    string ad = ResolveApplicationDirectory();
+                    string dd = ResolveDataDirectory();
+                    string rd = ResolveRuntimeDirectory();
+                    bool ip = DetectProductionMode();
+                    Console.WriteLine(string.Format("MODE:{0}|APPDIR:{1}|DATADIR:{2}|RUNTIMEDIR:{3}",
+                        ip ? "PRODUCTION" : "DEVELOPMENT", ad, dd, rd ?? "NULL"));
+                    return;
+                }
+                else if (args[0].Equals("--version", StringComparison.OrdinalIgnoreCase) || args[0].Equals("-v", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("Diamond ERP v3.0.0");
+                    return;
+                }
+            }
+
             bool createdNew;
             using (Mutex mutex = new Mutex(true, "Global\\DiamondERP_SingleInstance_Mutex", out createdNew))
             {
@@ -192,17 +225,23 @@ namespace DiamondERP.App
 
         public static string ResolveApplicationDirectory()
         {
+            if (!string.IsNullOrEmpty(_appDir)) return _appDir;
             string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
             {
-                return Directory.GetParent(baseDir).FullName;
+                _appDir = Directory.GetParent(baseDir).FullName;
             }
-            return baseDir;
+            else
+            {
+                _appDir = baseDir;
+            }
+            return _appDir;
         }
 
         public static string ResolveRuntimeDirectory()
         {
-            string bundledNodeDir = Path.Combine(_appDir, "runtime");
+            string appDir = _appDir ?? ResolveApplicationDirectory();
+            string bundledNodeDir = Path.Combine(appDir, "runtime");
             if (File.Exists(Path.Combine(bundledNodeDir, "node.exe")))
             {
                 return bundledNodeDir;
@@ -212,13 +251,15 @@ namespace DiamondERP.App
 
         public static string ResolveDataDirectory()
         {
+            if (!string.IsNullOrEmpty(_dataDir)) return _dataDir;
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string dataRoot = Path.Combine(localAppData, "DiamondERP");
             if (!Directory.Exists(dataRoot))
             {
                 try { Directory.CreateDirectory(dataRoot); } catch { }
             }
-            return dataRoot;
+            _dataDir = dataRoot;
+            return _dataDir;
         }
 
         public static void WriteLog(string category, string message)
@@ -240,10 +281,11 @@ namespace DiamondERP.App
 
         private static bool DetectProductionMode()
         {
+            string appDir = _appDir ?? ResolveApplicationDirectory();
             // Production mode if built API distribution exists
-            string apiDist1 = Path.Combine(_appDir, "api", "dist", "index.js");
-            string apiDist2 = Path.Combine(_appDir, "dist", "index.js");
-            string appsApiDist = Path.Combine(_appDir, "apps", "api", "dist", "index.js");
+            string apiDist1 = Path.Combine(appDir, "api", "dist", "index.js");
+            string apiDist2 = Path.Combine(appDir, "dist", "index.js");
+            string appsApiDist = Path.Combine(appDir, "apps", "api", "dist", "index.js");
             return File.Exists(apiDist1) || File.Exists(apiDist2) || File.Exists(appsApiDist);
         }
 
@@ -284,11 +326,16 @@ namespace DiamondERP.App
 
                     // 3. Wait for target service readiness
                     string readinessCheckUrl = _isProductionMode ? healthUrl : "http://localhost:5175/";
-                    bool ready = WaitForBackend(readinessCheckUrl, 40, 600);
+                    bool ready = WaitForBackend(readinessCheckUrl, 40, 500);
 
                     if (!ready)
                     {
-                        throw new TimeoutException("DiamondERP services did not become ready within the expected time window.");
+                        if (_backendProcess != null && _backendProcess.HasExited)
+                        {
+                            throw new InvalidOperationException(string.Format("DiamondERP backend process stopped unexpectedly with exit code {0}. Please check logs in {1}.",
+                                _backendProcess.ExitCode, Path.Combine(_dataDir, "logs")));
+                        }
+                        throw new TimeoutException("DiamondERP services did not become ready within the expected time window. Please restart the application.");
                     }
 
                     // 4. Initialize WebView2 and navigate
@@ -300,6 +347,7 @@ namespace DiamondERP.App
                 catch (Exception ex)
                 {
                     WriteLog("ServiceStartError", ex.ToString());
+                    ShutdownBackend();
                     this.Dispatcher.Invoke(new Action(() =>
                     {
                         MessageBox.Show("Error starting DiamondERP services: " + ex.Message,
@@ -329,7 +377,14 @@ namespace DiamondERP.App
 
                 string scriptPath = Path.Combine(_appDir, "api", "dist", "index.js");
                 if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "dist", "index.js"); }
-                if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "apps", "api", "dist", "index.js"); }
+
+                if (!File.Exists(scriptPath))
+                {
+                    string err = "Production API entrypoint not found in: " + scriptPath +
+                                 "\n\nThe Diamond ERP standalone installation is incomplete. Please reinstall the application.";
+                    WriteLog("ApiError", err);
+                    throw new FileNotFoundException(err);
+                }
 
                 string apiDir = Path.Combine(_appDir, "api");
                 if (!Directory.Exists(apiDir)) { apiDir = Path.GetDirectoryName(scriptPath); }
@@ -341,6 +396,9 @@ namespace DiamondERP.App
                     WorkingDirectory = apiDir,
                     CreateNoWindow = true,
                     UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
 
@@ -351,8 +409,28 @@ namespace DiamondERP.App
                 psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
                 psi.EnvironmentVariables["AUTO_SEED_DEFAULT_ADMIN"] = "true";
                 psi.EnvironmentVariables["DEFAULT_ADMIN_PASSWORD"] = "Stavan@123";
+                psi.EnvironmentVariables["DIAMOND_DESKTOP_PARENT_PID"] = Process.GetCurrentProcess().Id.ToString();
 
                 _backendProcess = Process.Start(psi);
+                if (_backendProcess != null)
+                {
+                    _backendProcess.OutputDataReceived += (s, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data))
+                        {
+                            WriteLog("BackendOut", e.Data);
+                        }
+                    };
+                    _backendProcess.ErrorDataReceived += (s, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data))
+                        {
+                            WriteLog("BackendErr", e.Data);
+                        }
+                    };
+                    _backendProcess.BeginOutputReadLine();
+                    _backendProcess.BeginErrorReadLine();
+                }
                 WriteLog("Backend", string.Format("Started production Node backend (PID: {0}, Runtime: {1})", _backendProcess != null ? _backendProcess.Id : 0, nodeExe));
             }
             else
@@ -424,8 +502,10 @@ namespace DiamondERP.App
                 {
                     WriteLog("WebView2Error", "Microsoft Edge WebView2 Runtime was not detected on this system.");
                     string msg = "Microsoft Edge WebView2 Runtime is required to run DiamondERP on Windows.\n\n" +
-                                 "Please download and install Microsoft Edge WebView2 from Microsoft, or contact your system administrator.";
+                                 "Please install Microsoft Edge WebView2, or contact your system administrator.";
                     MessageBox.Show(msg, "WebView2 Runtime Required", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    ShutdownBackend();
+                    if (Application.Current != null) Application.Current.Shutdown();
                     return;
                 }
 
@@ -442,22 +522,26 @@ namespace DiamondERP.App
                 _webView.CoreWebView2.Settings.AreDevToolsEnabled = !_isProductionMode;
                 _webView.CoreWebView2.Settings.IsZoomControlEnabled = true;
 
-                // Security: Restrict navigation to loopback origin only
+                // Security: Restrict navigation strictly to loopback origin
                 _webView.CoreWebView2.NavigationStarting += (s, args) =>
                 {
                     Uri uri;
                     if (Uri.TryCreate(args.Uri, UriKind.Absolute, out uri))
                     {
-                        if (uri.Host == LOOPBACK_HOST || uri.Host == "localhost")
+                        if ((uri.Host == LOOPBACK_HOST || uri.Host == "localhost") && (uri.Port == DEFAULT_PORT || uri.Port == 5175))
                         {
                             return;
                         }
                         args.Cancel = true;
-                        WriteLog("Security", "Intercepted non-loopback navigation: " + args.Uri);
+                        WriteLog("Security", "Blocked non-loopback navigation: " + args.Uri);
                         if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
                         {
                             try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
                         }
+                    }
+                    else
+                    {
+                        args.Cancel = true;
                     }
                 };
 
@@ -490,6 +574,8 @@ namespace DiamondERP.App
                 WriteLog("WebView2InitError", ex.ToString());
                 MessageBox.Show("Could not initialize desktop application view: " + ex.Message,
                     "DiamondERP View Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShutdownBackend();
+                if (Application.Current != null) Application.Current.Shutdown();
             }
         }
 
@@ -497,7 +583,24 @@ namespace DiamondERP.App
         {
             if (_backendProcess != null && _backendProcess.HasExited)
             {
-                WriteLog("BackendExited", string.Format("Backend process exited with code: {0}", _backendProcess.ExitCode));
+                int code = _backendProcess.ExitCode;
+                WriteLog("BackendExited", string.Format("Backend process exited with code: {0}", code));
+
+                try
+                {
+                    if (Application.Current != null)
+                    {
+                        Application.Current.Dispatcher.Invoke(new Action(() =>
+                        {
+                            if (Application.Current.MainWindow != null && Application.Current.MainWindow.IsVisible)
+                            {
+                                string msg = string.Format("The local Diamond ERP service stopped unexpectedly (exit code {0}).\n\nPlease restart Diamond ERP.", code);
+                                MessageBox.Show(msg, "Service Stopped", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            }
+                        }));
+                    }
+                }
+                catch { }
             }
         }
 
@@ -507,8 +610,12 @@ namespace DiamondERP.App
 
             if (_trayIcon != null)
             {
-                _trayIcon.Visible = false;
-                _trayIcon.Dispose();
+                try
+                {
+                    _trayIcon.Visible = false;
+                    _trayIcon.Dispose();
+                }
+                catch { }
                 _trayIcon = null;
             }
 
@@ -516,15 +623,43 @@ namespace DiamondERP.App
             {
                 if (_backendProcess != null && !_backendProcess.HasExited)
                 {
-                    WriteLog("Shutdown", "Attempting graceful termination of backend process (PID: " + _backendProcess.Id + ")...");
-                    _backendProcess.CloseMainWindow();
-                    if (!_backendProcess.WaitForExit(2500))
+                    WriteLog("Shutdown", string.Format("Requesting graceful termination of backend process (PID: {0})...", _backendProcess.Id));
+
+                    // 1. Request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma
+                    try
                     {
+                        string shutdownUrl = string.Format("http://{0}:{1}/api/system/shutdown", LOOPBACK_HOST, DEFAULT_PORT);
+                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(shutdownUrl);
+                        req.Method = "POST";
+                        req.Timeout = 1500;
+                        req.ContentLength = 0;
+                        using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) { }
+                    }
+                    catch { }
+
+                    // 2. Close standard input pipe (signals EOF to child Node process)
+                    try
+                    {
+                        _backendProcess.StandardInput.Close();
+                    }
+                    catch { }
+
+                    // 3. Allow up to 3000ms for clean database flush and exit
+                    if (!_backendProcess.WaitForExit(3000))
+                    {
+                        WriteLog("Shutdown", "Backend process did not exit within timeout. Forcing termination of process tree...");
                         KillProcessTree(_backendProcess.Id);
+                    }
+                    else
+                    {
+                        WriteLog("Shutdown", "Backend process exited cleanly.");
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                WriteLog("ShutdownError", ex.Message);
+            }
 
             try
             {

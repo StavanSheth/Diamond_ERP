@@ -173,12 +173,69 @@ async function bootstrap(): Promise<void> {
     )
   );
 
-  // 9. API 404 Guard — Ensure unmatched API calls return JSON error, never falling through to SPA HTML
+  // 9. Graceful shutdown handler & desktop lifecycle management
+  let server: ReturnType<typeof app.listen>;
+  const shutdown = async (signal: string) => {
+    logger.info(`${signal} received. Shutting down gracefully...`);
+
+    if (server) {
+      server.close(async () => {
+        logger.info('HTTP server stopped accepting new requests.');
+
+        try {
+          await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+          logger.info('SQLite WAL checkpoint (TRUNCATE) completed successfully.');
+        } catch (walErr) {
+          logger.warn('Warning: Could not flush SQLite WAL during shutdown: ' + String(walErr));
+        }
+
+        try {
+          await disconnectAllClients();
+          logger.info('All database clients cleanly disconnected.');
+        } catch (err) {
+          logger.error('Error disconnecting database clients', undefined, err);
+        }
+
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+
+    // Force exit after 10 seconds if hanging
+    setTimeout(() => {
+      logger.error('Forced shutdown after timeout.');
+      process.exit(1);
+    }, 10000);
+  };
+
+  // Loopback-only graceful shutdown endpoint for desktop launcher
+  app.post('/api/system/shutdown', (req, res) => {
+    const remoteIp = req.socket.remoteAddress;
+    const isLoopback = remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1';
+    if (isLoopback) {
+      res.json({ success: true, message: 'Server shutting down gracefully.' });
+      setTimeout(() => shutdown('HTTP_SHUTDOWN'), 50);
+    } else {
+      res.status(403).json({ success: false, error: 'Shutdown endpoint restricted to local loopback.' });
+    }
+  });
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Stdin EOF listener for parent process crash/termination safety when spawned by desktop launcher
+  if (process.env.NODE_ENV === 'production' && process.env.DIAMOND_DESKTOP_PARENT_PID && !process.stdin.isTTY) {
+    process.stdin.on('end', () => shutdown('STDIN_CLOSED'));
+    process.stdin.resume();
+  }
+
+  // 10. API 404 Guard — Ensure unmatched API calls return JSON error, never falling through to SPA HTML
   app.all('/api/*', (_req, res) => {
     res.status(404).json({ success: false, error: 'API endpoint not found' });
   });
 
-  // 10. Production Static Frontend Serving & SPA Fallback
+  // 11. Production Static Frontend Serving & SPA Fallback
   const webDistDir = getWebDistDir();
   if (webDistDir) {
     logger.info(`Serving production web UI from: ${webDistDir}`);
@@ -204,12 +261,12 @@ async function bootstrap(): Promise<void> {
     });
   }
 
-  // 11. Error handler (must be last)
+  // 12. Error handler (must be last)
   app.use(errorHandler);
 
-  // 12. Start listening (strictly on local loopback by default to prevent LAN exposure)
+  // 13. Start listening (strictly on local loopback by default to prevent LAN exposure)
   const host = config.host || '127.0.0.1';
-  const server = app.listen(config.port, host, () => {
+  server = app.listen(config.port, host, () => {
     logger.info(`✅ DiamondERP V3.0 Backend running on http://${host}:${config.port}`);
     logger.info(`🔐 Authentication: ${process.env.JWT_SECRET ? 'ENABLED' : 'DESKTOP SECURE MODE'}`);
     if (process.env.NODE_ENV !== 'production') {
@@ -217,40 +274,6 @@ async function bootstrap(): Promise<void> {
     }
     logger.info(`❤️  Health check at http://${host}:${config.port}/health`);
   });
-
-  // 11. Graceful shutdown
-  const shutdown = async (signal: string) => {
-    logger.info(`${signal} received. Shutting down gracefully...`);
-
-    server.close(async () => {
-      logger.info('HTTP server stopped accepting new requests.');
-
-      try {
-        await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
-        logger.info('SQLite WAL checkpoint (TRUNCATE) completed successfully.');
-      } catch (walErr) {
-        logger.warn('Warning: Could not flush SQLite WAL during shutdown: ' + String(walErr));
-      }
-
-      try {
-        await disconnectAllClients();
-        logger.info('All database clients cleanly disconnected.');
-      } catch (err) {
-        logger.error('Error disconnecting database clients', undefined, err);
-      }
-
-      process.exit(0);
-    });
-
-    // Force exit after 10 seconds if hanging
-    setTimeout(() => {
-      logger.error('Forced shutdown after timeout.');
-      process.exit(1);
-    }, 10000);
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 bootstrap().catch((error) => {

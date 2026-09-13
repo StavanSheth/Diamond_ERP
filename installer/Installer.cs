@@ -758,7 +758,10 @@ namespace DiamondERP.Setup
                 case 2: // Destination
                     lblTopBannerTitle.Text = "Select Destination Location";
                     lblTopBannerSubtitle.Text = "Where should DiamondERP be installed?";
-                    txtDestPath.Text = appDir;
+                    if (string.IsNullOrEmpty(txtDestPath.Text))
+                    {
+                        txtDestPath.Text = appDir;
+                    }
                     btnNext.Text = "Next >";
                     btnNext.Enabled = true;
                     break;
