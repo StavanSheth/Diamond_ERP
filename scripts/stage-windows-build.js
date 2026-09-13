@@ -4,6 +4,7 @@
  * Prepares the production staging folder:
  *   build/windows/DiamondERP/
  *     ├── DiamondERP.exe                   (Pre-compiled launcher)
+ *     ├── Installer.exe                    (Desktop installer)
  *     ├── Microsoft.Web.WebView2.Core.dll  (WebView2 support library)
  *     ├── Microsoft.Web.WebView2.Wpf.dll   (WebView2 WPF wrapper)
  *     ├── WebView2Loader.dll               (WebView2 native loader)
@@ -11,16 +12,18 @@
  *     ├── runtime/                         (Reserved for portable node.exe in Phase 5)
  *     ├── api/
  *     │   ├── dist/                        (Compiled backend JavaScript)
+ *     │   ├── node_modules/                (Self-contained production runtime dependencies)
  *     │   ├── prisma/
  *     │   │   ├── schema.prisma            (Prisma schema)
  *     │   │   └── template.db              (Pre-migrated SQLite schema template)
- *     │   └── package.json
+ *     │   └── package.json                 (Production runtime package manifest)
  *     └── web/
  *         └── dist/                        (Compiled React SPA production bundle)
  *
  * Requirements:
  *  - Everything needed to run offline on a clean Windows computer.
  *  - ZERO source code, TypeScript, or devDependencies required.
+ *  - Backend runs independently without relying on repository root node_modules.
  */
 
 const fs = require('fs');
@@ -34,7 +37,7 @@ function log(msg) {
   console.log(`[StageBuild] ${msg}`);
 }
 
-function copyDirRecursive(src, dest) {
+function copyDirRecursive(src, dest, filterFn = null) {
   if (!fs.existsSync(src)) return;
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
@@ -42,11 +45,14 @@ function copyDirRecursive(src, dest) {
 
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    if (filterFn && !filterFn(entry.name, entry.isDirectory())) {
+      continue;
+    }
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 
     if (entry.isDirectory()) {
-      copyDirRecursive(srcPath, destPath);
+      copyDirRecursive(srcPath, destPath, filterFn);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
@@ -157,31 +163,104 @@ async function main() {
     log('Copied: api/prisma/template.db');
   }
 
-  // API Package metadata (stripped for production)
+  // 9. Stage Production API Dependencies into api/node_modules/
+  log('Staging production runtime dependencies for API...');
   const apiPkgSrc = path.join(ROOT_DIR, 'apps', 'api', 'package.json');
-  if (fs.existsSync(apiPkgSrc)) {
-    const pkg = JSON.parse(fs.readFileSync(apiPkgSrc, 'utf-8'));
-    const prodPkg = {
-      name: pkg.name,
-      version: pkg.version,
-      main: 'dist/index.js',
-      dependencies: pkg.dependencies,
-    };
-    fs.writeFileSync(path.join(apiDest, 'package.json'), JSON.stringify(prodPkg, null, 2), 'utf-8');
+  const apiPkg = JSON.parse(fs.readFileSync(apiPkgSrc, 'utf-8'));
+
+  // Pack local monorepo packages so npm can install them deterministically
+  const localPkgsDir = path.join(apiDest, '_local_pkgs');
+  fs.mkdirSync(localPkgsDir, { recursive: true });
+
+  const contractsPkgDir = path.join(ROOT_DIR, 'packages', 'contracts');
+  const utilsPkgDir = path.join(ROOT_DIR, 'packages', 'shared-utils');
+
+  log('Packing local packages for self-contained installation...');
+  execSync(`npm pack "${contractsPkgDir}"`, { cwd: localPkgsDir, stdio: 'pipe' });
+  execSync(`npm pack "${utilsPkgDir}"`, { cwd: localPkgsDir, stdio: 'pipe' });
+
+  const packedFiles = fs.readdirSync(localPkgsDir);
+  const contractsTgz = packedFiles.find((f) => f.startsWith('diamond-erp-contracts'));
+  const utilsTgz = packedFiles.find((f) => f.startsWith('diamond-erp-shared-utils'));
+
+  if (!contractsTgz || !utilsTgz) {
+    throw new Error('Failed to pack local dependencies (@diamond-erp/contracts or @diamond-erp/shared-utils)');
   }
 
-  // 9. Copy Web (Frontend) production bundle
+  // Temporary manifest pointing to local tarballs
+  const stagingDeps = { ...apiPkg.dependencies };
+  stagingDeps['@diamond-erp/contracts'] = `file:./_local_pkgs/${contractsTgz}`;
+  stagingDeps['@diamond-erp/shared-utils'] = `file:./_local_pkgs/${utilsTgz}`;
+
+  const stagingPkg = {
+    name: apiPkg.name,
+    version: apiPkg.version,
+    main: 'dist/index.js',
+    dependencies: stagingDeps,
+  };
+  fs.writeFileSync(path.join(apiDest, 'package.json'), JSON.stringify(stagingPkg, null, 2), 'utf-8');
+
+  // Deterministic production npm install inside staged api directory
+  log('Running deterministic npm install (--omit=dev) for production backend...');
+  execSync('npm install --omit=dev --no-audit --no-fund', {
+    cwd: apiDest,
+    stdio: 'inherit',
+  });
+
+  // Clean temporary local package tarballs and install lockfile
+  fs.rmSync(localPkgsDir, { recursive: true, force: true });
+  const tempLock = path.join(apiDest, 'package-lock.json');
+  if (fs.existsSync(tempLock)) {
+    fs.unlinkSync(tempLock);
+  }
+
+  // Restore final clean production package.json with clean version specs
+  const finalProdPkg = {
+    name: apiPkg.name,
+    version: apiPkg.version,
+    main: 'dist/index.js',
+    dependencies: apiPkg.dependencies,
+  };
+  fs.writeFileSync(path.join(apiDest, 'package.json'), JSON.stringify(finalProdPkg, null, 2), 'utf-8');
+  log('✔ Self-contained api/node_modules/ installed successfully.');
+
+  // 10. Stage Prisma Generated Runtime Engine & Client
+  log('Staging Prisma SQLite query engine binary and generated client...');
+  const prismaClientSrc = path.join(ROOT_DIR, 'apps', 'api', 'node_modules', '.prisma', 'client');
+  const prismaClientDest = path.join(apiDest, 'node_modules', '.prisma', 'client');
+
+  if (!fs.existsSync(prismaClientSrc)) {
+    throw new Error(`Prisma client source directory not found: ${prismaClientSrc}`);
+  }
+
+  // Copy .prisma/client while filtering out temporary files (*.tmp*)
+  copyDirRecursive(prismaClientSrc, prismaClientDest, (filename) => !filename.includes('.tmp'));
+
+  const enginePath = path.join(prismaClientDest, 'query_engine-windows.dll.node');
+  if (!fs.existsSync(enginePath)) {
+    throw new Error(`Prisma SQLite query engine binary missing in staged artifacts: ${enginePath}`);
+  }
+  const engineSizeMb = (fs.statSync(enginePath).size / (1024 * 1024)).toFixed(1);
+  log(`✔ Staged Prisma query engine: ${enginePath} (${engineSizeMb} MB)`);
+
+  // 11. Copy Web (Frontend) production bundle
   const webDistSrc = path.join(ROOT_DIR, 'apps', 'web', 'dist');
   const webDistDest = path.join(STAGING_DIR, 'web', 'dist');
   copyDirRecursive(webDistSrc, webDistDest);
   log('Copied: web/dist/');
 
-  // 10. Verify Staging Completeness
+  // 12. Verify Staging Completeness
   const requiredFiles = [
     path.join(STAGING_DIR, 'DiamondERP.exe'),
     path.join(STAGING_DIR, 'Microsoft.Web.WebView2.Core.dll'),
     path.join(STAGING_DIR, 'api', 'dist', 'index.js'),
+    path.join(STAGING_DIR, 'api', 'package.json'),
     path.join(STAGING_DIR, 'api', 'prisma', 'template.db'),
+    path.join(STAGING_DIR, 'api', 'node_modules', 'express', 'package.json'),
+    path.join(STAGING_DIR, 'api', 'node_modules', '@prisma', 'client', 'package.json'),
+    path.join(STAGING_DIR, 'api', 'node_modules', '.prisma', 'client', 'query_engine-windows.dll.node'),
+    path.join(STAGING_DIR, 'api', 'node_modules', '@diamond-erp', 'contracts', 'package.json'),
+    path.join(STAGING_DIR, 'api', 'node_modules', '@diamond-erp', 'shared-utils', 'package.json'),
     path.join(STAGING_DIR, 'web', 'dist', 'index.html'),
   ];
 
@@ -193,11 +272,18 @@ async function main() {
     }
   }
 
+  // Ensure NO root node_modules exists in staging directory
+  const rootNodeModules = path.join(STAGING_DIR, 'node_modules');
+  if (fs.existsSync(rootNodeModules)) {
+    console.error(`[ERROR] Staging verification failed: Unexpected root node_modules in "${rootNodeModules}"`);
+    missingCount++;
+  }
+
   if (missingCount === 0) {
     log('================================================================');
     log('✅ Production Staging Build Complete!');
     log(`Staged at: ${STAGING_DIR}`);
-    log('All runtime artifacts, executables, and templates verified.');
+    log('All runtime artifacts, executables, templates, and production node_modules verified.');
     log('================================================================');
   } else {
     console.error(`[FATAL] Staging build finished with ${missingCount} missing files.`);

@@ -25,6 +25,7 @@
     "test": "npm run test --workspaces --if-present",
     "stage:windows": "node scripts/stage-windows-build.js",
     "verify:packaging": "node scripts/validate-packaging-readiness.js",
-    "test:smoke": "node scripts/smoke-test-production.js"
+    "test:smoke": "node scripts/smoke-test-production.js",
+    "test:smoke:staged": "node scripts/smoke-test-production.js --staged"
   }
 }

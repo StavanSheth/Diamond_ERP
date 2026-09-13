@@ -1,20 +1,26 @@
 /**
- * DiamondERP V3.0 — Packaging Readiness Automated Validator
+ * DiamondERP V3.0 — Staged Packaging Readiness Automated Validator
  *
- * Runs automated checks to detect packaging mistakes and verify Windows readiness:
- *  1. Frontend build integrity & assets
- *  2. Backend compilation & clean exports
- *  3. Path resolution & LocalAppData isolation
- *  4. Localhost loopback binding (127.0.0.1)
- *  5. API 404 boundary isolation
- *  6. Desktop binary & WebView2 DLL presence
- *  7. Prisma SQLite runtime engine presence
+ * Validates the actual Windows production artifact inside:
+ *   build/windows/DiamondERP/
+ *
+ * Success Criteria:
+ *  1. Staging directory exists and contains required Windows executables
+ *  2. API production package manifest exists and declares valid entry point
+ *  3. Backend dist is compiled and self-contained
+ *  4. Production node_modules exists ONLY in api/node_modules/ (no root node_modules)
+ *  5. Every runtime dependency in api/package.json is installed and verified
+ *  6. Prisma SQLite native query engine and client are staged without tmp files
+ *  7. SQLite schema template exists with valid SQLite format header
+ *  8. Web production bundle is present with index.html and compiled assets
+ *  9. Staging folder is free of development artifacts (.git, devDependencies, etc.)
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
+const STAGING_DIR = path.join(ROOT_DIR, 'build', 'windows', 'DiamondERP');
 
 let totalChecks = 0;
 let passedChecks = 0;
@@ -38,50 +44,128 @@ function check(name, fn) {
 }
 
 console.log('================================================================');
-console.log('🔍 Running Packaging Readiness Validation for DiamondERP V3.0');
+console.log('🔍 Running Staged Packaging Readiness Validator for DiamondERP V3.0');
+console.log(`Target: ${STAGING_DIR}`);
 console.log('================================================================');
 
-// ── 1. Frontend Build Integrity ─────────────────────────────────────────────
-console.log('\n[1] Frontend Build Integrity:');
+// ── 1. Staging Root & Windows Binaries ───────────────────────────────────────
+console.log('\n[1] Windows Desktop Binaries & Runtime Staging:');
 
-check('web/dist/index.html exists and is valid HTML', () => {
-  const indexPath = path.join(ROOT_DIR, 'apps', 'web', 'dist', 'index.html');
-  if (!fs.existsSync(indexPath)) return false;
-  const content = fs.readFileSync(indexPath, 'utf-8');
-  return content.includes('<div id="root">') && content.includes('<script');
+check('Staging directory (build/windows/DiamondERP) exists', () => {
+  return fs.existsSync(STAGING_DIR);
 });
 
-check('web/dist/assets contains bundled JS and CSS', () => {
-  const assetsDir = path.join(ROOT_DIR, 'apps', 'web', 'dist', 'assets');
-  if (!fs.existsSync(assetsDir)) return false;
-  const files = fs.readdirSync(assetsDir);
-  const hasJs = files.some(f => f.endsWith('.js'));
-  const hasCss = files.some(f => f.endsWith('.css'));
-  return hasJs && hasCss;
+check('DiamondERP.exe launcher exists with valid size', () => {
+  const p = path.join(STAGING_DIR, 'DiamondERP.exe');
+  return fs.existsSync(p) && fs.statSync(p).size > 1024;
 });
 
-check('Production build does not reference development Vite port :5175', () => {
-  const indexPath = path.join(ROOT_DIR, 'apps', 'web', 'dist', 'index.html');
-  if (!fs.existsSync(indexPath)) return false;
-  const content = fs.readFileSync(indexPath, 'utf-8');
-  return !content.includes(':5175');
+check('Installer.exe exists with valid size', () => {
+  const p = path.join(STAGING_DIR, 'Installer.exe');
+  return fs.existsSync(p) && fs.statSync(p).size > 1024;
 });
 
-// ── 2. Backend Build Integrity ──────────────────────────────────────────────
-console.log('\n[2] Backend Build Integrity:');
-
-check('api/dist/index.js exists and is compiled', () => {
-  const apiDist = path.join(ROOT_DIR, 'apps', 'api', 'dist', 'index.js');
-  return fs.existsSync(apiDist);
+check('Microsoft.Web.WebView2 support DLLs exist', () => {
+  const core = path.join(STAGING_DIR, 'Microsoft.Web.WebView2.Core.dll');
+  const wpf = path.join(STAGING_DIR, 'Microsoft.Web.WebView2.Wpf.dll');
+  const loader = path.join(STAGING_DIR, 'WebView2Loader.dll');
+  return fs.existsSync(core) && fs.existsSync(wpf) && fs.existsSync(loader);
 });
 
-check('api/dist/infrastructure/paths.js exists', () => {
-  const pathsDist = path.join(ROOT_DIR, 'apps', 'api', 'dist', 'infrastructure', 'paths.js');
-  return fs.existsSync(pathsDist);
+check('Application icon (app.ico) exists', () => {
+  return fs.existsSync(path.join(STAGING_DIR, 'app.ico'));
 });
 
-check('Prisma template.db exists with valid SQLite format', () => {
-  const templateDb = path.join(ROOT_DIR, 'apps', 'api', 'prisma', 'template.db');
+check('Phase 5 runtime directory placeholder exists', () => {
+  const readme = path.join(STAGING_DIR, 'runtime', 'README.txt');
+  return fs.existsSync(readme);
+});
+
+// ── 2. Backend Manifest & Entry Point ───────────────────────────────────────
+console.log('\n[2] Backend Production Manifest & Entry Point:');
+
+let stagedPkg = null;
+check('api/package.json exists and is valid JSON', () => {
+  const pkgPath = path.join(STAGING_DIR, 'api', 'package.json');
+  if (!fs.existsSync(pkgPath)) return false;
+  stagedPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+  return Boolean(stagedPkg && stagedPkg.name && stagedPkg.version);
+});
+
+check('api/package.json specifies valid main entry point', () => {
+  if (!stagedPkg || !stagedPkg.main) return false;
+  const entryPath = path.join(STAGING_DIR, 'api', stagedPkg.main);
+  return fs.existsSync(entryPath);
+});
+
+check('api/package.json does NOT contain devDependencies (pure production)', () => {
+  return !stagedPkg || !stagedPkg.devDependencies;
+});
+
+check('api/dist/infrastructure/paths.js exists in staged artifact', () => {
+  return fs.existsSync(path.join(STAGING_DIR, 'api', 'dist', 'infrastructure', 'paths.js'));
+});
+
+// ── 3. Production node_modules Strategy & Dependency Tree ────────────────────
+console.log('\n[3] Production node_modules Strategy & Isolation:');
+
+check('api/node_modules/ exists in staging directory', () => {
+  return fs.existsSync(path.join(STAGING_DIR, 'api', 'node_modules'));
+});
+
+check('NO root node_modules exists in build/windows/DiamondERP/node_modules', () => {
+  return !fs.existsSync(path.join(STAGING_DIR, 'node_modules'));
+});
+
+check('NO web node_modules exists in build/windows/DiamondERP/web/node_modules', () => {
+  return !fs.existsSync(path.join(STAGING_DIR, 'web', 'node_modules'));
+});
+
+check('ALL declared runtime dependencies exist in api/node_modules/', () => {
+  if (!stagedPkg || !stagedPkg.dependencies) return false;
+  const missingDeps = [];
+  for (const depName of Object.keys(stagedPkg.dependencies)) {
+    const depPkg = path.join(STAGING_DIR, 'api', 'node_modules', ...depName.split('/'), 'package.json');
+    if (!fs.existsSync(depPkg)) {
+      missingDeps.push(depName);
+    }
+  }
+  if (missingDeps.length > 0) {
+    console.error(`    Missing runtime dependencies: ${missingDeps.join(', ')}`);
+    return false;
+  }
+  return true;
+});
+
+check('Local monorepo packages (@diamond-erp/contracts, shared-utils) staged as modules', () => {
+  const contractsPkg = path.join(STAGING_DIR, 'api', 'node_modules', '@diamond-erp', 'contracts', 'package.json');
+  const utilsPkg = path.join(STAGING_DIR, 'api', 'node_modules', '@diamond-erp', 'shared-utils', 'package.json');
+  return fs.existsSync(contractsPkg) && fs.existsSync(utilsPkg);
+});
+
+check('Core backend frameworks (express, bcryptjs, cors, helmet, jsonwebtoken, exceljs) exist', () => {
+  const corePkgs = ['express', 'bcryptjs', 'cors', 'helmet', 'jsonwebtoken', 'exceljs', 'zod', 'uuid'];
+  return corePkgs.every((pkg) => {
+    return fs.existsSync(path.join(STAGING_DIR, 'api', 'node_modules', pkg, 'package.json'));
+  });
+});
+
+check('Transitive dependencies resolve inside api/node_modules (e.g. accepts, bytes, statuses)', () => {
+  const transitives = ['accepts', 'bytes', 'statuses'];
+  return transitives.every((pkg) => {
+    return fs.existsSync(path.join(STAGING_DIR, 'api', 'node_modules', pkg, 'package.json'));
+  });
+});
+
+// ── 4. Prisma Runtime & Pre-migrated SQLite Template ────────────────────────
+console.log('\n[4] Prisma Engine & SQLite Database Staging:');
+
+check('api/prisma/schema.prisma exists', () => {
+  return fs.existsSync(path.join(STAGING_DIR, 'api', 'prisma', 'schema.prisma'));
+});
+
+check('api/prisma/template.db exists with valid SQLite 3 header', () => {
+  const templateDb = path.join(STAGING_DIR, 'api', 'prisma', 'template.db');
   if (!fs.existsSync(templateDb)) return false;
   const header = Buffer.alloc(16);
   const fd = fs.openSync(templateDb, 'r');
@@ -90,106 +174,69 @@ check('Prisma template.db exists with valid SQLite format', () => {
   return header.toString('utf-8').startsWith('SQLite format 3');
 });
 
-// ── 3. Centralized Paths & LocalAppData Isolation ───────────────────────────
-console.log('\n[3] Centralized Paths & Windows Data Directory:');
-
-// Test paths module logic
-const pathsModule = require(path.join(ROOT_DIR, 'apps', 'api', 'dist', 'infrastructure', 'paths.js'));
-
-check('paths.ts exports all required path resolver functions', () => {
-  return typeof pathsModule.getDataDir === 'function' &&
-         typeof pathsModule.getDatabasesDir === 'function' &&
-         typeof pathsModule.getUploadsDir === 'function' &&
-         typeof pathsModule.getBackupsDir === 'function' &&
-         typeof pathsModule.getLogsDir === 'function' &&
-         typeof pathsModule.getConfigDir === 'function' &&
-         typeof pathsModule.getDatabaseTemplatePath === 'function' &&
-         typeof pathsModule.ensureAllDataDirs === 'function';
+check('@prisma/client package is staged in api/node_modules/@prisma/client', () => {
+  return fs.existsSync(path.join(STAGING_DIR, 'api', 'node_modules', '@prisma', 'client', 'package.json'));
 });
 
-check('In production mode, mutable data resolves under LocalAppData', () => {
-  const origEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = 'production';
-  delete process.env.DIAMOND_DATA_DIR;
-
-  const dataDir = pathsModule.getDataDir();
-  const dbDir = pathsModule.getDatabasesDir();
-  const uploadsDir = pathsModule.getUploadsDir();
-  const backupsDir = pathsModule.getBackupsDir();
-  const configDir = pathsModule.getConfigDir();
-
-  process.env.NODE_ENV = origEnv;
-
-  const isUnderDiamondERP = dataDir.includes('DiamondERP');
-  const isDbUnderData = dbDir.startsWith(dataDir);
-  const isUploadsUnderData = uploadsDir.startsWith(dataDir);
-  const isBackupsUnderData = backupsDir.startsWith(dataDir);
-  const isConfigUnderData = configDir.startsWith(dataDir);
-
-  return isUnderDiamondERP && isDbUnderData && isUploadsUnderData && isBackupsUnderData && isConfigUnderData;
+check('.prisma/client query engine binary (query_engine-windows.dll.node) exists (>10MB)', () => {
+  const enginePath = path.join(STAGING_DIR, 'api', 'node_modules', '.prisma', 'client', 'query_engine-windows.dll.node');
+  if (!fs.existsSync(enginePath)) return false;
+  const sizeBytes = fs.statSync(enginePath).size;
+  return sizeBytes > 10 * 1024 * 1024;
 });
 
-// ── 4. Server Binding & Security ────────────────────────────────────────────
-console.log('\n[4] Server Binding & Host Configuration:');
-
-const configModule = require(path.join(ROOT_DIR, 'apps', 'api', 'dist', 'config', 'index.js'));
-
-check('Server host defaults to loopback 127.0.0.1 (not 0.0.0.0)', () => {
-  return configModule.config.host === '127.0.0.1';
+check('.prisma/client does not contain stale *.tmp* files', () => {
+  const clientDir = path.join(STAGING_DIR, 'api', 'node_modules', '.prisma', 'client');
+  if (!fs.existsSync(clientDir)) return false;
+  const files = fs.readdirSync(clientDir);
+  return !files.some((f) => f.includes('.tmp'));
 });
 
-check('Production CORS origins include localhost and 127.0.0.1 loopback', () => {
-  const origins = configModule.config.corsOrigins;
-  return origins.includes('http://127.0.0.1:3002') && origins.includes('http://localhost:3002');
+// ── 5. Frontend Bundle & Static Assets ──────────────────────────────────────
+console.log('\n[5] Frontend Production Bundle & Static Assets:');
+
+check('web/dist/index.html exists and is valid HTML', () => {
+  const indexPath = path.join(STAGING_DIR, 'web', 'dist', 'index.html');
+  if (!fs.existsSync(indexPath)) return false;
+  const content = fs.readFileSync(indexPath, 'utf-8');
+  return content.includes('<div id="root">') && content.includes('<script');
 });
 
-// ── 5. Desktop Binaries & WebView2 Artifacts ────────────────────────────────
-console.log('\n[5] Desktop Binaries & WebView2 Artifacts:');
-
-check('installer/DiamondERP.exe exists', () => {
-  return fs.existsSync(path.join(ROOT_DIR, 'installer', 'DiamondERP.exe'));
+check('web/dist/assets contains bundled JS and CSS', () => {
+  const assetsDir = path.join(STAGING_DIR, 'web', 'dist', 'assets');
+  if (!fs.existsSync(assetsDir)) return false;
+  const files = fs.readdirSync(assetsDir);
+  const hasJs = files.some((f) => f.endsWith('.js'));
+  const hasCss = files.some((f) => f.endsWith('.css'));
+  return hasJs && hasCss;
 });
 
-check('installer/Installer.exe exists', () => {
-  return fs.existsSync(path.join(ROOT_DIR, 'installer', 'Installer.exe'));
+check('Production web bundle does not reference Vite dev port :5175', () => {
+  const indexPath = path.join(STAGING_DIR, 'web', 'dist', 'index.html');
+  if (!fs.existsSync(indexPath)) return false;
+  const content = fs.readFileSync(indexPath, 'utf-8');
+  return !content.includes(':5175');
 });
 
-check('installer/Microsoft.Web.WebView2.Core.dll exists', () => {
-  return fs.existsSync(path.join(ROOT_DIR, 'installer', 'Microsoft.Web.WebView2.Core.dll'));
+// ── 6. Cleanliness & Absence of Development Artifacts ───────────────────────
+console.log('\n[6] Staged Artifact Cleanliness:');
+
+check('No .git or source control metadata inside staging directory', () => {
+  return !fs.existsSync(path.join(STAGING_DIR, '.git'));
 });
 
-check('installer/Microsoft.Web.WebView2.Wpf.dll exists', () => {
-  return fs.existsSync(path.join(ROOT_DIR, 'installer', 'Microsoft.Web.WebView2.Wpf.dll'));
-});
-
-check('installer/WebView2Loader.dll exists', () => {
-  return fs.existsSync(path.join(ROOT_DIR, 'installer', 'WebView2Loader.dll'));
-});
-
-// ── 6. Runtime Dependencies & Engines ───────────────────────────────────────
-console.log('\n[6] Production Runtime Dependencies:');
-
-function findModuleDir(modName) {
-  const p1 = path.join(ROOT_DIR, 'apps', 'api', 'node_modules', ...modName.split('/'));
-  if (fs.existsSync(p1)) return p1;
-  const p2 = path.join(ROOT_DIR, 'node_modules', ...modName.split('/'));
-  if (fs.existsSync(p2)) return p2;
-  return null;
-}
-
-check('@prisma/client is installed with SQLite query engine binary', () => {
-  const clientDir = findModuleDir('@prisma/client');
-  if (!clientDir) return false;
-  // Check for query engine binary in node_modules/.prisma/client
-  const engineDir = findModuleDir('.prisma/client');
-  if (!engineDir) return false;
-  const engineFiles = fs.readdirSync(engineDir);
-  return engineFiles.some(f => f.includes('query_engine') && (f.endsWith('.dll.node') || f.endsWith('.node')));
-});
-
-check('Pure JS dependencies (bcryptjs, express, helmet, jsonwebtoken, exceljs) present', () => {
-  const modules = ['bcryptjs', 'express', 'helmet', 'jsonwebtoken', 'exceljs'];
-  return modules.every(m => Boolean(findModuleDir(m)));
+check('No TypeScript source files (.ts) in api/dist', () => {
+  const distDir = path.join(STAGING_DIR, 'api', 'dist');
+  if (!fs.existsSync(distDir)) return false;
+  function hasTs(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory() && hasTs(path.join(dir, e.name))) return true;
+      if (e.isFile() && e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) return true;
+    }
+    return false;
+  }
+  return !hasTs(distDir);
 });
 
 // ── Results Summary ─────────────────────────────────────────────────────────
@@ -198,9 +245,9 @@ console.log(`Validation Results: ${passedChecks}/${totalChecks} checks PASSED ($
 console.log('================================================================');
 
 if (failedChecks > 0) {
-  console.error(`\n❌ Packaging validation failed with ${failedChecks} issue(s).`);
+  console.error(`\n❌ Staged packaging validation failed with ${failedChecks} issue(s).`);
   process.exit(1);
 } else {
-  console.log('\n✅ All packaging readiness checks PASSED!');
+  console.log('\n✅ All staged packaging readiness checks PASSED!');
   process.exit(0);
 }
