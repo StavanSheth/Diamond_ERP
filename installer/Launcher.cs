@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -87,14 +88,58 @@ namespace DiamondERP.App
                     string dd = ResolveDataDirectory();
                     string rd = ResolveRuntimeDirectory();
                     bool ip = DetectProductionMode();
+
+                    string nodeExe = rd != null ? Path.Combine(rd, "node.exe") : Path.Combine(ad, "runtime", "node.exe");
+                    string apiEntry = Path.Combine(ad, "api", "dist", "index.js");
+                    string webDist = Path.Combine(ad, "web", "dist");
+
+                    bool nodeExists = File.Exists(nodeExe);
+                    bool apiExists = File.Exists(apiEntry);
+                    bool webDistExists = Directory.Exists(webDist) && File.Exists(Path.Combine(webDist, "index.html"));
+
+                    // Compact single-line summary for backwards compatibility with tests
                     Console.WriteLine(string.Format("MODE:{0}|APPDIR:{1}|DATADIR:{2}|RUNTIMEDIR:{3}",
                         ip ? "PRODUCTION" : "DEVELOPMENT", ad, dd, rd ?? "NULL"));
+
+                    // Expanded diagnostic contract
+                    Console.WriteLine(string.Format("MODE:{0}", ip ? "PRODUCTION" : "DEVELOPMENT"));
+                    Console.WriteLine(string.Format("APPDIR:{0}", ad));
+                    Console.WriteLine(string.Format("DATADIR:{0}", dd));
+                    Console.WriteLine(string.Format("NODE_RUNTIME:{0}", nodeExe));
+                    Console.WriteLine(string.Format("API_ENTRY:{0}", apiEntry));
+                    Console.WriteLine(string.Format("WEB_DIST:{0}", webDist));
+                    Console.WriteLine(string.Format("NODE_RUNTIME_EXISTS:{0}", nodeExists.ToString().ToLower()));
+                    Console.WriteLine(string.Format("API_ENTRY_EXISTS:{0}", apiExists.ToString().ToLower()));
+                    Console.WriteLine(string.Format("WEB_DIST_EXISTS:{0}", webDistExists.ToString().ToLower()));
+
+                    bool valid = ip ? (nodeExists && apiExists && webDistExists) : true;
+                    Environment.ExitCode = valid ? 0 : 1;
                     return;
                 }
                 else if (args[0].Equals("--version", StringComparison.OrdinalIgnoreCase) || args[0].Equals("-v", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("Diamond ERP v3.0.0");
+                    Environment.ExitCode = 0;
                     return;
+                }
+                else if (args[0].Equals("--shutdown", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        using (var evt = EventWaitHandle.OpenExisting("Global\\DiamondERP_Shutdown_Event"))
+                        {
+                            evt.Set();
+                            Console.WriteLine("SHUTDOWN_SIGNALED");
+                            Environment.ExitCode = 0;
+                            return;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("SHUTDOWN_ERROR:" + ex.Message);
+                        Environment.ExitCode = 1;
+                        return;
+                    }
                 }
             }
 
@@ -112,8 +157,35 @@ namespace DiamondERP.App
                     return;
                 }
 
+                EventWaitHandle shutdownEvent = null;
                 try
                 {
+                    bool createdEvt;
+                    shutdownEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "Global\\DiamondERP_Shutdown_Event", out createdEvt);
+                    ThreadPool.QueueUserWorkItem(state =>
+                    {
+                        try
+                        {
+                            shutdownEvent.WaitOne();
+                            WriteLog("SHUTDOWN", "Shutdown signaled via IPC event. Initiating clean exit...");
+                            if (Application.Current != null)
+                            {
+                                Application.Current.Dispatcher.Invoke(new Action(() =>
+                                {
+                                    ShutdownBackend();
+                                    try { Application.Current.Shutdown(); } catch { }
+                                    try { Environment.Exit(0); } catch { }
+                                }));
+                            }
+                            else
+                            {
+                                ShutdownBackend();
+                                try { Environment.Exit(0); } catch { }
+                            }
+                        }
+                        catch { }
+                    });
+
                     _appDir = ResolveApplicationDirectory();
                     _dataDir = ResolveDataDirectory();
                     _isProductionMode = DetectProductionMode();
@@ -145,6 +217,13 @@ namespace DiamondERP.App
                 {
                     WriteLog("ERROR", "Main execution error: " + ex.ToString());
                     MessageBox.Show("Could not launch DiamondERP: " + ex.Message, "DiamondERP Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    if (shutdownEvent != null)
+                    {
+                        try { shutdownEvent.Dispose(); } catch { }
+                    }
                 }
             }
         }
@@ -232,7 +311,38 @@ namespace DiamondERP.App
             this.Closing += (s, e) =>
             {
                 ShutdownBackend();
+                if (Application.Current != null)
+                {
+                    try { Application.Current.Shutdown(); } catch { }
+                }
+                try { Environment.Exit(0); } catch { }
             };
+        }
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            HwndSource source = PresentationSource.FromVisual(this) as HwndSource;
+            if (source != null)
+            {
+                source.AddHook(WndProc);
+            }
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_CLOSE = 0x0010;
+            if (msg == WM_CLOSE)
+            {
+                WriteLog("SHUTDOWN", "WM_CLOSE received via WndProc. Initiating clean exit...");
+                ShutdownBackend();
+                if (Application.Current != null)
+                {
+                    try { Application.Current.Shutdown(); } catch { }
+                }
+                try { Environment.Exit(0); } catch { }
+            }
+            return IntPtr.Zero;
         }
 
         // ── Architecture & Path Resolution ─────────────────────────────────────
