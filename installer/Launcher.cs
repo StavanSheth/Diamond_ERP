@@ -26,10 +26,14 @@ namespace DiamondERP.App
 
         private const int SW_RESTORE = 9;
         private const string WINDOW_TITLE = "Diamond ERP — Enterprise Suite";
+        private const int DEFAULT_PORT = 3002;
+        private const string LOOPBACK_HOST = "127.0.0.1";
 
         private static string _appDir;
-        private static Process _apiProcess;
-        private static Process _webProcess;
+        private static string _dataDir;
+        private static bool _isProductionMode;
+        private static Process _backendProcess;
+        private static Process _devWebProcess;
         private static System.Windows.Forms.NotifyIcon _trayIcon;
 
         private WebView2 _webView;
@@ -50,35 +54,22 @@ namespace DiamondERP.App
                     return;
                 }
 
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
-                {
-                    _appDir = Directory.GetParent(baseDir).FullName;
-                }
-                else
-                {
-                    _appDir = baseDir;
-                }
+                _appDir = ResolveApplicationDirectory();
+                _dataDir = ResolveDataDirectory();
+                _isProductionMode = DetectProductionMode();
+
+                WriteLog("Startup", string.Format("Application started. Mode: {0}, AppDir: {1}, DataDir: {2}",
+                    _isProductionMode ? "PRODUCTION" : "DEVELOPMENT", _appDir, _dataDir));
 
                 AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 {
-                    try
-                    {
-                        File.AppendAllText(Path.Combine(_appDir, "app_crash.log"),
-                            DateTime.Now.ToString("o") + " [Unhandled] " + e.ExceptionObject.ToString() + Environment.NewLine);
-                    }
-                    catch { }
+                    WriteLog("UnhandledException", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown exception");
                 };
 
                 var app = new Application();
                 app.DispatcherUnhandledException += (s, e) =>
                 {
-                    try
-                    {
-                        File.AppendAllText(Path.Combine(_appDir, "app_crash.log"),
-                            DateTime.Now.ToString("o") + " [Dispatcher] " + e.Exception.ToString() + Environment.NewLine);
-                    }
-                    catch { }
+                    WriteLog("DispatcherException", e.Exception != null ? e.Exception.ToString() : "Unknown dispatcher exception");
                     e.Handled = true;
                 };
 
@@ -87,13 +78,7 @@ namespace DiamondERP.App
             }
             catch (Exception ex)
             {
-                try
-                {
-                    string crashLogPath = Path.Combine(_appDir ?? AppDomain.CurrentDomain.BaseDirectory, "app_crash.log");
-                    File.AppendAllText(crashLogPath,
-                        DateTime.Now.ToString("o") + " [MainCatch] " + ex.ToString() + Environment.NewLine);
-                }
-                catch { }
+                WriteLog("MainCatch", ex.ToString());
                 MessageBox.Show("Could not launch DiamondERP: " + ex.Message, "DiamondERP Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -180,64 +165,70 @@ namespace DiamondERP.App
 
             this.Closing += (s, e) =>
             {
-                Shutdown();
+                ShutdownBackend();
             };
         }
 
-        private void SetupTray()
+        // ── Architecture & Path Resolution ─────────────────────────────────────
+
+        public static string ResolveApplicationDirectory()
+        {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (Path.GetFileName(baseDir).Equals("installer", StringComparison.OrdinalIgnoreCase))
+            {
+                return Directory.GetParent(baseDir).FullName;
+            }
+            return baseDir;
+        }
+
+        public static string ResolveRuntimeDirectory()
+        {
+            string bundledNodeDir = Path.Combine(_appDir, "runtime");
+            if (File.Exists(Path.Combine(bundledNodeDir, "node.exe")))
+            {
+                return bundledNodeDir;
+            }
+            return null;
+        }
+
+        public static string ResolveDataDirectory()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dataRoot = Path.Combine(localAppData, "DiamondERP");
+            if (!Directory.Exists(dataRoot))
+            {
+                try { Directory.CreateDirectory(dataRoot); } catch { }
+            }
+            return dataRoot;
+        }
+
+        public static void WriteLog(string category, string message)
         {
             try
             {
-                string iconPath = Path.Combine(_appDir, "installer", "app.ico");
-                if (!File.Exists(iconPath)) { iconPath = Path.Combine(_appDir, "app.ico"); }
-
-                System.Drawing.Icon appIcon = null;
-                if (File.Exists(iconPath))
+                string targetDir = _dataDir ?? ResolveDataDirectory();
+                string logsDir = Path.Combine(targetDir, "logs");
+                if (!Directory.Exists(logsDir))
                 {
-                    try { appIcon = new System.Drawing.Icon(iconPath); } catch { }
+                    Directory.CreateDirectory(logsDir);
                 }
-                if (appIcon == null) { appIcon = System.Drawing.SystemIcons.Application; }
-
-                var menu = new System.Windows.Forms.ContextMenuStrip();
-                menu.Items.Add("Open DiamondERP", null, (s, e) =>
-                {
-                    this.Dispatcher.Invoke(() =>
-                    {
-                        this.Show();
-                        this.WindowState = WindowState.Normal;
-                        this.Activate();
-                    });
-                });
-                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-                menu.Items.Add("Exit Application", null, (s, e) =>
-                {
-                    this.Dispatcher.Invoke(() =>
-                    {
-                        Shutdown();
-                        Application.Current.Shutdown();
-                    });
-                });
-
-                _trayIcon = new System.Windows.Forms.NotifyIcon
-                {
-                    Text = "Diamond ERP — Enterprise Suite",
-                    Icon = appIcon,
-                    ContextMenuStrip = menu,
-                    Visible = true
-                };
-
-                _trayIcon.DoubleClick += (s, e) =>
-                {
-                    this.Dispatcher.Invoke(() =>
-                    {
-                        this.Show();
-                        this.WindowState = WindowState.Normal;
-                        this.Activate();
-                    });
-                };
+                string logFile = Path.Combine(logsDir, "launcher.log");
+                string entry = string.Format("[{0:o}] [{1}] {2}{3}", DateTime.Now, category, message, Environment.NewLine);
+                File.AppendAllText(logFile, entry);
             }
             catch { }
         }
+
+        private static bool DetectProductionMode()
+        {
+            // Production mode if built API distribution exists
+            string apiDist1 = Path.Combine(_appDir, "api", "dist", "index.js");
+            string apiDist2 = Path.Combine(_appDir, "dist", "index.js");
+            string appsApiDist = Path.Combine(_appDir, "apps", "api", "dist", "index.js");
+            return File.Exists(apiDist1) || File.Exists(apiDist2) || File.Exists(appsApiDist);
+        }
+
+        // ── Service Management & Process Lifecycle ─────────────────────────────
 
         private void StartServicesAndNavigate()
         {
@@ -245,139 +236,250 @@ namespace DiamondERP.App
             {
                 try
                 {
-                    // 1. Start API if not running
-                    if (!IsPortActive("http://localhost:3002/health") && !IsPortActive("http://localhost:3002/api/health") && !IsPortActive("http://localhost:3002/"))
+                    string healthUrl = string.Format("http://{0}:{1}/health", LOOPBACK_HOST, DEFAULT_PORT);
+                    string targetAppUrl = _isProductionMode
+                        ? string.Format("http://{0}:{1}/", LOOPBACK_HOST, DEFAULT_PORT)
+                        : "http://localhost:5175/";
+
+                    // 1. Start backend process if not already responding
+                    if (!IsBackendHealthy(healthUrl))
                     {
-                        UpdateStatus("Starting backend database & API service...");
-                        ProcessStartInfo apiInfo = new ProcessStartInfo
-                        {
-                            FileName = "cmd.exe",
-                            Arguments = "/c npm run dev:api",
-                            WorkingDirectory = _appDir,
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            WindowStyle = ProcessWindowStyle.Hidden
-                        };
-                        _apiProcess = Process.Start(apiInfo);
+                        StartBackend();
                     }
 
-                    // 2. Start Web if not running
-                    if (!IsPortActive("http://localhost:5175/"))
+                    // 2. In development mode, also start Vite web dev server if needed
+                    if (!_isProductionMode && !IsPortActive("http://localhost:5175/"))
                     {
-                        UpdateStatus("Starting web UI application...");
-                        ProcessStartInfo webInfo = new ProcessStartInfo
-                        {
-                            FileName = "cmd.exe",
-                            Arguments = "/c npm run dev:web",
-                            WorkingDirectory = _appDir,
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            WindowStyle = ProcessWindowStyle.Hidden
-                        };
-                        _webProcess = Process.Start(webInfo);
+                        StartDevWebServer();
                     }
 
-                    UpdateStatus("Waiting for application interface to become ready...");
+                    UpdateStatus("Waiting for local DiamondERP services to initialize...");
 
-                    // 3. Wait for web server to respond
-                    int attempts = 0;
-                    while (attempts < 35)
+                    // 3. Wait for target service readiness
+                    string readinessCheckUrl = _isProductionMode ? healthUrl : "http://localhost:5175/";
+                    bool ready = WaitForBackend(readinessCheckUrl, 40, 600);
+
+                    if (!ready)
                     {
-                        if (IsPortActive("http://localhost:5175/"))
-                        {
-                            break;
-                        }
-                        Thread.Sleep(600);
-                        attempts++;
+                        throw new TimeoutException("DiamondERP services did not become ready within the expected time window.");
                     }
 
                     // 4. Initialize WebView2 and navigate
-                    this.Dispatcher.Invoke(async () =>
+                    this.Dispatcher.Invoke(new Action(() =>
                     {
-                        try
-                        {
-                            string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiamondERP", "WebView2Data");
-                            if (!Directory.Exists(dataDir))
-                            {
-                                Directory.CreateDirectory(dataDir);
-                            }
-
-                            var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
-                            await _webView.EnsureCoreWebView2Async(env);
-
-                            _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                            _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
-                            _webView.CoreWebView2.Settings.IsZoomControlEnabled = true;
-
-                            _webView.NavigationCompleted += (s, args) =>
-                            {
-                                if (args.IsSuccess)
-                                {
-                                    _loadingGrid.Visibility = Visibility.Collapsed;
-                                }
-                            };
-
-                            _webView.Source = new Uri("http://localhost:5175/");
-                        }
-                        catch (Exception initEx)
-                        {
-                            try
-                            {
-                                File.AppendAllText(Path.Combine(_appDir, "app_crash.log"),
-                                    DateTime.Now.ToString("o") + " [WebView2InitError] " + initEx.ToString() + Environment.NewLine);
-                            }
-                            catch { }
-
-                            // Fallback if WebView2 initialization fails
-                            LaunchEdgeAppFallback("http://localhost:5175/");
-                        }
-                    });
+                        InitializeWebView2(targetAppUrl);
+                    }));
                 }
                 catch (Exception ex)
                 {
-                    try
+                    WriteLog("ServiceStartError", ex.ToString());
+                    this.Dispatcher.Invoke(new Action(() =>
                     {
-                        File.AppendAllText(Path.Combine(_appDir, "app_crash.log"),
-                            DateTime.Now.ToString("o") + " [StartServicesError] " + ex.ToString() + Environment.NewLine);
-                    }
-                    catch { }
-
-                    this.Dispatcher.Invoke(() =>
-                    {
-                        MessageBox.Show("Error starting services: " + ex.Message, "DiamondERP", MessageBoxButton.OK, MessageBoxImage.Error);
-                    });
+                        MessageBox.Show("Error starting DiamondERP services: " + ex.Message,
+                            "DiamondERP Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }));
                 }
             });
         }
 
-        private void LaunchEdgeAppFallback(string url)
+        public static void StartBackend()
         {
-            string edge = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
-            if (!File.Exists(edge)) { edge = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe"; }
+            WriteLog("Backend", "Starting backend process...");
 
-            if (File.Exists(edge))
+            if (_isProductionMode)
             {
-                string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiamondERP", "app_profile");
-                string args = string.Format("--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1360,860 --no-first-run", url, profile);
-                Process.Start(edge, args);
-                this.Hide();
+                // PRODUCTION MODE: Run bundled or local Node against api/dist/index.js
+                string runtimeDir = ResolveRuntimeDirectory();
+                string nodeExe = runtimeDir != null ? Path.Combine(runtimeDir, "node.exe") : "node";
+
+                string scriptPath = Path.Combine(_appDir, "api", "dist", "index.js");
+                if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "dist", "index.js"); }
+                if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "apps", "api", "dist", "index.js"); }
+
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = nodeExe,
+                    Arguments = string.Format("\"{0}\"", scriptPath),
+                    WorkingDirectory = Path.GetDirectoryName(scriptPath),
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                // Inject deterministic production environment variables
+                psi.EnvironmentVariables["NODE_ENV"] = "production";
+                psi.EnvironmentVariables["PORT"] = DEFAULT_PORT.ToString();
+                psi.EnvironmentVariables["HOST"] = LOOPBACK_HOST;
+                psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
+
+                _backendProcess = Process.Start(psi);
+                WriteLog("Backend", string.Format("Started production Node backend (PID: {0})", _backendProcess != null ? _backendProcess.Id : 0));
             }
             else
             {
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-                this.Hide();
+                // DEVELOPMENT MODE: Fall back to npm workspace runner
+                ProcessStartInfo devPsi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c npm run dev:api",
+                    WorkingDirectory = _appDir,
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                _backendProcess = Process.Start(devPsi);
+                WriteLog("Backend", string.Format("Started development API process via npm (PID: {0})", _backendProcess != null ? _backendProcess.Id : 0));
+            }
+
+            if (_backendProcess != null)
+            {
+                _backendProcess.EnableRaisingEvents = true;
+                _backendProcess.Exited += (s, e) => HandleBackendExit();
             }
         }
 
-        private void UpdateStatus(string msg)
+        private static void StartDevWebServer()
         {
-            this.Dispatcher.Invoke(() =>
+            WriteLog("DevWeb", "Starting development Vite web server...");
+            ProcessStartInfo webInfo = new ProcessStartInfo
             {
-                if (_statusText != null)
+                FileName = "cmd.exe",
+                Arguments = "/c npm run dev:web",
+                WorkingDirectory = _appDir,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            _devWebProcess = Process.Start(webInfo);
+        }
+
+        public static bool WaitForBackend(string probeUrl, int maxAttempts, int delayMs)
+        {
+            int attempts = 0;
+            while (attempts < maxAttempts)
+            {
+                if (IsPortActive(probeUrl))
                 {
-                    _statusText.Text = msg;
+                    return true;
                 }
-            });
+                Thread.Sleep(delayMs);
+                attempts++;
+            }
+            return false;
+        }
+
+        public async void InitializeWebView2(string targetUrl)
+        {
+            try
+            {
+                // Verify WebView2 Runtime availability
+                string wvVersion = null;
+                try
+                {
+                    wvVersion = CoreWebView2Environment.GetAvailableBrowserVersionString();
+                }
+                catch { }
+
+                if (string.IsNullOrEmpty(wvVersion))
+                {
+                    WriteLog("WebView2Error", "Microsoft Edge WebView2 Runtime was not detected on this system.");
+                    string msg = "Microsoft Edge WebView2 Runtime is required to run DiamondERP on Windows.\n\n" +
+                                 "Please download and install Microsoft Edge WebView2 from Microsoft, or contact your system administrator.";
+                    MessageBox.Show(msg, "WebView2 Runtime Required", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                string webViewDataDir = Path.Combine(_dataDir, "WebView2Data");
+                if (!Directory.Exists(webViewDataDir))
+                {
+                    Directory.CreateDirectory(webViewDataDir);
+                }
+
+                var env = await CoreWebView2Environment.CreateAsync(null, webViewDataDir);
+                await _webView.EnsureCoreWebView2Async(env);
+
+                _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                _webView.CoreWebView2.Settings.AreDevToolsEnabled = !_isProductionMode;
+                _webView.CoreWebView2.Settings.IsZoomControlEnabled = true;
+
+                _webView.NavigationCompleted += (s, args) =>
+                {
+                    if (args.IsSuccess)
+                    {
+                        _loadingGrid.Visibility = Visibility.Collapsed;
+                    }
+                    else
+                    {
+                        WriteLog("NavigationError", "Failed to navigate to: " + targetUrl);
+                    }
+                };
+
+                _webView.Source = new Uri(targetUrl);
+            }
+            catch (Exception ex)
+            {
+                WriteLog("WebView2InitError", ex.ToString());
+                MessageBox.Show("Could not initialize desktop application view: " + ex.Message,
+                    "DiamondERP View Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        public static void HandleBackendExit()
+        {
+            if (_backendProcess != null && _backendProcess.HasExited)
+            {
+                WriteLog("BackendExited", string.Format("Backend process exited with code: {0}", _backendProcess.ExitCode));
+            }
+        }
+
+        public static void ShutdownBackend()
+        {
+            WriteLog("Shutdown", "Shutting down application launcher and backend services...");
+
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+
+            try
+            {
+                if (_backendProcess != null && !_backendProcess.HasExited)
+                {
+                    KillProcessTree(_backendProcess.Id);
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (_devWebProcess != null && !_devWebProcess.HasExited)
+                {
+                    KillProcessTree(_devWebProcess.Id);
+                }
+            }
+            catch { }
+        }
+
+        // ── Helper Utilities ───────────────────────────────────────────────────
+
+        private static bool IsBackendHealthy(string url)
+        {
+            try
+            {
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+                request.Timeout = 900;
+                request.Method = "GET";
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    return response.StatusCode == HttpStatusCode.OK;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsPortActive(string url)
@@ -398,34 +500,6 @@ namespace DiamondERP.App
             }
         }
 
-        private static void Shutdown()
-        {
-            if (_trayIcon != null)
-            {
-                _trayIcon.Visible = false;
-                _trayIcon.Dispose();
-                _trayIcon = null;
-            }
-
-            try
-            {
-                if (_apiProcess != null && !_apiProcess.HasExited)
-                {
-                    KillProcessTree(_apiProcess.Id);
-                }
-            }
-            catch { }
-
-            try
-            {
-                if (_webProcess != null && !_webProcess.HasExited)
-                {
-                    KillProcessTree(_webProcess.Id);
-                }
-            }
-            catch { }
-        }
-
         private static void KillProcessTree(int pid)
         {
             try
@@ -440,6 +514,72 @@ namespace DiamondERP.App
                 Process.Start(psi);
             }
             catch { }
+        }
+
+        private void SetupTray()
+        {
+            try
+            {
+                string iconPath = Path.Combine(_appDir, "installer", "app.ico");
+                if (!File.Exists(iconPath)) { iconPath = Path.Combine(_appDir, "app.ico"); }
+
+                System.Drawing.Icon appIcon = null;
+                if (File.Exists(iconPath))
+                {
+                    try { appIcon = new System.Drawing.Icon(iconPath); } catch { }
+                }
+                if (appIcon == null) { appIcon = System.Drawing.SystemIcons.Application; }
+
+                var menu = new System.Windows.Forms.ContextMenuStrip();
+                menu.Items.Add("Open DiamondERP", null, (s, e) =>
+                {
+                    this.Dispatcher.Invoke(new Action(() =>
+                    {
+                        this.Show();
+                        this.WindowState = WindowState.Normal;
+                        this.Activate();
+                    }));
+                });
+                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+                menu.Items.Add("Exit Application", null, (s, e) =>
+                {
+                    this.Dispatcher.Invoke(new Action(() =>
+                    {
+                        ShutdownBackend();
+                        Application.Current.Shutdown();
+                    }));
+                });
+
+                _trayIcon = new System.Windows.Forms.NotifyIcon
+                {
+                    Text = "Diamond ERP — Enterprise Suite",
+                    Icon = appIcon,
+                    ContextMenuStrip = menu,
+                    Visible = true
+                };
+
+                _trayIcon.DoubleClick += (s, e) =>
+                {
+                    this.Dispatcher.Invoke(new Action(() =>
+                    {
+                        this.Show();
+                        this.WindowState = WindowState.Normal;
+                        this.Activate();
+                    }));
+                };
+            }
+            catch { }
+        }
+
+        private void UpdateStatus(string msg)
+        {
+            this.Dispatcher.Invoke(new Action(() =>
+            {
+                if (_statusText != null)
+                {
+                    _statusText.Text = msg;
+                }
+            }));
         }
     }
 }

@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, AuthenticationError } from '../../errors';
 import { sanitizeForSpreadsheet } from '@diamond-erp/shared-utils';
+import { getBackupsDir, getDatabasesDir } from '../../infrastructure/paths';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
   const sanitized: Record<string, any> = {};
@@ -1460,7 +1461,7 @@ export class SettingsController {
       await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
 
       // 2. Prepare backup directory
-      const backupsDir = path.resolve(process.cwd(), 'backups');
+      const backupsDir = getBackupsDir();
       if (!fs.existsSync(backupsDir)) {
         fs.mkdirSync(backupsDir, { recursive: true });
       }
@@ -1474,8 +1475,10 @@ export class SettingsController {
       try {
         await systemPrisma.$executeRawUnsafe(`VACUUM INTO '${backupFilePath.replace(/\\/g, '/')}'`);
       } catch {
-        const dbPath = process.env.DATABASE_URL?.replace('file:', '') || 'Stavan.db';
-        const resolvedDbPath = path.resolve(process.cwd(), dbPath);
+        const rawDbUrl = process.env.DATABASE_URL?.replace('file:', '');
+        const resolvedDbPath = rawDbUrl 
+          ? (path.isAbsolute(rawDbUrl) ? rawDbUrl : path.resolve(getDatabasesDir(), rawDbUrl))
+          : path.join(getDatabasesDir(), 'Stavan.db');
         fs.copyFileSync(resolvedDbPath, backupFilePath);
       }
 

@@ -53,10 +53,8 @@ namespace DiamondERP.Setup
 
         // Context
         private string appDir;
-        private string nodeVersion = "";
-        private string npmVersion = "";
-        private bool isNodeInstalled = false;
-        private bool isNpmInstalled = false;
+        private string webView2Version = "";
+        private bool isWebView2Installed = false;
 
         [STAThread]
         public static void Main(string[] args)
@@ -624,23 +622,33 @@ namespace DiamondERP.Setup
         {
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c node -v", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-                using (Process p = Process.Start(psi))
+                // Check WebView2 Runtime in registry (both 64-bit and 32-bit hives)
+                using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
                 {
-                    nodeVersion = p.StandardOutput.ReadToEnd().Trim();
-                    p.WaitForExit(3000);
-                    if (p.ExitCode == 0 && nodeVersion.StartsWith("v")) { isNodeInstalled = true; }
+                    if (key != null)
+                    {
+                        object val = key.GetValue("pv");
+                        if (val != null && !string.IsNullOrEmpty(val.ToString()))
+                        {
+                            webView2Version = val.ToString();
+                            isWebView2Installed = true;
+                        }
+                    }
                 }
-            } catch { }
-
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c npm -v", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-                using (Process p = Process.Start(psi))
+                if (!isWebView2Installed)
                 {
-                    npmVersion = p.StandardOutput.ReadToEnd().Trim();
-                    p.WaitForExit(3000);
-                    if (p.ExitCode == 0 && npmVersion.Length > 0) { isNpmInstalled = true; }
+                    using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+                    {
+                        if (key != null)
+                        {
+                            object val = key.GetValue("pv");
+                            if (val != null && !string.IsNullOrEmpty(val.ToString()))
+                            {
+                                webView2Version = val.ToString();
+                                isWebView2Installed = true;
+                            }
+                        }
+                    }
                 }
             } catch { }
         }
@@ -719,16 +727,19 @@ namespace DiamondERP.Setup
 
         private void UpdateSummary()
         {
+            string target = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : appDir;
             string summary = "Destination location:\r\n" +
-                             "      " + appDir + "\r\n\r\n" +
+                             "      " + target + "\r\n\r\n" +
                              "Additional tasks:\r\n";
             if (chkDesktopShortcut.Checked) summary += "      Create a desktop shortcut\r\n";
             if (chkStartMenuShortcut.Checked) summary += "      Create a Start Menu shortcut\r\n";
             if (chkLaunchAfter.Checked) summary += "      Launch DiamondERP after installation\r\n";
 
             summary += "\r\nSystem Prerequisites:\r\n";
-            summary += isNodeInstalled ? "      Node.js: " + nodeVersion + " (Detected)\r\n" : "      Node.js: Not detected in PATH (Warning)\r\n";
-            summary += isNpmInstalled ? "      NPM: v" + npmVersion + " (Detected)\r\n" : "      NPM: Not detected in PATH (Warning)\r\n";
+            summary += isWebView2Installed 
+                ? "      WebView2 Runtime: v" + webView2Version + " (Detected)\r\n" 
+                : "      WebView2 Runtime: Recommended (Evergreen)\r\n";
+            summary += "      Architecture: Standalone Desktop (Pre-compiled, no dev tools needed)\r\n";
 
             txtSummary.Text = summary;
         }
@@ -784,77 +795,62 @@ namespace DiamondERP.Setup
             {
                 try
                 {
+                    string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : appDir;
+
                     SetInstallStatus("Validating environment...", 20);
-                    AppendLog("[1/4] Checking environment runtime...");
-                    Thread.Sleep(250);
+                    AppendLog("[1/4] Validating offline standalone installation environment...");
+                    Thread.Sleep(200);
 
-                    // Ensure DiamondERP.exe is ready in appDir
-                    string targetLauncherExe = Path.Combine(appDir, "DiamondERP.exe");
-                    string installerLauncherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-                    string launcherCs = Path.Combine(appDir, "installer", "Launcher.cs");
+                    // Verify pre-built DiamondERP.exe launcher
+                    string targetLauncherExe = Path.Combine(targetDir, "DiamondERP.exe");
+                    string sourceLauncherExe = Path.Combine(appDir, "DiamondERP.exe");
+                    if (!File.Exists(sourceLauncherExe))
+                    {
+                        sourceLauncherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
+                    }
                     string iconPath = Path.Combine(appDir, "installer", "app.ico");
+                    if (!File.Exists(iconPath)) { iconPath = Path.Combine(appDir, "app.ico"); }
 
-                    SetInstallStatus("Preparing desktop launcher executable...", 45);
-                    AppendLog("[2/4] Verifying DiamondERP.exe launcher...");
+                    SetInstallStatus("Preparing desktop application binaries...", 45);
+                    AppendLog("[2/4] Verifying pre-built application binaries...");
 
-                    // Ensure WebView2 support DLLs are present in appDir
-                    string[] webViewDlls = new string[] { "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.Wpf.dll", "WebView2Loader.dll" };
-                    foreach (string dll in webViewDlls)
+                    // If installing into a different folder (e.g. C:\Program Files\DiamondERP), ensure folder exists
+                    if (!targetDir.Equals(appDir, StringComparison.OrdinalIgnoreCase))
                     {
-                        string targetDll = Path.Combine(appDir, dll);
-                        string installerDll = Path.Combine(appDir, "installer", dll);
-                        if (!File.Exists(targetDll) && File.Exists(installerDll))
+                        if (!Directory.Exists(targetDir))
                         {
-                            try { File.Copy(installerDll, targetDll, true); } catch { }
+                            Directory.CreateDirectory(targetDir);
+                        }
+                        if (File.Exists(sourceLauncherExe) && !File.Exists(targetLauncherExe))
+                        {
+                            File.Copy(sourceLauncherExe, targetLauncherExe, true);
                         }
                     }
 
-                    // If DiamondERP.exe is in installer folder, copy to root as well
-                    if (!File.Exists(targetLauncherExe) && File.Exists(installerLauncherExe))
+                    // Upgrade Safety Guard: Verify target is not pointing to mutable user data dir
+                    string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string userDbDir = Path.Combine(localAppData, "DiamondERP", "databases");
+                    if (targetDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase))
                     {
-                        try { File.Copy(installerLauncherExe, targetLauncherExe, true); } catch { }
+                        throw new InvalidOperationException("Installation directory cannot be the user database directory.");
                     }
 
-                    // If neither exists, compile from Launcher.cs
-                    if (!File.Exists(targetLauncherExe) && !File.Exists(installerLauncherExe) && File.Exists(launcherCs))
-                    {
-                        string csc = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe";
-                        if (File.Exists(csc))
-                        {
-                            string args = string.Format("/nologo /target:winexe /out:\"{0}\" /win32icon:\"{1}\" /r:\"{2}\" /r:\"{3}\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationFramework.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\PresentationCore.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\WPF\\WindowsBase.dll\" /r:\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\System.Xaml.dll\" /r:\"System.dll\" /r:\"System.Drawing.dll\" /r:\"System.Windows.Forms.dll\" \"{4}\"",
-                                targetLauncherExe,
-                                iconPath,
-                                Path.Combine(appDir, "Microsoft.Web.WebView2.Core.dll"),
-                                Path.Combine(appDir, "Microsoft.Web.WebView2.Wpf.dll"),
-                                launcherCs);
-                            RunProcess(csc, args);
-                        }
-                    }
-
-                    // Choose primary executable for shortcut
-                    string shortcutTarget = File.Exists(targetLauncherExe) ? targetLauncherExe : (File.Exists(installerLauncherExe) ? installerLauncherExe : null);
-
-                    if (string.IsNullOrEmpty(shortcutTarget) || !File.Exists(shortcutTarget))
-                    {
-                        throw new FileNotFoundException("Could not locate or compile DiamondERP.exe launcher.");
-                    }
+                    string shortcutTarget = File.Exists(targetLauncherExe) ? targetLauncherExe : sourceLauncherExe;
 
                     SetInstallStatus("Creating application shortcuts...", 75);
                     AppendLog("[3/4] Creating application shortcuts pointing to: " + Path.GetFileName(shortcutTarget));
-                    Thread.Sleep(250);
+                    Thread.Sleep(200);
 
                     if (chkDesktopShortcut.Checked)
                     {
-                        // Create in user's special desktop directory (works with OneDrive redirection)
                         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                        CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
+                        CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, targetDir, iconPath, "DiamondERP Enterprise Management");
                         AppendLog("✔ Created Desktop shortcut: " + Path.Combine(desktopPath, "DiamondERP.lnk"));
 
-                        // Also create in local desktop if different from OneDrive desktop
                         string localDesktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
                         if (!localDesktop.Equals(desktopPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(localDesktop))
                         {
-                            CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
+                            CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, targetDir, iconPath, "DiamondERP Enterprise Management");
                         }
                     }
 
@@ -862,13 +858,13 @@ namespace DiamondERP.Setup
                     {
                         string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
                         string lnkPath = Path.Combine(startMenu, "DiamondERP.lnk");
-                        CreateShortcut(lnkPath, shortcutTarget, appDir, iconPath, "DiamondERP Enterprise Management");
+                        CreateShortcut(lnkPath, shortcutTarget, targetDir, iconPath, "DiamondERP Enterprise Management");
                         AppendLog("✔ Created Start Menu shortcut: " + lnkPath);
                     }
 
                     SetInstallStatus("Installation completed!", 100);
                     AppendLog("[4/4] Installation finished successfully.");
-                    Thread.Sleep(400);
+                    Thread.Sleep(300);
 
                     this.Invoke(new Action(() => ShowPage(6)));
                 }

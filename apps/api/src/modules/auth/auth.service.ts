@@ -1,8 +1,11 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { systemPrisma, defaultProfile, getAllProfiles } from '../../infrastructure/database/prisma';
 import { logger } from '../../infrastructure/logging';
+import { getConfigDir } from '../../infrastructure/paths';
 import { AuthenticationError, AuthorizationError, ConflictError, ValidationError } from '../../errors';
 
 // ── Configuration ───────────────────────────────────────────────────────
@@ -17,7 +20,8 @@ export const AUTH_CONFIG = {
 
 /**
  * Resolves the JWT signing secret according to strict environment rules.
- * Finding 6.1: Production MUST provide JWT_SECRET (>= 32 chars).
+ * Finding 6.1: Production MUST provide or persist JWT_SECRET (>= 32 chars).
+ * Standalone Windows installations automatically generate and persist an instance secret.
  * Non-production environments use explicit fallback secrets.
  */
 function getJwtSecret(): string {
@@ -28,12 +32,34 @@ function getJwtSecret(): string {
     }
     return secret;
   }
+
   if (process.env.NODE_ENV === 'production') {
-    throw new Error(
-      'FATAL: JWT_SECRET environment variable is missing. ' +
-      'Production server cannot start without a secure JWT signing secret.'
-    );
+    // For standalone offline desktop mode: load or generate instance-isolated secret
+    try {
+      const secretFile = path.join(getConfigDir(), '.jwt_secret');
+      if (fs.existsSync(secretFile)) {
+        const stored = fs.readFileSync(secretFile, 'utf-8').trim();
+        if (stored && stored.length >= 32) {
+          return stored;
+        }
+      }
+      // Generate cryptographically strong secret and persist to config
+      const dir = path.dirname(secretFile);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const generated = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(secretFile, generated, { encoding: 'utf-8', mode: 0o600 });
+      logger.info('Generated and stored persistent instance JWT secret in user configuration.');
+      return generated;
+    } catch (persistErr) {
+      throw new Error(
+        'FATAL: JWT_SECRET environment variable is missing and could not be initialized: ' +
+        (persistErr as Error).message
+      );
+    }
   }
+
   if (process.env.NODE_ENV === 'test') {
     return process.env.TEST_JWT_SECRET || 'test-jwt-secret-at-least-32-chars-long-diamond-erp';
   }
@@ -45,16 +71,12 @@ function getJwtSecret(): string {
  * Must fail fast in production.
  */
 export function validateAuthConfig(): void {
-  const secret = process.env.JWT_SECRET;
-  if (process.env.NODE_ENV === 'production') {
-    if (!secret || secret.length < 32) {
-      throw new Error(
-        'FATAL: JWT_SECRET environment variable is missing or less than 32 characters. ' +
-        'Production server cannot start without a secure JWT signing secret.'
-      );
-    }
-  } else if (!secret) {
-    logger.warn('JWT_SECRET not explicitly set in environment. Using non-production fallback secret.');
+  const secret = getJwtSecret();
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      'FATAL: JWT signing secret is invalid or less than 32 characters. ' +
+      'Production server cannot start without a secure JWT signing secret.'
+    );
   }
 }
 

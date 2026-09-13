@@ -2,8 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import prisma from '../../infrastructure/database/prisma';
+import { getConfigDir } from '../../infrastructure/paths';
 
-const ACTIVATION_FILE = path.resolve(process.cwd(), '.app-activation.json');
+export const getActivationFilePath = (): string => path.join(getConfigDir(), '.app-activation.json');
 
 // ⚠️ SECURITY: No hard-coded fallback key in production. Must be set via environment variable.
 // In test environment, a default test key is allowed for test suites.
@@ -15,8 +16,9 @@ export class ActivationController {
 
   private isFileActivated(): boolean {
     try {
-      if (fs.existsSync(ACTIVATION_FILE)) {
-        const data = JSON.parse(fs.readFileSync(ACTIVATION_FILE, 'utf-8'));
+      const filePath = getActivationFilePath();
+      if (fs.existsSync(filePath)) {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         return data?.activated === true;
       }
     } catch {
@@ -27,7 +29,12 @@ export class ActivationController {
 
   private setFileActivated(): void {
     try {
-      fs.writeFileSync(ACTIVATION_FILE, JSON.stringify({
+      const filePath = getActivationFilePath();
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, JSON.stringify({
         activated: true,
         activatedAt: new Date().toISOString()
       }, null, 2), 'utf-8');

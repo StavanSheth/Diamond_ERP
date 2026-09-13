@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { activationController } from '../modules/system/activation.controller';
+import { activationController, getActivationFilePath } from '../modules/system/activation.controller';
 import fs from 'fs';
 import path from 'path';
 import prisma from '../infrastructure/database/prisma';
@@ -10,6 +10,7 @@ describe('Master App Lock & Lifetime Activation Controller', () => {
   beforeEach(async () => {
     // Clean up activation state before each test
     const files = [
+      getActivationFilePath(),
       ACTIVATION_FILE,
       path.resolve(__dirname, '../../../../.app-activation.json'),
     ];

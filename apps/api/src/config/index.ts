@@ -1,10 +1,13 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import { getDatabasesDir } from '../infrastructure/paths';
 
 dotenv.config();
 
 export const config = {
   port: Number(process.env.PORT) || 3002,
-  databaseUrl: process.env.DATABASE_URL || 'file:../Stavan.db',
+  host: process.env.HOST || '127.0.0.1',
+  databaseUrl: process.env.DATABASE_URL || `file:${path.join(getDatabasesDir(), 'Stavan.db')}`,
   corsOrigins: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
     : [
@@ -31,7 +34,7 @@ export const config = {
 
 /**
  * Validates application configuration.
- * Fails fast in production if security-critical variables are missing or insecure.
+ * Fails fast in production if security-critical variables are invalid.
  */
 export function validateConfig(): void {
   const isProduction = process.env.NODE_ENV === 'production';
@@ -40,18 +43,8 @@ export function validateConfig(): void {
     const errors: string[] = [];
 
     const secret = process.env.JWT_SECRET;
-    if (!secret || secret.length < 32) {
+    if (secret && secret.length < 32) {
       errors.push('JWT_SECRET must be configured with at least 32 characters in production.');
-    }
-
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      errors.push('DATABASE_URL is required in production.');
-    }
-
-    const corsOrigin = process.env.CORS_ORIGIN;
-    if (!corsOrigin || corsOrigin.trim() === '') {
-      errors.push('CORS_ORIGIN must explicitly specify allowed domains in production.');
     }
 
     if (errors.length > 0) {

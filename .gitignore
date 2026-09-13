@@ -44,6 +44,10 @@ npm-debug.log*
 **/*.db-wal
 **/*.db-shm
 **/*.db.bak*
+!apps/api/prisma/template.db
+
+# Scratch and temp
+scratch/
 
 # Test artifacts
 test-results/

@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
 import fs from 'fs';
+import { getDatabasesDir, getConfigDir, getDatabaseTemplatePath } from '../paths';
 
 // ── Profile Context ─────────────────────────────────────────────────────
 export interface ProfileContext {
@@ -13,8 +14,8 @@ export interface ProfileContext {
 export const requestContext = new AsyncLocalStorage<ProfileContext>();
 
 // ── Constants & Paths ───────────────────────────────────────────────────
-const DB_DIR = path.resolve(__dirname, '../../../'); // backend root where .db files live
-const CONFIG_PATH = path.join(DB_DIR, '.profile-config.json');
+const DB_DIR = getDatabasesDir();
+const CONFIG_PATH = path.join(getConfigDir(), '.profile-config.json');
 const MAX_CLIENTS = 10;
 const PROFILE_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
 
@@ -36,6 +37,10 @@ function readConfig(): ProfileConfig {
 
 export function saveConfig(cfg: ProfileConfig): void {
   try {
+    const configDir = path.dirname(CONFIG_PATH);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
   } catch (err) {
     console.warn('[Prisma] Could not persist profile config:', err);
@@ -44,9 +49,15 @@ export function saveConfig(cfg: ProfileConfig): void {
 
 export function ensureProfileDbFile(dbPath: string): void {
   if (!fs.existsSync(dbPath)) {
-    const templateDb = path.resolve(DB_DIR, 'prisma/test.db');
+    const targetDir = path.dirname(dbPath);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const templateDb = getDatabaseTemplatePath();
     const fallbackDb = path.resolve(DB_DIR, 'Stavan.db');
-    if (fs.existsSync(templateDb)) {
+
+    if (templateDb && fs.existsSync(templateDb)) {
       fs.copyFileSync(templateDb, dbPath);
     } else if (fs.existsSync(fallbackDb)) {
       fs.copyFileSync(fallbackDb, dbPath);

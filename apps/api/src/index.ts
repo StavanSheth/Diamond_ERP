@@ -2,10 +2,12 @@ import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
+import path from 'path';
 import { swaggerSpec } from './config/swagger.config';
 
 import { config, validateConfig } from './config';
 import { fileStorageService } from './infrastructure/storage/file-storage.service';
+import { ensureAllDataDirs, getWebDistDir } from './infrastructure/paths';
 import { logger } from './infrastructure/logging';
 import { StockController } from './modules/stocks/stock.controller';
 import { HealthController } from './modules/system/health.controller';
@@ -89,11 +91,12 @@ async function bootstrap(): Promise<void> {
     helmet({
       contentSecurityPolicy: {
         directives: {
-          defaultSrc: ["'none'"],
+          defaultSrc: ["'self'"],
           scriptSrc: ["'self'"],
           connectSrc: ["'self'"],
-          imgSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         },
       },
       crossOriginEmbedderPolicy: true,
@@ -146,7 +149,8 @@ async function bootstrap(): Promise<void> {
   });
   app.use('/api/settings/factory-reset', factoryResetLimiter);
 
-  // Uploads directory setup — delegated to FileStorageService (single source of truth)
+  // Mutable directories setup — ensures databases, uploads, backups, logs, config exist
+  ensureAllDataDirs();
   fileStorageService.ensureUploadsDir();
 
   // 7. Swagger UI (only in development)
@@ -169,17 +173,49 @@ async function bootstrap(): Promise<void> {
     )
   );
 
-  // 9. Error handler (must be last)
+  // 9. API 404 Guard — Ensure unmatched API calls return JSON error, never falling through to SPA HTML
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ success: false, error: 'API endpoint not found' });
+  });
+
+  // 10. Production Static Frontend Serving & SPA Fallback
+  const webDistDir = getWebDistDir();
+  if (webDistDir) {
+    logger.info(`Serving production web UI from: ${webDistDir}`);
+    app.use(
+      express.static(webDistDir, {
+        maxAge: '1h',
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+          } else if (filePath.includes('/assets/') || filePath.includes('\\assets\\')) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
+
+    // SPA fallback: any non-API, non-health GET returns index.html
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/health') || req.path.startsWith('/api-docs')) {
+        return next();
+      }
+      res.sendFile(path.join(webDistDir, 'index.html'));
+    });
+  }
+
+  // 11. Error handler (must be last)
   app.use(errorHandler);
 
-  // 10. Start listening
-  const server = app.listen(config.port, () => {
-    logger.info(`✅ DiamondERP V3.0 Backend running on http://localhost:${config.port}`);
-    logger.info(`🔐 Authentication: ${process.env.JWT_SECRET ? 'ENABLED' : 'DEVELOPMENT MODE'}`);
+  // 12. Start listening (strictly on local loopback by default to prevent LAN exposure)
+  const host = config.host || '127.0.0.1';
+  const server = app.listen(config.port, host, () => {
+    logger.info(`✅ DiamondERP V3.0 Backend running on http://${host}:${config.port}`);
+    logger.info(`🔐 Authentication: ${process.env.JWT_SECRET ? 'ENABLED' : 'DESKTOP SECURE MODE'}`);
     if (process.env.NODE_ENV !== 'production') {
-      logger.info(`📖 API docs at http://localhost:${config.port}/api-docs`);
+      logger.info(`📖 API docs at http://${host}:${config.port}/api-docs`);
     }
-    logger.info(`❤️  Health check at http://localhost:${config.port}/health`);
+    logger.info(`❤️  Health check at http://${host}:${config.port}/health`);
   });
 
   // 11. Graceful shutdown

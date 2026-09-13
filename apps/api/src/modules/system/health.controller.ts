@@ -27,11 +27,12 @@ export class HealthController {
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
+      const sanitizedError = process.env.NODE_ENV === 'production' ? 'Database unreachable' : (err?.message || 'Database unreachable');
       res.status(503).json({
         backend: 'OK',
         database: 'Disconnected',
         status: 'error',
-        error: err?.message || 'Database unreachable',
+        error: sanitizedError,
         uptime: uptimeSeconds,
         requestId,
         timestamp: new Date().toISOString(),
