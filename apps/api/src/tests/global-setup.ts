@@ -24,7 +24,7 @@ export default function setup() {
     const shmPath = path.join(__dirname, '../../Stavan.db-shm');
     if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch {}
     if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch {}
-    if (fs.existsSync(dbPath)) {
+    if (!fs.existsSync(defaultDbPath) && fs.existsSync(dbPath)) {
       fs.copyFileSync(dbPath, defaultDbPath);
     }
   } catch (error) {

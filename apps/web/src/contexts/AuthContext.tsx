@@ -23,9 +23,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const DEFAULT_USER: User = {
-  id: 'default-admin',
-  username: 'admin',
-  displayName: 'System Administrator',
+  id: 'default-stavan',
+  username: 'stavan',
+  displayName: 'Stavan',
   role: 'SUPER_ADMIN',
   profiles: ['Stavan'],
 };

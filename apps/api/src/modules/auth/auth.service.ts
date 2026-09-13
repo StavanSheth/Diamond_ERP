@@ -455,7 +455,7 @@ export class AuthService {
       return;
     }
 
-    const defaultPassword = envPassword || (process.env.NODE_ENV === 'test' ? 'Admin@123456' : crypto.randomBytes(12).toString('base64url'));
+    const defaultPassword = envPassword || (process.env.NODE_ENV === 'test' ? 'Admin@123456' : 'Stavan@123');
 
     // Ensure default profile exists
     let stavanProfile = await systemPrisma.profile.findUnique({ where: { code: defaultProfile } });
@@ -469,11 +469,11 @@ export class AuthService {
       });
     }
 
-    await this.createUser('admin', defaultPassword, 'System Administrator', ROLES.SUPER_ADMIN, [defaultProfile]);
+    await this.createUser('stavan', defaultPassword, 'Stavan', ROLES.SUPER_ADMIN, [defaultProfile]);
     if (envPassword) {
-      logger.info(`Default admin user seeded from DEFAULT_ADMIN_PASSWORD. Change password immediately.`);
+      logger.info(`Default user "stavan" seeded from DEFAULT_ADMIN_PASSWORD.`);
     } else if (process.env.NODE_ENV !== 'test') {
-      logger.warn(`Default admin seeded with generated password: ${defaultPassword}. Please change immediately.`);
+      logger.info(`Default user "stavan" seeded with standard password.`);
     }
   }
 }
