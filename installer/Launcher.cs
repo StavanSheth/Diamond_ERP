@@ -43,43 +43,49 @@ namespace DiamondERP.App
         [STAThread]
         public static void Main(string[] args)
         {
-            try
+            bool createdNew;
+            using (Mutex mutex = new Mutex(true, "Global\\DiamondERP_SingleInstance_Mutex", out createdNew))
             {
-                // Check if existing application window is already open
-                IntPtr existingHwnd = FindWindow(null, WINDOW_TITLE);
-                if (existingHwnd != IntPtr.Zero)
+                if (!createdNew)
                 {
-                    ShowWindow(existingHwnd, SW_RESTORE);
-                    SetForegroundWindow(existingHwnd);
+                    IntPtr existingHwnd = FindWindow(null, WINDOW_TITLE);
+                    if (existingHwnd != IntPtr.Zero)
+                    {
+                        ShowWindow(existingHwnd, SW_RESTORE);
+                        SetForegroundWindow(existingHwnd);
+                    }
                     return;
                 }
 
-                _appDir = ResolveApplicationDirectory();
-                _dataDir = ResolveDataDirectory();
-                _isProductionMode = DetectProductionMode();
-
-                WriteLog("Startup", string.Format("Application started. Mode: {0}, AppDir: {1}, DataDir: {2}",
-                    _isProductionMode ? "PRODUCTION" : "DEVELOPMENT", _appDir, _dataDir));
-
-                AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                try
                 {
-                    WriteLog("UnhandledException", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown exception");
-                };
+                    _appDir = ResolveApplicationDirectory();
+                    _dataDir = ResolveDataDirectory();
+                    _isProductionMode = DetectProductionMode();
 
-                var app = new Application();
-                app.DispatcherUnhandledException += (s, e) =>
+                    WriteLog("Startup", string.Format("Application started. Mode: {0}, AppDir: {1}, DataDir: {2}",
+                        _isProductionMode ? "PRODUCTION" : "DEVELOPMENT", _appDir, _dataDir));
+
+                    AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                    {
+                        WriteLog("UnhandledException", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown exception");
+                    };
+
+                    var app = new Application();
+                    app.DispatcherUnhandledException += (s, e) =>
+                    {
+                        WriteLog("DispatcherException", e.Exception != null ? e.Exception.ToString() : "Unknown dispatcher exception");
+                        e.Handled = true;
+                    };
+
+                    var window = new AppMainWindow();
+                    app.Run(window);
+                }
+                catch (Exception ex)
                 {
-                    WriteLog("DispatcherException", e.Exception != null ? e.Exception.ToString() : "Unknown dispatcher exception");
-                    e.Handled = true;
-                };
-
-                var window = new AppMainWindow();
-                app.Run(window);
-            }
-            catch (Exception ex)
-            {
-                WriteLog("MainCatch", ex.ToString());
-                MessageBox.Show("Could not launch DiamondERP: " + ex.Message, "DiamondERP Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    WriteLog("MainCatch", ex.ToString());
+                    MessageBox.Show("Could not launch DiamondERP: " + ex.Message, "DiamondERP Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
         }
 
@@ -241,8 +247,16 @@ namespace DiamondERP.App
                         ? string.Format("http://{0}:{1}/", LOOPBACK_HOST, DEFAULT_PORT)
                         : "http://localhost:5175/";
 
-                    // 1. Start backend process if not already responding
-                    if (!IsBackendHealthy(healthUrl))
+                    // 1. Port conflict detection & starting backend process
+                    if (IsPortActive(healthUrl))
+                    {
+                        if (!IsBackendHealthy(healthUrl))
+                        {
+                            throw new InvalidOperationException(string.Format("Port {0} is occupied by another application. Please terminate the conflicting process before launching DiamondERP.", DEFAULT_PORT));
+                        }
+                        WriteLog("Backend", "Existing healthy DiamondERP backend detected on loopback port.");
+                    }
+                    else
                     {
                         StartBackend();
                     }
@@ -288,19 +302,30 @@ namespace DiamondERP.App
 
             if (_isProductionMode)
             {
-                // PRODUCTION MODE: Run bundled or local Node against api/dist/index.js
+                // PRODUCTION MODE: Require bundled Node against api/dist/index.js
                 string runtimeDir = ResolveRuntimeDirectory();
-                string nodeExe = runtimeDir != null ? Path.Combine(runtimeDir, "node.exe") : "node";
+                if (string.IsNullOrEmpty(runtimeDir))
+                {
+                    string err = "Bundled Node.js runtime not found in: " + Path.Combine(_appDir, "runtime", "node.exe") +
+                                 "\n\nThe Diamond ERP standalone installation is incomplete. Please reinstall the application.";
+                    WriteLog("RuntimeError", err);
+                    throw new FileNotFoundException(err);
+                }
+
+                string nodeExe = Path.Combine(runtimeDir, "node.exe");
 
                 string scriptPath = Path.Combine(_appDir, "api", "dist", "index.js");
                 if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "dist", "index.js"); }
                 if (!File.Exists(scriptPath)) { scriptPath = Path.Combine(_appDir, "apps", "api", "dist", "index.js"); }
 
+                string apiDir = Path.Combine(_appDir, "api");
+                if (!Directory.Exists(apiDir)) { apiDir = Path.GetDirectoryName(scriptPath); }
+
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = nodeExe,
                     Arguments = string.Format("\"{0}\"", scriptPath),
-                    WorkingDirectory = Path.GetDirectoryName(scriptPath),
+                    WorkingDirectory = apiDir,
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -313,7 +338,7 @@ namespace DiamondERP.App
                 psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
 
                 _backendProcess = Process.Start(psi);
-                WriteLog("Backend", string.Format("Started production Node backend (PID: {0})", _backendProcess != null ? _backendProcess.Id : 0));
+                WriteLog("Backend", string.Format("Started production Node backend (PID: {0}, Runtime: {1})", _backendProcess != null ? _backendProcess.Id : 0, nodeExe));
             }
             else
             {
@@ -402,6 +427,35 @@ namespace DiamondERP.App
                 _webView.CoreWebView2.Settings.AreDevToolsEnabled = !_isProductionMode;
                 _webView.CoreWebView2.Settings.IsZoomControlEnabled = true;
 
+                // Security: Restrict navigation to loopback origin only
+                _webView.CoreWebView2.NavigationStarting += (s, args) =>
+                {
+                    Uri uri;
+                    if (Uri.TryCreate(args.Uri, UriKind.Absolute, out uri))
+                    {
+                        if (uri.Host == LOOPBACK_HOST || uri.Host == "localhost")
+                        {
+                            return;
+                        }
+                        args.Cancel = true;
+                        WriteLog("Security", "Intercepted non-loopback navigation: " + args.Uri);
+                        if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                        {
+                            try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
+                        }
+                    }
+                };
+
+                // Open popup links in default system browser
+                _webView.CoreWebView2.NewWindowRequested += (s, args) =>
+                {
+                    args.Handled = true;
+                    if (!string.IsNullOrEmpty(args.Uri))
+                    {
+                        try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
+                    }
+                };
+
                 _webView.NavigationCompleted += (s, args) =>
                 {
                     if (args.IsSuccess)
@@ -447,7 +501,12 @@ namespace DiamondERP.App
             {
                 if (_backendProcess != null && !_backendProcess.HasExited)
                 {
-                    KillProcessTree(_backendProcess.Id);
+                    WriteLog("Shutdown", "Attempting graceful termination of backend process (PID: " + _backendProcess.Id + ")...");
+                    _backendProcess.CloseMainWindow();
+                    if (!_backendProcess.WaitForExit(2500))
+                    {
+                        KillProcessTree(_backendProcess.Id);
+                    }
                 }
             }
             catch { }
@@ -469,11 +528,19 @@ namespace DiamondERP.App
             try
             {
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-                request.Timeout = 900;
+                request.Timeout = 1200;
                 request.Method = "GET";
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 {
-                    return response.StatusCode == HttpStatusCode.OK;
+                    if (response.StatusCode == HttpStatusCode.OK)
+                    {
+                        using (StreamReader reader = new StreamReader(response.GetResponseStream()))
+                        {
+                            string body = reader.ReadToEnd();
+                            return body.Contains("\"backend\"") || body.Contains("DiamondERP") || body.Contains("\"status\"");
+                        }
+                    }
+                    return false;
                 }
             }
             catch

@@ -134,15 +134,47 @@ async function main() {
     }
   }
 
-  // 7. Create runtime placeholder for Phase 5
+  // 7. Stage Bundled Node.js Runtime for Standalone Execution
+  log('Staging bundled Node.js runtime for standalone desktop execution...');
   const runtimeDir = path.join(STAGING_DIR, 'runtime');
   fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(runtimeDir, 'README.txt'),
-    'Reserved for portable node.exe bundled in Phase 5.\n' +
-    'When present, DiamondERP.exe launches this portable runtime directly.\n',
-    'utf-8'
-  );
+
+  const targetNodeExe = path.join(runtimeDir, 'node.exe');
+
+  // Source resolution priority:
+  // 1. Explicit environment variable NODE_RUNTIME_PATH
+  // 2. Pre-cached binary in build/cache/node.exe
+  // 3. Current execution binary (process.execPath) on Windows x64
+  let sourceNodeExe = null;
+  if (process.env.NODE_RUNTIME_PATH && fs.existsSync(process.env.NODE_RUNTIME_PATH)) {
+    sourceNodeExe = process.env.NODE_RUNTIME_PATH;
+    log(`Using custom Node runtime from NODE_RUNTIME_PATH: ${sourceNodeExe}`);
+  } else if (fs.existsSync(path.join(ROOT_DIR, 'build', 'cache', 'node.exe'))) {
+    sourceNodeExe = path.join(ROOT_DIR, 'build', 'cache', 'node.exe');
+    log(`Using cached Node runtime: ${sourceNodeExe}`);
+  } else if (process.platform === 'win32' && fs.existsSync(process.execPath)) {
+    sourceNodeExe = process.execPath;
+    log(`Staging system Node runtime: ${sourceNodeExe}`);
+  }
+
+  if (!sourceNodeExe || !fs.existsSync(sourceNodeExe)) {
+    throw new Error('No valid Windows node.exe runtime could be found to bundle into staging directory.');
+  }
+
+  fs.copyFileSync(sourceNodeExe, targetNodeExe);
+
+  // Validate that bundled node.exe is a real PE executable and runs
+  const nodeStats = fs.statSync(targetNodeExe);
+  if (nodeStats.size < 20 * 1024 * 1024) {
+    throw new Error(`Staged node.exe is unexpectedly small (${nodeStats.size} bytes). Expected > 20 MB.`);
+  }
+
+  try {
+    const nodeVer = execSync(`"${targetNodeExe}" -v`, { encoding: 'utf-8' }).trim();
+    log(`✔ Bundled Node.js runtime verified: ${targetNodeExe} (${nodeVer}, ${(nodeStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+  } catch (err) {
+    throw new Error(`Staged node.exe failed verification execution: ${err.message}`);
+  }
 
   // 8. Copy Backend (API) dist and runtime assets
   const apiDest = path.join(STAGING_DIR, 'api');
@@ -252,6 +284,8 @@ async function main() {
   // 12. Verify Staging Completeness
   const requiredFiles = [
     path.join(STAGING_DIR, 'DiamondERP.exe'),
+    path.join(STAGING_DIR, 'Installer.exe'),
+    path.join(STAGING_DIR, 'runtime', 'node.exe'),
     path.join(STAGING_DIR, 'Microsoft.Web.WebView2.Core.dll'),
     path.join(STAGING_DIR, 'api', 'dist', 'index.js'),
     path.join(STAGING_DIR, 'api', 'package.json'),

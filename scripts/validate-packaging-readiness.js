@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const STAGING_DIR = path.join(ROOT_DIR, 'build', 'windows', 'DiamondERP');
@@ -76,9 +77,21 @@ check('Application icon (app.ico) exists', () => {
   return fs.existsSync(path.join(STAGING_DIR, 'app.ico'));
 });
 
-check('Phase 5 runtime directory placeholder exists', () => {
+check('Bundled Node.js runtime (runtime/node.exe) exists and is a valid binary (> 20MB)', () => {
+  const p = path.join(STAGING_DIR, 'runtime', 'node.exe');
+  return fs.existsSync(p) && fs.statSync(p).size > 20 * 1024 * 1024;
+});
+
+check('Bundled Node.js runtime (runtime/node.exe) is executable and reports valid version', () => {
+  const p = path.join(STAGING_DIR, 'runtime', 'node.exe');
+  if (!fs.existsSync(p)) return false;
+  const ver = execSync(`"${p}" -v`, { encoding: 'utf-8' }).trim();
+  return ver.startsWith('v');
+});
+
+check('NO placeholder README.txt exists in runtime/', () => {
   const readme = path.join(STAGING_DIR, 'runtime', 'README.txt');
-  return fs.existsSync(readme);
+  return !fs.existsSync(readme);
 });
 
 // ── 2. Backend Manifest & Entry Point ───────────────────────────────────────

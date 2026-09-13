@@ -141,7 +141,17 @@ function spawnServer(apiEntry, cwd) {
     AUTO_SEED_DEFAULT_ADMIN: 'true',
   };
 
-  const proc = spawn('node', [apiEntry], {
+  let nodeBin = 'node';
+  if (isStagedMode) {
+    const bundledNode = path.join(STAGING_DIR, 'runtime', 'node.exe');
+    if (fs.existsSync(bundledNode)) {
+      nodeBin = bundledNode;
+    } else {
+      throw new Error(`Bundled Node runtime missing in staged artifacts: ${bundledNode}`);
+    }
+  }
+
+  const proc = spawn(nodeBin, [apiEntry], {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -202,8 +212,16 @@ async function runSmokeTests() {
       throw new Error(`Staged web dist not found in ${webDistDir}. Run "npm run stage:windows" first.`);
     }
 
-    // ── DEPENDENCY ISOLATION TEST ───────────────────────────────────────────
-    console.log('[1/5] Testing Dependency Isolation (Proving Zero Fallback to Repo):');
+    const bundledNodeExe = path.join(STAGING_DIR, 'runtime', 'node.exe');
+    if (!fs.existsSync(bundledNodeExe)) {
+      throw new Error(`Staged bundled runtime not found: ${bundledNodeExe}. Run "npm run stage:windows" first.`);
+    }
+
+    // ── BUNDLED RUNTIME & DEPENDENCY ISOLATION TEST ────────────────────────
+    console.log('[1/5] Testing Bundled Runtime & Dependency Isolation:');
+    const nodeVer = execSync(`"${bundledNodeExe}" -v`, { encoding: 'utf-8' }).trim();
+    recordResult('Bundled Node.js Runtime (Executed directly from staged runtime/node.exe)', Boolean(nodeVer), `Version: ${nodeVer}, Path: ${bundledNodeExe}`);
+
     const probeScript = `
       const path = require('path');
       const stagedNm = path.resolve('node_modules');
@@ -229,7 +247,7 @@ async function runSmokeTests() {
     `;
 
     try {
-      const probeResult = execSync(`node -e "${probeScript.replace(/\n/g, ' ')}"`, {
+      const probeResult = execSync(`"${bundledNodeExe}" -e "${probeScript.replace(/\n/g, ' ')}"`, {
         cwd: apiCwd,
         env: { ...process.env, NODE_PATH: '' },
         encoding: 'utf-8',
