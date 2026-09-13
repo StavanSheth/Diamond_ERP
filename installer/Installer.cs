@@ -857,6 +857,16 @@ namespace DiamondERP.Setup
                     AppendLog("[1/4] Validating offline standalone installation environment...");
                     Thread.Sleep(200);
 
+                    // Check elevation if target is in Program Files
+                    string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                    if (targetDir.StartsWith(pf, StringComparison.OrdinalIgnoreCase) && !IsAdministrator())
+                    {
+                        throw new UnauthorizedAccessException("Installing into " + targetDir + " requires administrator privileges. Please restart Setup as Administrator.");
+                    }
+
+                    // Gracefully close any running DiamondERP process
+                    EnsureAppNotRunning(true);
+
                     // Verify pre-built DiamondERP.exe launcher
                     string targetLauncherExe = Path.Combine(targetDir, "DiamondERP.exe");
                     string sourceLauncherExe = Path.Combine(appDir, "DiamondERP.exe");
@@ -1057,6 +1067,56 @@ namespace DiamondERP.Setup
             }
         }
 
+        private static bool IsAdministrator()
+        {
+            try
+            {
+                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                {
+                    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                    return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void EnsureAppNotRunning(bool promptUser = false)
+        {
+            Process[] procs = Process.GetProcessesByName("DiamondERP");
+            if (procs != null && procs.Length > 0)
+            {
+                if (promptUser)
+                {
+                    var res = MessageBox.Show(
+                        "Diamond ERP is currently running.\n\nSetup must close the application to proceed. Would you like Setup to close it automatically?",
+                        "Diamond ERP Running",
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Warning
+                    );
+                    if (res != DialogResult.OK)
+                    {
+                        throw new InvalidOperationException("Setup was cancelled by user because Diamond ERP is currently running.");
+                    }
+                }
+
+                foreach (var p in procs)
+                {
+                    try
+                    {
+                        p.CloseMainWindow();
+                        if (!p.WaitForExit(3000))
+                        {
+                            p.Kill();
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
         private static void RegisterUninstall(string targetDir, string iconPath)
         {
             try
@@ -1090,6 +1150,14 @@ namespace DiamondERP.Setup
                     targetDir = Path.Combine(pf, "DiamondERP");
                 }
 
+                // Elevation Safety Check for System Folders
+                string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                if (targetDir.StartsWith(programFiles, StringComparison.OrdinalIgnoreCase) && !IsAdministrator())
+                {
+                    Console.Error.WriteLine("Error: Installing into " + targetDir + " requires administrator privileges. Please run Setup as Administrator.");
+                    return 1;
+                }
+
                 // Upgrade Safety Guard: Ensure target is not pointing to mutable user data dir
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 string userAppDataDir = Path.Combine(localAppData, "DiamondERP");
@@ -1099,6 +1167,8 @@ namespace DiamondERP.Setup
                     Console.Error.WriteLine("Error: Installation directory cannot be inside user data directory: " + userAppDataDir);
                     return 1;
                 }
+
+                EnsureAppNotRunning(false);
 
                 if (!Directory.Exists(targetDir))
                 {
@@ -1150,6 +1220,21 @@ namespace DiamondERP.Setup
 
         private static void PerformUninstall(string installDir, bool silent = false)
         {
+            // Elevation check for system directories
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (installDir.StartsWith(programFiles, StringComparison.OrdinalIgnoreCase) && !IsAdministrator())
+            {
+                if (!silent)
+                {
+                    MessageBox.Show("Uninstalling from " + installDir + " requires administrator privileges. Please run as Administrator.", "Elevation Required", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    Console.Error.WriteLine("Error: Uninstalling from " + installDir + " requires administrator privileges.");
+                }
+                return;
+            }
+
             if (!silent)
             {
                 var confirm = MessageBox.Show(
@@ -1165,6 +1250,8 @@ namespace DiamondERP.Setup
                     return;
                 }
             }
+
+            EnsureAppNotRunning(!silent);
 
             try
             {

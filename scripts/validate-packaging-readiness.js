@@ -82,11 +82,25 @@ check('Bundled Node.js runtime (runtime/node.exe) exists and is a valid binary (
   return fs.existsSync(p) && fs.statSync(p).size > 20 * 1024 * 1024;
 });
 
-check('Bundled Node.js runtime (runtime/node.exe) is executable and reports valid version', () => {
+check('Bundled Node.js runtime (runtime/node.exe) is executable and reports supported LTS version (v22.x or v20.x)', () => {
   const p = path.join(STAGING_DIR, 'runtime', 'node.exe');
   if (!fs.existsSync(p)) return false;
   const ver = execSync(`"${p}" -v`, { encoding: 'utf-8' }).trim();
-  return ver.startsWith('v');
+  return ver.startsWith('v22.') || ver.startsWith('v20.');
+});
+
+check('Installer.exe UAC manifest is configured for requireAdministrator', () => {
+  const manifestPath = path.join(ROOT_DIR, 'installer', 'Installer.manifest');
+  if (!fs.existsSync(manifestPath)) return false;
+  const content = fs.readFileSync(manifestPath, 'utf-8');
+  return content.includes('level="requireAdministrator"');
+});
+
+check('DiamondERP.exe UAC manifest is configured for asInvoker (standard user privileges)', () => {
+  const manifestPath = path.join(ROOT_DIR, 'installer', 'Launcher.manifest');
+  if (!fs.existsSync(manifestPath)) return false;
+  const content = fs.readFileSync(manifestPath, 'utf-8');
+  return content.includes('level="asInvoker"');
 });
 
 check('NO placeholder README.txt exists in runtime/', () => {
@@ -253,6 +267,20 @@ check('Static asset references in index.html use root-relative paths (/assets/)'
   if (!fs.existsSync(indexPath)) return false;
   const content = fs.readFileSync(indexPath, 'utf-8');
   return content.includes('src="/assets/') && content.includes('href="/assets/');
+});
+
+check('Production index.html has NO external font CDN references (100% offline self-contained)', () => {
+  const indexPath = path.join(STAGING_DIR, 'web', 'dist', 'index.html');
+  if (!fs.existsSync(indexPath)) return false;
+  const content = fs.readFileSync(indexPath, 'utf-8');
+  return !content.includes('fonts.googleapis.com') && !content.includes('fonts.gstatic.com');
+});
+
+check('Self-contained local offline fonts are staged (MaterialSymbolsOutlined.ttf & Inter.woff2)', () => {
+  const ttf = path.join(STAGING_DIR, 'web', 'dist', 'fonts', 'MaterialSymbolsOutlined.ttf');
+  const woff2 = path.join(STAGING_DIR, 'web', 'dist', 'fonts', 'Inter.woff2');
+  return fs.existsSync(ttf) && fs.statSync(ttf).size > 100000 &&
+         fs.existsSync(woff2) && fs.statSync(woff2).size > 1000;
 });
 
 // ── 6. Cleanliness & Absence of Development Artifacts ───────────────────────

@@ -1,0 +1,55 @@
+{
+  "releaseVersion": "3.0.0",
+  "generatedAt": "2026-09-13T18:17:46.526Z",
+  "platform": "win32-x64",
+  "artifacts": {
+    "Installer.exe": {
+      "relativePath": "Installer.exe",
+      "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\Installer.exe",
+      "sizeBytes": 42496,
+      "sizeMb": "0.04",
+      "sha256": "65e4327c142483b42cfd6b06cfe7c078a4e528eefd2e48965f3f5afdb661a24c",
+      "authenticode": {
+        "signed": false,
+        "status": "2",
+        "statusMessage": "The file C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\Installer.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170",
+        "signer": null,
+        "issuer": null,
+        "thumbprint": null,
+        "timestamp": null
+      }
+    },
+    "DiamondERP.exe": {
+      "relativePath": "DiamondERP.exe",
+      "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\DiamondERP.exe",
+      "sizeBytes": 28160,
+      "sizeMb": "0.03",
+      "sha256": "406c1c54c1df6fe31fdda7d36f814d0da0a3185503b49d7f691db059d33954f0",
+      "authenticode": {
+        "signed": false,
+        "status": "2",
+        "statusMessage": "The file C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\DiamondERP.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170",
+        "signer": null,
+        "issuer": null,
+        "thumbprint": null,
+        "timestamp": null
+      }
+    },
+    "runtime/node.exe": {
+      "relativePath": "runtime/node.exe",
+      "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\runtime\\node.exe",
+      "sizeBytes": 85588976,
+      "sizeMb": "81.62",
+      "sha256": "fdddbf4581e046b8102815d56208d6a248950bb554570b81519a8a5dacfee95d",
+      "authenticode": {
+        "signed": true,
+        "status": "0",
+        "statusMessage": "Signature verified.",
+        "signer": "CN=OpenJS Foundation, O=OpenJS Foundation, L=San Francisco, S=California, C=US",
+        "issuer": "CN=Microsoft ID Verified CS EOC CA 01, O=Microsoft Corporation, C=US",
+        "thumbprint": "C8F1559796E3CCC1E166EE41E1D0A0EAA6379A56",
+        "timestamp": "CN=Microsoft Public RSA Time Stamping Authority, OU=nShield TSS ESN:7A00-05E0-D947, OU=Microsoft America Operations, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+      }
+    }
+  }
+}
