@@ -58,7 +58,7 @@ function httpRequest(urlPath, options = {}, body = null) {
       port: url.port,
       path: url.pathname + url.search,
       method: options.method || 'GET',
-      headers: options.headers || {},
+      headers: { ...(options.headers || {}) },
       timeout: 10000,
     };
 
@@ -145,6 +145,13 @@ function spawnServer(apiEntry, cwd) {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  proc.stdout.on('data', (d) => {
+    if (process.env.VERBOSE) {
+      const text = d.toString().trim();
+      if (text) console.log(`  [srv] ${text}`);
+    }
   });
 
   proc.stderr.on('data', (d) => {
@@ -268,20 +275,29 @@ async function runSmokeTests() {
   const isRootValid = rootRes.statusCode === 200 && rootRes.body.includes('<div id="root">');
   recordResult('React SPA root page (/)', isRootValid, `Status: ${rootRes.statusCode}, ContentType: ${rootRes.headers['content-type']}`);
 
-  // Check 3: Client-Side Route Fallback
-  const spaRes = await httpRequest('/dashboard');
-  const isSpaValid = spaRes.statusCode === 200 && spaRes.body.includes('<div id="root">');
-  recordResult('React SPA fallback (/dashboard)', isSpaValid, `Status: ${spaRes.statusCode}`);
+  // Check 3: Client-Side Route Fallback across all SPA routes
+  const spaRoutes = ['/dashboard', '/inventory', '/ledger', '/certificates', '/parties', '/repairs', '/reports', '/settings'];
+  for (const route of spaRoutes) {
+    const routeRes = await httpRequest(route);
+    const isRouteValid = routeRes.statusCode === 200 && routeRes.body.includes('<div id="root">');
+    recordResult(`React SPA route fallback (${route})`, isRouteValid, `Status: ${routeRes.statusCode}`);
+  }
 
   // Check 4: Static Asset Serving
   const assetsDir = path.join(webDistDir, 'assets');
   if (fs.existsSync(assetsDir)) {
     const assetFiles = fs.readdirSync(assetsDir);
     const sampleJs = assetFiles.find((f) => f.endsWith('.js'));
+    const sampleCss = assetFiles.find((f) => f.endsWith('.css'));
     if (sampleJs) {
       const assetRes = await httpRequest(`/assets/${sampleJs}`);
       const isAssetValid = assetRes.statusCode === 200 && assetRes.headers['content-type']?.includes('javascript');
       recordResult(`Static bundle serving (/assets/${sampleJs})`, isAssetValid, `Status: ${assetRes.statusCode}`);
+    }
+    if (sampleCss) {
+      const cssRes = await httpRequest(`/assets/${sampleCss}`);
+      const isCssValid = cssRes.statusCode === 200 && cssRes.headers['content-type']?.includes('css');
+      recordResult(`Static stylesheet serving (/assets/${sampleCss})`, isCssValid, `Status: ${cssRes.statusCode}`);
     }
   }
 
@@ -290,7 +306,7 @@ async function runSmokeTests() {
   const isApi404Isolated = apiNotFoundRes.statusCode === 404 && apiNotFoundRes.json && !apiNotFoundRes.body.includes('<!DOCTYPE html>');
   recordResult('API 404 strict boundary (/api/* never returns HTML)', isApi404Isolated, `Status: ${apiNotFoundRes.statusCode}, Type: ${apiNotFoundRes.headers['content-type']}`);
 
-  console.log('\n[4/5] Testing Production Authentication & Database Operations:');
+  console.log('\n[4/5] Testing Production Authentication, Domain APIs & File Workflows:');
 
   // Check 6: Login with seeded admin
   const loginRes = await httpRequest('/api/auth/login', {
@@ -309,7 +325,10 @@ async function runSmokeTests() {
   const uniqueSmokePassword = 'SmokePassword@4321';
 
   if (token) {
-    const authHeaders = { Authorization: `Bearer ${token}` };
+    const authHeaders = {
+      Authorization: `Bearer ${token}`,
+      'X-Profile-Id': 'Stavan',
+    };
 
     // Check 7: Authenticated Database Read
     const meRes = await httpRequest('/api/auth/me', { headers: authHeaders });
@@ -329,6 +348,76 @@ async function runSmokeTests() {
     createdUserId = createUserRes.json?.data?.id;
     const isWriteValid = createUserRes.statusCode === 201 && Boolean(createdUserId);
     recordResult('Database write via authenticated API (/api/auth/users)', isWriteValid, `Created ID: ${createdUserId}, Username: ${uniqueSmokeUsername}`);
+
+    // Domain API Endpoints
+    const stocksRes = await httpRequest('/api/stocks', { headers: authHeaders });
+    recordResult('Domain API: Stocks list (/api/stocks)', stocksRes.statusCode === 200 && Array.isArray(stocksRes.json?.data));
+
+    const dashboardRes = await httpRequest('/api/dashboard', { headers: authHeaders });
+    recordResult('Domain API: Dashboard KPIs (/api/dashboard)', dashboardRes.statusCode === 200 && Boolean(dashboardRes.json?.data));
+
+    const ledgerRes = await httpRequest('/api/ledger', { headers: authHeaders });
+    recordResult('Domain API: Ledger entries (/api/ledger)', ledgerRes.statusCode === 200 && Array.isArray(ledgerRes.json?.data));
+
+    const partiesRes = await httpRequest('/api/parties', { headers: authHeaders });
+    recordResult('Domain API: Parties list (/api/parties)', partiesRes.statusCode === 200 && Array.isArray(partiesRes.json?.data));
+
+    const repairsRes = await httpRequest('/api/repairs', { headers: authHeaders });
+    recordResult('Domain API: Workshop repairs (/api/repairs)', repairsRes.statusCode === 200 && Array.isArray(repairsRes.json?.data));
+
+    const reportsRes = await httpRequest('/api/reports', { headers: authHeaders });
+    recordResult('Domain API: Reports catalog (/api/reports)', reportsRes.statusCode === 200 && Boolean(reportsRes.json?.data));
+
+    const reportPreviewRes = await httpRequest('/api/reports/preview?reportType=INVENTORY_VALUATION', { headers: authHeaders });
+    recordResult('Domain API: Report preview (/api/reports/preview)', reportPreviewRes.statusCode === 200 && reportPreviewRes.json?.success === true);
+
+    const reportExcelRes = await httpRequest('/api/reports/export/excel?reportType=INVENTORY_VALUATION', { headers: authHeaders });
+    const isExcelValid = reportExcelRes.statusCode === 200 && (reportExcelRes.headers['content-type']?.includes('spreadsheet') || reportExcelRes.headers['content-type']?.includes('octet-stream'));
+    recordResult('Domain API: Excel report export stream (/api/reports/export/excel)', isExcelValid, `Content-Type: ${reportExcelRes.headers['content-type']}`);
+
+    const profilesRes = await httpRequest('/api/settings/profiles', { headers: authHeaders });
+    recordResult('Domain API: Settings profiles (/api/settings/profiles)', profilesRes.statusCode === 200 && Boolean(profilesRes.json?.data?.active));
+
+    const activationRes = await httpRequest('/api/system/activation-status');
+    recordResult('System API: Activation status (/api/system/activation-status)', activationRes.statusCode === 200 && typeof activationRes.json?.isActivated === 'boolean');
+
+    // File Upload Workflow Check
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
+    const multipartBody = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="test_certificate.pdf"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4 sample certificate document\r\n--${boundary}--\r\n`)
+    ]);
+
+    const uploadRes = await new Promise((resolve, reject) => {
+      const url = new URL('/api/certificates/upload', BASE_URL);
+      const req = http.request({
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': multipartBody.length,
+        },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          let json = null;
+          try { json = JSON.parse(data); } catch {}
+          resolve({ statusCode: res.statusCode, json });
+        });
+      });
+      req.on('error', reject);
+      req.write(multipartBody);
+      req.end();
+    });
+    const isUploadValid = uploadRes.statusCode === 200 && uploadRes.json?.success === true && Boolean(uploadRes.json?.data?.path);
+    recordResult('File upload workflow (/api/certificates/upload)', isUploadValid, `Staged path: ${uploadRes.json?.data?.path}`);
+
+    // Logout Check
+    const logoutRes = await httpRequest('/api/auth/logout', { method: 'POST', headers: authHeaders });
+    recordResult('Authentication: Logout (/api/auth/logout)', logoutRes.statusCode === 200 && logoutRes.json?.success === true);
   }
 
   // ── RESTART & PERSISTENCE TEST ─────────────────────────────────────────────

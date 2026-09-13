@@ -218,6 +218,30 @@ check('Production web bundle does not reference Vite dev port :5175', () => {
   return !content.includes(':5175');
 });
 
+check('web/dist/index.html contains no developer machine filesystem paths', () => {
+  const indexPath = path.join(STAGING_DIR, 'web', 'dist', 'index.html');
+  if (!fs.existsSync(indexPath)) return false;
+  const content = fs.readFileSync(indexPath, 'utf-8');
+  return !content.includes('C:\\') && !content.includes('/Users/') && !content.includes('TestV3.0');
+});
+
+check('Production JavaScript bundle contains no development server references (:5175)', () => {
+  const assetsDir = path.join(STAGING_DIR, 'web', 'dist', 'assets');
+  if (!fs.existsSync(assetsDir)) return false;
+  const jsFiles = fs.readdirSync(assetsDir).filter(f => f.endsWith('.js'));
+  return jsFiles.every(f => {
+    const jsContent = fs.readFileSync(path.join(assetsDir, f), 'utf-8');
+    return !jsContent.includes(':5175');
+  });
+});
+
+check('Static asset references in index.html use root-relative paths (/assets/)', () => {
+  const indexPath = path.join(STAGING_DIR, 'web', 'dist', 'index.html');
+  if (!fs.existsSync(indexPath)) return false;
+  const content = fs.readFileSync(indexPath, 'utf-8');
+  return content.includes('src="/assets/') && content.includes('href="/assets/');
+});
+
 // ── 6. Cleanliness & Absence of Development Artifacts ───────────────────────
 console.log('\n[6] Staged Artifact Cleanliness:');
 
