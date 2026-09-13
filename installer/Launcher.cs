@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -10,6 +11,18 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+
+[assembly: AssemblyTitle("Diamond ERP")]
+[assembly: AssemblyDescription("Diamond ERP Desktop Application")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany("Diamond ERP")]
+[assembly: AssemblyProduct("Diamond ERP")]
+[assembly: AssemblyCopyright("Copyright © 2025-2026 Diamond ERP")]
+[assembly: AssemblyTrademark("")]
+[assembly: AssemblyCulture("")]
+[assembly: AssemblyVersion("3.0.0.0")]
+[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyInformationalVersion("3.0.0")]
 
 namespace DiamondERP.App
 {

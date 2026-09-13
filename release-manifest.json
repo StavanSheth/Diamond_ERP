@@ -1,14 +1,55 @@
 {
-  "releaseVersion": "3.0.0",
-  "generatedAt": "2026-09-13T18:17:46.526Z",
-  "platform": "win32-x64",
+  "product": "Diamond ERP",
+  "version": "3.0.0",
+  "platform": "win32",
+  "architecture": "x64",
+  "buildDate": "2026-09-13T18:35:57.551Z",
+  "git": {
+    "commit": "d537c3b95cce4aa3f19398b6ae81a580dde3dd7e",
+    "shortCommit": "d537c3b9",
+    "branch": "v3"
+  },
+  "runtime": {
+    "engine": "node.exe",
+    "version": "v22.20.0",
+    "arch": "x64",
+    "pinnedSha256": "fdddbf4581e046b8102815d56208d6a248950bb554570b81519a8a5dacfee95d"
+  },
   "artifacts": {
+    "DiamondERP-3.0.0-Setup.exe": {
+      "relativePath": "DiamondERP-3.0.0-Setup.exe",
+      "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\releases\\DiamondERP-3.0.0-Setup.exe",
+      "sizeBytes": 43008,
+      "sizeMb": "0.04",
+      "sha256": "0e572ea111e49d7f9c31f51374da63daa55afb7df0183c2b357c1efc864ab8cd",
+      "authenticode": {
+        "signed": false,
+        "status": "2",
+        "statusMessage": "The file C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\releases\\DiamondERP-3.0.0-Setup.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170",
+        "signer": null,
+        "issuer": null,
+        "thumbprint": null,
+        "timestamp": null
+      }
+    },
+    "DiamondERP-3.0.0-Windows-x64.zip": {
+      "relativePath": "DiamondERP-3.0.0-Windows-x64.zip",
+      "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\releases\\DiamondERP-3.0.0-Windows-x64.zip",
+      "sizeBytes": 62823545,
+      "sizeMb": "59.91",
+      "sha256": "f2edc1dde556ae9076105f59af72f8ff0c043b1a2e16f06d8867cee841d013cf",
+      "authenticode": {
+        "signed": false,
+        "status": "NotApplicable",
+        "statusMessage": "Archive"
+      }
+    },
     "Installer.exe": {
       "relativePath": "Installer.exe",
       "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\Installer.exe",
-      "sizeBytes": 42496,
+      "sizeBytes": 43008,
       "sizeMb": "0.04",
-      "sha256": "65e4327c142483b42cfd6b06cfe7c078a4e528eefd2e48965f3f5afdb661a24c",
+      "sha256": "0e572ea111e49d7f9c31f51374da63daa55afb7df0183c2b357c1efc864ab8cd",
       "authenticode": {
         "signed": false,
         "status": "2",
@@ -22,9 +63,9 @@
     "DiamondERP.exe": {
       "relativePath": "DiamondERP.exe",
       "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\DiamondERP.exe",
-      "sizeBytes": 28160,
+      "sizeBytes": 28672,
       "sizeMb": "0.03",
-      "sha256": "406c1c54c1df6fe31fdda7d36f814d0da0a3185503b49d7f691db059d33954f0",
+      "sha256": "c313894e1e410de15c0c56a328400f860966b7cab96faece668828ac9dadb4b7",
       "authenticode": {
         "signed": false,
         "status": "2",

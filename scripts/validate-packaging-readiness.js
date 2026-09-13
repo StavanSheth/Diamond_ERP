@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -106,6 +107,28 @@ check('DiamondERP.exe UAC manifest is configured for asInvoker (standard user pr
 check('NO placeholder README.txt exists in runtime/', () => {
   const readme = path.join(STAGING_DIR, 'runtime', 'README.txt');
   return !fs.existsSync(readme);
+});
+
+check('Bundled Node.js runtime matches pinned SHA256 checksum (v22.20.0 x64)', () => {
+  const p = path.join(STAGING_DIR, 'runtime', 'node.exe');
+  if (!fs.existsSync(p)) return false;
+  const PINNED_SHA256 = 'fdddbf4581e046b8102815d56208d6a248950bb554570b81519a8a5dacfee95d';
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  return hash === PINNED_SHA256;
+});
+
+check('Windows PE binaries report assembly metadata (Version 3.0.0, Product "Diamond ERP")', () => {
+  const launcher = path.join(STAGING_DIR, 'DiamondERP.exe');
+  const installer = path.join(STAGING_DIR, 'Installer.exe');
+  if (!fs.existsSync(launcher) || !fs.existsSync(installer)) return false;
+  const cmd = `powershell -NoProfile -Command "(Get-Item '${launcher}').VersionInfo.ProductVersion + '|' + (Get-Item '${installer}').VersionInfo.ProductVersion + '|' + (Get-Item '${launcher}').VersionInfo.ProductName"`;
+  const parts = execSync(cmd, { encoding: 'utf-8' }).trim().split('|');
+  return (
+    parts.length === 3 &&
+    parts[0].trim().startsWith('3.0.0') &&
+    parts[1].trim().startsWith('3.0.0') &&
+    parts[2].trim() === 'Diamond ERP'
+  );
 });
 
 // ── 2. Backend Manifest & Entry Point ───────────────────────────────────────
@@ -302,6 +325,44 @@ check('No TypeScript source files (.ts) in api/dist', () => {
     return false;
   }
   return !hasTs(distDir);
+});
+
+check('No .env, private keys (.pfx, .p12, .key, .pem) in staging root or app trees', () => {
+  function scanSecrets(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (e.name === 'node_modules') continue;
+        if (scanSecrets(path.join(dir, e.name))) return true;
+      } else {
+        const lower = e.name.toLowerCase();
+        if (
+          lower.startsWith('.env') ||
+          lower.endsWith('.pfx') ||
+          lower.endsWith('.p12') ||
+          lower.endsWith('.key') ||
+          lower.endsWith('.pem')
+        ) {
+          console.error(`    Found forbidden secret/env file: ${path.join(dir, e.name)}`);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  return !scanSecrets(STAGING_DIR);
+});
+
+check('No development source trees or test folders (.git, .github, test, tests, apps) in staging root', () => {
+  const forbidden = ['.git', '.github', 'test', 'tests', 'apps'];
+  return forbidden.every((name) => !fs.existsSync(path.join(STAGING_DIR, name)));
+});
+
+check('No developer machine filesystem paths leak into api/package.json', () => {
+  const pkgPath = path.join(STAGING_DIR, 'api', 'package.json');
+  if (!fs.existsSync(pkgPath)) return false;
+  const content = fs.readFileSync(pkgPath, 'utf-8');
+  return !content.includes('C:\\') && !content.includes('TestV3.0') && !content.includes('/Users/');
 });
 
 // ── Results Summary ─────────────────────────────────────────────────────────

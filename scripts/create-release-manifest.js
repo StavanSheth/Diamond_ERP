@@ -1,12 +1,16 @@
 /**
- * DiamondERP V3.0 — Release Manifest & SHA256 Hash Generator
+ * DiamondERP V3.0 — Release Manifest & Checksum Generator
  *
- * Generates release-manifest.json and SHA256SUMS.txt for release artifacts:
- *   - Installer.exe
- *   - DiamondERP.exe
- *   - runtime/node.exe
+ * Generates release-manifest.json and SHA256SUMS.txt for:
+ *   - Installer (Installer.exe / DiamondERP-3.0.0-Setup.exe)
+ *   - Desktop Launcher (DiamondERP.exe)
+ *   - Standalone Node Runtime (runtime/node.exe)
+ *   - Complete Portable Zip Bundle (DiamondERP-3.0.0-Windows-x64.zip, if built)
  *
- * Records file size, SHA256, and Authenticode signature status.
+ * Captures:
+ *   - Single-source-of-truth version (package.json)
+ *   - Git commit SHA and branch (for traceability)
+ *   - File sizes, SHA256 checksums, and Authenticode signature audit
  */
 
 const fs = require('fs');
@@ -16,12 +20,23 @@ const { execSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const STAGING_DIR = path.join(ROOT_DIR, 'build', 'windows', 'DiamondERP');
+const RELEASES_DIR = path.join(ROOT_DIR, 'build', 'releases');
 
 function computeSha256(filePath) {
   const hash = crypto.createHash('sha256');
-  const buffer = fs.readFileSync(filePath);
-  hash.update(buffer);
+  hash.update(fs.readFileSync(filePath));
   return hash.digest('hex');
+}
+
+function getGitMetadata() {
+  try {
+    const commit = execSync('git rev-parse HEAD', { cwd: ROOT_DIR, encoding: 'utf-8' }).trim();
+    const shortCommit = execSync('git rev-parse --short HEAD', { cwd: ROOT_DIR, encoding: 'utf-8' }).trim();
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: ROOT_DIR, encoding: 'utf-8' }).trim();
+    return { commit, shortCommit, branch };
+  } catch {
+    return { commit: 'unknown', shortCommit: 'unknown', branch: 'v3' };
+  }
 }
 
 function getAuthenticodeInfo(filePath) {
@@ -47,10 +62,17 @@ function getAuthenticodeInfo(filePath) {
 
 function main() {
   console.log('================================================================');
-  console.log('📦 Generating Release Manifest & Checksums for DiamondERP V3.0');
+  console.log('📦 Generating Release Manifest & Checksums for Diamond ERP');
   console.log('================================================================\n');
 
+  // Single Source of Truth for Version
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf-8'));
+  const version = rootPkg.version || '3.0.0';
+  const gitMeta = getGitMetadata();
+
   const targets = [
+    { name: `DiamondERP-${version}-Setup.exe`, path: path.join(RELEASES_DIR, `DiamondERP-${version}-Setup.exe`) },
+    { name: `DiamondERP-${version}-Windows-x64.zip`, path: path.join(RELEASES_DIR, `DiamondERP-${version}-Windows-x64.zip`) },
     { name: 'Installer.exe', path: path.join(STAGING_DIR, 'Installer.exe') },
     { name: 'DiamondERP.exe', path: path.join(STAGING_DIR, 'DiamondERP.exe') },
     { name: 'runtime/node.exe', path: path.join(STAGING_DIR, 'runtime', 'node.exe') },
@@ -67,9 +89,18 @@ function main() {
   }
 
   const manifest = {
-    releaseVersion: '3.0.0',
-    generatedAt: new Date().toISOString(),
-    platform: 'win32-x64',
+    product: 'Diamond ERP',
+    version: version,
+    platform: 'win32',
+    architecture: 'x64',
+    buildDate: new Date().toISOString(),
+    git: gitMeta,
+    runtime: {
+      engine: 'node.exe',
+      version: 'v22.20.0',
+      arch: 'x64',
+      pinnedSha256: 'fdddbf4581e046b8102815d56208d6a248950bb554570b81519a8a5dacfee95d',
+    },
     artifacts: {},
   };
 
@@ -77,13 +108,13 @@ function main() {
 
   for (const t of targets) {
     if (!fs.existsSync(t.path)) {
-      console.warn(`⚠ Target file not found: ${t.path}`);
       continue;
     }
 
     const stat = fs.statSync(t.path);
     const sha256 = computeSha256(t.path);
-    const auth = getAuthenticodeInfo(t.path);
+    const isExe = t.path.endsWith('.exe') || t.path.endsWith('.dll');
+    const auth = isExe ? getAuthenticodeInfo(t.path) : { signed: false, status: 'NotApplicable', statusMessage: 'Archive' };
 
     manifest.artifacts[t.name] = {
       relativePath: t.name,
@@ -98,24 +129,37 @@ function main() {
     console.log(`✔ ${t.name}:`);
     console.log(`   SHA256: ${sha256}`);
     console.log(`   Size:   ${stat.size} bytes (${manifest.artifacts[t.name].sizeMb} MB)`);
-    console.log(`   Signed: ${auth.signed ? 'YES (' + auth.signer + ')' : 'NO (Unsigned)'}`);
+    console.log(`   Signed: ${auth.signed ? 'YES (' + auth.signer + ')' : (auth.status === 'NotApplicable' ? 'N/A' : 'NO (Unsigned)')}`);
+
+    // Generate individual .sha256 file if in releases dir
+    if (t.path.startsWith(RELEASES_DIR)) {
+      const singleShaPath = `${t.path}.sha256`;
+      fs.writeFileSync(singleShaPath, `${sha256} *${path.basename(t.path)}\n`, 'utf-8');
+    }
   }
 
-  // Write release-manifest.json
+  // Write root release-manifest.json
   const manifestPath = path.join(ROOT_DIR, 'release-manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
   console.log(`\n✔ Saved release manifest to: ${manifestPath}`);
 
-  // Write SHA256SUMS.txt
+  // Write root SHA256SUMS.txt
   const shaSumsPath = path.join(ROOT_DIR, 'SHA256SUMS.txt');
   fs.writeFileSync(shaSumsPath, shaLines.join('\n') + '\n', 'utf-8');
   console.log(`✔ Saved checksums to: ${shaSumsPath}`);
 
-  // Also copy to staging root if staging exists
+  // Mirror to staging directory
   if (fs.existsSync(STAGING_DIR)) {
     fs.writeFileSync(path.join(STAGING_DIR, 'release-manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
     fs.writeFileSync(path.join(STAGING_DIR, 'SHA256SUMS.txt'), shaLines.join('\n') + '\n', 'utf-8');
     console.log(`✔ Mirrored release manifest & sums to staging directory: ${STAGING_DIR}`);
+  }
+
+  // Mirror to releases directory
+  if (fs.existsSync(RELEASES_DIR)) {
+    fs.writeFileSync(path.join(RELEASES_DIR, 'release-manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(RELEASES_DIR, 'SHA256SUMS.txt'), shaLines.join('\n') + '\n', 'utf-8');
+    console.log(`✔ Mirrored release manifest & sums to releases directory: ${RELEASES_DIR}`);
   }
 
   console.log('\n✅ Release manifest and checksum generation complete!');

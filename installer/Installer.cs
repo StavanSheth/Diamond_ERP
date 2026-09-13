@@ -3,9 +3,22 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
+
+[assembly: AssemblyTitle("Diamond ERP Setup")]
+[assembly: AssemblyDescription("Diamond ERP Setup Wizard")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany("Diamond ERP")]
+[assembly: AssemblyProduct("Diamond ERP")]
+[assembly: AssemblyCopyright("Copyright © 2025-2026 Diamond ERP")]
+[assembly: AssemblyTrademark("")]
+[assembly: AssemblyCulture("")]
+[assembly: AssemblyVersion("3.0.0.0")]
+[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyInformationalVersion("3.0.0")]
 
 namespace DiamondERP.Setup
 {

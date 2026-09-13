@@ -97,7 +97,7 @@ function httpRequest(urlPath, options = {}, postData = null) {
   });
 }
 
-async function waitForServer(maxAttempts = 30) {
+async function waitForServer(maxAttempts = 50) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await httpRequest('/health');
@@ -107,7 +107,7 @@ async function waitForServer(maxAttempts = 30) {
     } catch {
       // Server still booting
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
@@ -221,8 +221,18 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+  let serverLogs = '';
+  serverProc.stdout.on('data', (d) => { serverLogs += d.toString(); });
+  serverProc.stderr.on('data', (d) => { serverLogs += d.toString(); });
+
   const online = await waitForServer();
   record('Installed application starts and responds to loopback requests', online, `Port: ${TEST_PORT}`);
+
+  if (!online) {
+    console.error('[FATAL] Server process output before timeout:\n' + (serverLogs || '(No output recorded)'));
+    try { serverProc.kill(); } catch {}
+    process.exit(1);
+  }
 
   // ── Step 4: Health, Web UI & API Verification ─────────────────────────────
   console.log('\n[Phase 5.4] Health, Web UI & ERP Workflows:');

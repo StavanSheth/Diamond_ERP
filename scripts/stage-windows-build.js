@@ -28,10 +28,21 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const STAGING_DIR = path.join(ROOT_DIR, 'build', 'windows', 'DiamondERP');
+
+const PINNED_NODE_VERSION = 'v22.20.0';
+const PINNED_NODE_ARCH = 'x64';
+const PINNED_NODE_SHA256 = 'fdddbf4581e046b8102815d56208d6a248950bb554570b81519a8a5dacfee95d';
+
+function computeSha256(filePath) {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
 
 function log(msg) {
   console.log(`[StageBuild] ${msg}`);
@@ -151,6 +162,8 @@ async function main() {
   fs.mkdirSync(runtimeDir, { recursive: true });
 
   const targetNodeExe = path.join(runtimeDir, 'node.exe');
+  const cacheDir = path.join(ROOT_DIR, 'build', 'cache');
+  const cachedNodeExe = path.join(cacheDir, 'node.exe');
 
   // Source resolution priority:
   // 1. Explicit environment variable NODE_RUNTIME_PATH
@@ -160,8 +173,8 @@ async function main() {
   if (process.env.NODE_RUNTIME_PATH && fs.existsSync(process.env.NODE_RUNTIME_PATH)) {
     sourceNodeExe = process.env.NODE_RUNTIME_PATH;
     log(`Using custom Node runtime from NODE_RUNTIME_PATH: ${sourceNodeExe}`);
-  } else if (fs.existsSync(path.join(ROOT_DIR, 'build', 'cache', 'node.exe'))) {
-    sourceNodeExe = path.join(ROOT_DIR, 'build', 'cache', 'node.exe');
+  } else if (fs.existsSync(cachedNodeExe)) {
+    sourceNodeExe = cachedNodeExe;
     log(`Using cached Node runtime: ${sourceNodeExe}`);
   } else if (process.platform === 'win32' && fs.existsSync(process.execPath)) {
     sourceNodeExe = process.execPath;
@@ -172,17 +185,43 @@ async function main() {
     throw new Error('No valid Windows node.exe runtime could be found to bundle into staging directory.');
   }
 
+  const sourceSha = computeSha256(sourceNodeExe);
+  const isReleaseMode = process.env.RELEASE_MODE === 'true' || process.env.NODE_ENV === 'production';
+  log(`Candidate Node runtime SHA256: ${sourceSha}`);
+
+  if (sourceSha === PINNED_NODE_SHA256) {
+    log(`✔ Candidate Node runtime strictly matches pinned release SHA256 (${PINNED_NODE_VERSION} ${PINNED_NODE_ARCH})`);
+  } else if (isReleaseMode) {
+    throw new Error(
+      `Node runtime integrity mismatch for release! Expected pinned SHA256: ${PINNED_NODE_SHA256}, but got: ${sourceSha}`
+    );
+  } else {
+    console.warn(`[WARN] Candidate Node runtime SHA256 does not match pinned release hash (${sourceSha} vs ${PINNED_NODE_SHA256}). Allowed in dev mode only.`);
+  }
+
   fs.copyFileSync(sourceNodeExe, targetNodeExe);
 
-  // Validate that bundled node.exe is a real PE executable and runs
+  // Cache verified binary for clean builds if matching pinned checksum
+  if (sourceSha === PINNED_NODE_SHA256 && !fs.existsSync(cachedNodeExe)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.copyFileSync(sourceNodeExe, cachedNodeExe);
+    log(`✔ Cached verified pinned Node runtime to ${cachedNodeExe}`);
+  }
+
+  // Validate that bundled node.exe is a real PE executable, matches hash, and runs
   const nodeStats = fs.statSync(targetNodeExe);
   if (nodeStats.size < 20 * 1024 * 1024) {
     throw new Error(`Staged node.exe is unexpectedly small (${nodeStats.size} bytes). Expected > 20 MB.`);
   }
 
+  const targetSha = computeSha256(targetNodeExe);
+  if (targetSha !== sourceSha) {
+    throw new Error(`Staged node.exe corrupted during copy! (Source: ${sourceSha}, Dest: ${targetSha})`);
+  }
+
   try {
     const nodeVer = execSync(`"${targetNodeExe}" -v`, { encoding: 'utf-8' }).trim();
-    log(`✔ Bundled Node.js runtime verified: ${targetNodeExe} (${nodeVer}, ${(nodeStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    log(`✔ Bundled Node.js runtime verified: ${targetNodeExe} (${nodeVer}, ${(nodeStats.size / (1024 * 1024)).toFixed(1)} MB, SHA256: ${targetSha.slice(0, 12)}...)`);
   } catch (err) {
     throw new Error(`Staged node.exe failed verification execution: ${err.message}`);
   }
