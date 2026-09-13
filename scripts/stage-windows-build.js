@@ -67,13 +67,17 @@ function runBuildStep(name, cmd) {
 async function main() {
   log('Starting Windows Production Staging Build for DiamondERP V3.0...');
 
+  // 0. Clean stale build artifacts
+  runBuildStep('Clean stale artifacts', 'npm run clean');
+
   // 1. Build packages
   runBuildStep('Contracts package', 'npm run build:contracts');
   runBuildStep('Shared-utils package', 'npm run build:utils');
+  runBuildStep('API client package', 'npm run build:client');
 
   // 2. Build Web and API
-  runBuildStep('React web frontend', 'npm run build --workspace=@diamond-erp/web');
-  runBuildStep('Backend REST API', 'npm run build --workspace=@diamond-erp/api');
+  runBuildStep('React web frontend', 'npm run build:web');
+  runBuildStep('Backend REST API', 'npm run build:api');
 
   // 3. Compile Launcher & Installer if csc is available
   const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';

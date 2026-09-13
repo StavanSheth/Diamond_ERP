@@ -19,7 +19,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const PORT = 3002;
+const PORT = process.env.SMOKE_PORT ? parseInt(process.env.SMOKE_PORT, 10) : 3099;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 // Create isolated temporary data directory for clean smoke testing
@@ -118,7 +118,7 @@ async function runSmokeTests() {
     throw new Error('Web is not built. Run "npm run build --workspace=@diamond-erp/web" first.');
   }
 
-  console.log('[1/4] Spawning Production Server Process on 127.0.0.1:3002...');
+  console.log(`[1/4] Spawning Production Server Process on 127.0.0.1:${PORT}...`);
   
   const env = {
     ...process.env,
@@ -126,7 +126,7 @@ async function runSmokeTests() {
     PORT: String(PORT),
     HOST: '127.0.0.1',
     DIAMOND_DATA_DIR: TEMP_DATA_DIR,
-    DEFAULT_ADMIN_PASSWORD: 'SmokePassword@123',
+    DEFAULT_ADMIN_PASSWORD: 'Stavan@123',
     AUTO_SEED_DEFAULT_ADMIN: 'true',
   };
 
@@ -188,8 +188,8 @@ async function runSmokeTests() {
   const loginRes = await httpRequest('/api/auth/login', {
     method: 'POST',
   }, {
-    username: 'admin',
-    password: 'SmokePassword@123',
+    username: 'stavan',
+    password: 'Stavan@123',
   });
 
   const token = loginRes.json?.data?.token;
@@ -201,7 +201,7 @@ async function runSmokeTests() {
 
     // Check 7: Authenticated Database Read
     const meRes = await httpRequest('/api/auth/me', { headers: authHeaders });
-    const isMeValid = meRes.statusCode === 200 && meRes.json?.data?.username === 'admin';
+    const isMeValid = meRes.statusCode === 200 && meRes.json?.data?.username === 'stavan';
     recordResult('Database read via authenticated API (/api/auth/me)', isMeValid, `User: ${meRes.json?.data?.username}, Role: ${meRes.json?.data?.role}`);
 
     // Check 8: Authenticated Database Write

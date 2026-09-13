@@ -8,10 +8,15 @@
     "packages/*"
   ],
   "scripts": {
+    "clean": "node scripts/clean-build-artifacts.js",
     "dev:api": "npm run dev --workspace=@diamond-erp/api",
     "dev:web": "npm run dev --workspace=@diamond-erp/web",
     "build:contracts": "npm run build --workspace=@diamond-erp/contracts",
     "build:utils": "npm run build --workspace=@diamond-erp/shared-utils",
+    "build:client": "npm run build --workspace=@diamond-erp/api-client",
+    "build:api": "npm run build --workspace=@diamond-erp/api",
+    "build:web": "npm run build --workspace=@diamond-erp/web",
+    "build:prod": "npm run clean && npm run build:contracts && npm run build:utils && npm run build:client && npm run build:api && npm run build:web && npm run verify:packaging",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
