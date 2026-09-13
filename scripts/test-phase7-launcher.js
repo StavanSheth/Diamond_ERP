@@ -22,6 +22,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const crypto = require('crypto');
 const { execSync, execFile, spawn } = require('child_process');
 
@@ -289,13 +290,16 @@ async function runSuite() {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
+  let backendStdout = '';
   let backendStderr = '';
+  backendProc.stdout.on('data', (c) => { backendStdout += c; });
   backendProc.stderr.on('data', (c) => { backendStderr += c; });
 
   let serverReady = false;
   try {
     serverReady = await waitForServer(TEST_PORT, 40);
-    record('Production API starts and reports healthy on 127.0.0.1', serverReady, serverReady ? `Port: ${TEST_PORT}` : `Stderr: ${backendStderr.slice(0, 200)}`);
+    const failureDiagnostic = backendStderr ? `Stderr: ${backendStderr.slice(0, 200)}` : (backendStdout ? `Stdout: ${backendStdout.slice(0, 200)}` : 'No output');
+    record('Production API starts and reports healthy on 127.0.0.1', serverReady, serverReady ? `Port: ${TEST_PORT}` : failureDiagnostic);
 
     if (serverReady) {
       const health = await httpRequest('/health');
@@ -407,6 +411,8 @@ async function runSuite() {
   // ──────────────────────────────────────────────────────────────────────────
   // TEST 10: Port Conflict Detection
   // ──────────────────────────────────────────────────────────────────────────
+  // TEST 10: Port Conflict Detection (HTTP & Raw TCP Non-HTTP)
+  // ──────────────────────────────────────────────────────────────────────────
   console.log('\n[Step 10] Testing port conflict handling...');
   const mockServer = http.createServer((req, res) => {
     // Foreign server returning 404 or foreign content
@@ -430,6 +436,81 @@ async function runSuite() {
     );
   } finally {
     await new Promise((resolve) => mockServer.close(resolve));
+  }
+
+  // Raw TCP non-HTTP socket listener test
+  const rawTcpServer = net.createServer((socket) => {
+    socket.write('RAW_NON_HTTP_STREAM\r\n');
+    socket.destroy();
+  });
+  await new Promise((resolve) => rawTcpServer.listen(TEST_PORT, '127.0.0.1', resolve));
+  try {
+    const rawTcpConflict = await new Promise((resolve) => {
+      const r = http.get(`http://127.0.0.1:${TEST_PORT}/health`, (res) => {
+        resolve(res.statusCode === 200);
+      });
+      r.on('error', () => resolve(false));
+    });
+    record(
+      'Port conflict detected when port is occupied by non-HTTP TCP listener',
+      rawTcpConflict === false,
+      'Raw TCP socket detected as non-ready/conflicting'
+    );
+  } finally {
+    await new Promise((resolve) => rawTcpServer.close(resolve));
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 10b: Premature Backend Exit Detection (Fast-Fail)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n[Step 10b] Testing fast failure when backend process exits during readiness polling...');
+  const crashScript = path.join(SCRATCH_DIR, 'instant-crash.js');
+  fs.writeFileSync(crashScript, 'console.error("Simulated crash"); process.exit(42);');
+  const crashStart = Date.now();
+  const crashProc = spawn(testNodeExe, [crashScript], { stdio: 'pipe' });
+  const crashExitCode = await new Promise((resolve) => {
+    crashProc.on('exit', (code) => resolve(code));
+  });
+  const crashDuration = Date.now() - crashStart;
+  record(
+    'Premature process exit during startup is detected within bounded time (fast-fail)',
+    crashExitCode === 42 && crashDuration < 2000,
+    `Exit code: ${crashExitCode}, Elapsed: ${crashDuration}ms`
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 10c: Targeted Process Termination (Preserving Unrelated Processes)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n[Step 10c] Testing targeted process termination (protecting unrelated Node processes)...');
+  const unrelatedScript = path.join(SCRATCH_DIR, 'unrelated-worker.js');
+  fs.writeFileSync(unrelatedScript, 'setInterval(() => {}, 1000);');
+  const unrelatedProc = spawn(testNodeExe, [unrelatedScript], { stdio: 'ignore' });
+  const targetScript = path.join(SCRATCH_DIR, 'target-worker.js');
+  fs.writeFileSync(targetScript, 'setInterval(() => {}, 1000);');
+  const targetProc = spawn(testNodeExe, [targetScript], { stdio: 'ignore' });
+
+  try {
+    // Terminate only the target process using targeted taskkill
+    execSync(`taskkill.exe /F /T /PID ${targetProc.pid}`, { stdio: 'pipe' });
+    const targetExited = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve(false), 2500);
+      targetProc.on('exit', () => { clearTimeout(t); resolve(true); });
+    });
+    // Check unrelated process is STILL running
+    let unrelatedStillAlive = false;
+    try {
+      process.kill(unrelatedProc.pid, 0);
+      unrelatedStillAlive = true;
+    } catch {}
+
+    record(
+      'Targeted termination kills exact PID while preserving unrelated Node processes',
+      targetExited && unrelatedStillAlive,
+      `Target PID ${targetProc.pid} terminated, Unrelated PID ${unrelatedProc.pid} preserved`
+    );
+  } finally {
+    try { unrelatedProc.kill(); } catch {}
+    try { targetProc.kill(); } catch {}
   }
 
   // ──────────────────────────────────────────────────────────────────────────

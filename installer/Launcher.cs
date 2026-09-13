@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -51,10 +52,15 @@ namespace DiamondERP.App
         private static string _dataDir;
         private static bool _isProductionMode;
         private static Process _backendProcess;
+        private static int _backendPid = 0;
+        private static bool _backendStartedByThisLauncher = false;
         private static Process _devWebProcess;
         private static System.Windows.Forms.NotifyIcon _trayIcon;
         private static int _backendRestartCount = 0;
         private static volatile bool _isShuttingDown = false;
+        private static int _shutdownInitiated = 0;
+        private static readonly object _shutdownLock = new object();
+        private static Stopwatch _startupStopwatch;
 
         private WebView2 _webView;
         private Grid _loadingGrid;
@@ -112,18 +118,23 @@ namespace DiamondERP.App
                     _dataDir = ResolveDataDirectory();
                     _isProductionMode = DetectProductionMode();
 
-                    WriteLog("Startup", string.Format("Application started. Mode: {0}, AppDir: {1}, DataDir: {2}",
+                    WriteLog("STARTUP", string.Format("Application started. Mode: {0}, AppDir: {1}, DataDir: {2}",
                         _isProductionMode ? "PRODUCTION" : "DEVELOPMENT", _appDir, _dataDir));
 
                     AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                     {
-                        WriteLog("UnhandledException", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown exception");
+                        WriteLog("ERROR", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown unhandled domain exception");
+                    };
+
+                    AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+                    {
+                        ShutdownBackend();
                     };
 
                     var app = new Application();
                     app.DispatcherUnhandledException += (s, e) =>
                     {
-                        WriteLog("DispatcherException", e.Exception != null ? e.Exception.ToString() : "Unknown dispatcher exception");
+                        WriteLog("ERROR", e.Exception != null ? e.Exception.ToString() : "Unknown dispatcher exception");
                         e.Handled = true;
                     };
 
@@ -132,7 +143,7 @@ namespace DiamondERP.App
                 }
                 catch (Exception ex)
                 {
-                    WriteLog("MainCatch", ex.ToString());
+                    WriteLog("ERROR", "Main execution error: " + ex.ToString());
                     MessageBox.Show("Could not launch DiamondERP: " + ex.Message, "DiamondERP Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
@@ -298,19 +309,22 @@ namespace DiamondERP.App
             {
                 try
                 {
+                    _startupStopwatch = Stopwatch.StartNew();
                     string healthUrl = string.Format("http://{0}:{1}/health", LOOPBACK_HOST, DEFAULT_PORT);
                     string targetAppUrl = _isProductionMode
                         ? string.Format("http://{0}:{1}/", LOOPBACK_HOST, DEFAULT_PORT)
                         : "http://localhost:5175/";
 
                     // 1. Port conflict detection & starting backend process
-                    if (IsPortActive(healthUrl))
+                    if (IsTcpPortInUse(DEFAULT_PORT))
                     {
                         if (!IsBackendHealthy(healthUrl))
                         {
-                            throw new InvalidOperationException(string.Format("Port {0} is occupied by another application. Please terminate the conflicting process before launching DiamondERP.", DEFAULT_PORT));
+                            WriteLog("ERROR", string.Format("Port {0} is occupied by an unrelated or unhealthy application.", DEFAULT_PORT));
+                            throw new InvalidOperationException(string.Format("Port {0} is already in use by another application. Please terminate the conflicting process before launching DiamondERP.", DEFAULT_PORT));
                         }
-                        WriteLog("Backend", "Existing healthy DiamondERP backend detected on loopback port.");
+                        _backendStartedByThisLauncher = false;
+                        WriteLog("HEALTH_CHECK", "Existing healthy DiamondERP backend detected on loopback port. Attaching to existing instance.");
                     }
                     else
                     {
@@ -333,10 +347,18 @@ namespace DiamondERP.App
                     {
                         if (_backendProcess != null && _backendProcess.HasExited)
                         {
-                            throw new InvalidOperationException(string.Format("DiamondERP backend process stopped unexpectedly with exit code {0}. Please check logs in {1}.",
+                            WriteLog("ERROR", string.Format("DiamondERP backend process terminated before becoming ready (exit code: {0}).", _backendProcess.ExitCode));
+                            throw new InvalidOperationException(string.Format("DiamondERP backend process terminated before becoming ready (exit code: {0}). Please check logs in {1}.",
                                 _backendProcess.ExitCode, Path.Combine(_dataDir, "logs")));
                         }
+                        WriteLog("ERROR", "DiamondERP services failed to become ready within the expected timeout window.");
                         throw new TimeoutException("DiamondERP services did not become ready within the expected time window. Please restart the application.");
+                    }
+
+                    if (_startupStopwatch != null)
+                    {
+                        _startupStopwatch.Stop();
+                        WriteLog("HEALTH_CHECK", string.Format("Backend validated ready in {0}ms.", _startupStopwatch.ElapsedMilliseconds));
                     }
 
                     // 4. Initialize WebView2 and navigate
@@ -347,12 +369,20 @@ namespace DiamondERP.App
                 }
                 catch (Exception ex)
                 {
-                    WriteLog("ServiceStartError", ex.ToString());
+                    WriteLog("ERROR", "Startup failure: " + ex.ToString());
                     ShutdownBackend();
                     this.Dispatcher.Invoke(new Action(() =>
                     {
                         MessageBox.Show("Error starting DiamondERP services: " + ex.Message,
                             "DiamondERP Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        if (Application.Current != null)
+                        {
+                            Application.Current.Shutdown();
+                        }
+                        else
+                        {
+                            this.Close();
+                        }
                     }));
                 }
             });
@@ -360,7 +390,7 @@ namespace DiamondERP.App
 
         public static void StartBackend()
         {
-            WriteLog("Backend", "Starting backend process...");
+            WriteLog("BACKEND_START", "Starting backend process...");
 
             if (_isProductionMode)
             {
@@ -370,7 +400,7 @@ namespace DiamondERP.App
                 {
                     string err = "Bundled Node.js runtime not found in: " + Path.Combine(_appDir, "runtime", "node.exe") +
                                  "\n\nThe Diamond ERP standalone installation is incomplete. Please reinstall the application.";
-                    WriteLog("RuntimeError", err);
+                    WriteLog("ERROR", err);
                     throw new FileNotFoundException(err);
                 }
 
@@ -383,7 +413,7 @@ namespace DiamondERP.App
                 {
                     string err = "Production API entrypoint not found in: " + scriptPath +
                                  "\n\nThe Diamond ERP standalone installation is incomplete. Please reinstall the application.";
-                    WriteLog("ApiError", err);
+                    WriteLog("ERROR", err);
                     throw new FileNotFoundException(err);
                 }
 
@@ -413,6 +443,8 @@ namespace DiamondERP.App
                 _backendProcess = Process.Start(psi);
                 if (_backendProcess != null)
                 {
+                    _backendPid = _backendProcess.Id;
+                    _backendStartedByThisLauncher = true;
                     _backendProcess.OutputDataReceived += (s, e) =>
                     {
                         if (!string.IsNullOrEmpty(e.Data))
@@ -430,7 +462,8 @@ namespace DiamondERP.App
                     _backendProcess.BeginOutputReadLine();
                     _backendProcess.BeginErrorReadLine();
                 }
-                WriteLog("Backend", string.Format("Started production Node backend (PID: {0}, Runtime: {1})", _backendProcess != null ? _backendProcess.Id : 0, nodeExe));
+                WriteLog("BACKEND_START", string.Format("Started production Node backend (PID: {0}, Port: {1}, Runtime: {2}, Entry: {3})",
+                    _backendPid, DEFAULT_PORT, nodeExe, scriptPath));
             }
             else
             {
@@ -445,7 +478,12 @@ namespace DiamondERP.App
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
                 _backendProcess = Process.Start(devPsi);
-                WriteLog("Backend", string.Format("Started development API process via npm (PID: {0})", _backendProcess != null ? _backendProcess.Id : 0));
+                if (_backendProcess != null)
+                {
+                    _backendPid = _backendProcess.Id;
+                    _backendStartedByThisLauncher = true;
+                }
+                WriteLog("BACKEND_START", string.Format("Started development API process via npm (PID: {0})", _backendPid));
             }
 
             if (_backendProcess != null)
@@ -475,6 +513,13 @@ namespace DiamondERP.App
             int attempts = 0;
             while (attempts < maxAttempts)
             {
+                // Immediate fail-fast if backend child process exited prematurely
+                if (_backendStartedByThisLauncher && _backendProcess != null && _backendProcess.HasExited)
+                {
+                    WriteLog("ERROR", string.Format("Backend process exited prematurely with code {0} during readiness probe.", _backendProcess.ExitCode));
+                    return false;
+                }
+
                 if (_isProductionMode)
                 {
                     if (IsBackendHealthy(probeUrl))
@@ -509,7 +554,7 @@ namespace DiamondERP.App
 
                 if (string.IsNullOrEmpty(wvVersion))
                 {
-                    WriteLog("WebView2Error", "Microsoft Edge WebView2 Runtime was not detected on this system.");
+                    WriteLog("ERROR", "Microsoft Edge WebView2 Runtime was not detected on this system.");
                     string msg = "Microsoft Edge WebView2 Runtime is required to run DiamondERP on Windows.\n\n" +
                                  "Please install Microsoft Edge WebView2, or contact your system administrator.";
                     MessageBox.Show(msg, "WebView2 Runtime Required", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -524,12 +569,26 @@ namespace DiamondERP.App
                     Directory.CreateDirectory(webViewDataDir);
                 }
 
+                WriteLog("WEBVIEW_START", "Initializing WebView2 desktop environment...");
                 var env = await CoreWebView2Environment.CreateAsync(null, webViewDataDir);
                 await _webView.EnsureCoreWebView2Async(env);
 
                 _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
                 _webView.CoreWebView2.Settings.AreDevToolsEnabled = !_isProductionMode;
                 _webView.CoreWebView2.Settings.IsZoomControlEnabled = true;
+
+                // Handle post-initialization process failure (e.g. renderer process or GPU process crash)
+                _webView.CoreWebView2.ProcessFailed += (s, args) =>
+                {
+                    WriteLog("ERROR", string.Format("WebView2 Core Process Failed. Kind: {0}, Reason: {1}", args.ProcessFailedKind, args.Reason));
+                    this.Dispatcher.Invoke(new Action(() =>
+                    {
+                        MessageBox.Show("The desktop view encountered an unrecoverable failure and must close.",
+                            "DiamondERP View Failure", MessageBoxButton.OK, MessageBoxImage.Error);
+                        ShutdownBackend();
+                        if (Application.Current != null) Application.Current.Shutdown();
+                    }));
+                };
 
                 // Security: Restrict navigation strictly to loopback origin
                 _webView.CoreWebView2.NavigationStarting += (s, args) =>
@@ -542,7 +601,7 @@ namespace DiamondERP.App
                             return;
                         }
                         args.Cancel = true;
-                        WriteLog("Security", "Blocked non-loopback navigation: " + args.Uri);
+                        WriteLog("ERROR", "Blocked non-loopback navigation: " + args.Uri);
                         if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
                         {
                             try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
@@ -572,7 +631,7 @@ namespace DiamondERP.App
                     }
                     else
                     {
-                        WriteLog("NavigationError", "Failed to navigate to: " + targetUrl);
+                        WriteLog("ERROR", "Failed to navigate to: " + targetUrl);
                     }
                 };
 
@@ -580,7 +639,7 @@ namespace DiamondERP.App
             }
             catch (Exception ex)
             {
-                WriteLog("WebView2InitError", ex.ToString());
+                WriteLog("ERROR", "WebView2 initialization failure: " + ex.ToString());
                 MessageBox.Show("Could not initialize desktop application view: " + ex.Message,
                     "DiamondERP View Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 ShutdownBackend();
@@ -593,13 +652,13 @@ namespace DiamondERP.App
             if (_isShuttingDown) return;
 
             int code = (_backendProcess != null && _backendProcess.HasExited) ? _backendProcess.ExitCode : -1;
-            WriteLog("BackendExited", string.Format("Backend process exited unexpectedly with code: {0}", code));
+            WriteLog("BACKEND_EXIT", string.Format("Backend process (PID: {0}) exited unexpectedly with code: {1}", _backendPid, code));
 
-            // Bounded restart policy: up to 2 controlled attempts
-            if (_isProductionMode && _backendRestartCount < MAX_BACKEND_RESTARTS)
+            // Bounded restart policy: up to 2 controlled attempts only if we started it
+            if (_backendStartedByThisLauncher && _isProductionMode && _backendRestartCount < MAX_BACKEND_RESTARTS)
             {
                 _backendRestartCount++;
-                WriteLog("BackendRestart", string.Format("Attempting controlled backend recovery ({0}/{1})...", _backendRestartCount, MAX_BACKEND_RESTARTS));
+                WriteLog("BACKEND_RESTART", string.Format("Attempting controlled backend recovery ({0}/{1})...", _backendRestartCount, MAX_BACKEND_RESTARTS));
                 Thread.Sleep(1000);
                 try
                 {
@@ -607,13 +666,24 @@ namespace DiamondERP.App
                     string healthUrl = string.Format("http://{0}:{1}/health", LOOPBACK_HOST, DEFAULT_PORT);
                     if (WaitForBackend(healthUrl, 20, 500))
                     {
-                        WriteLog("BackendRestart", "Backend successfully recovered and validated healthy.");
+                        WriteLog("BACKEND_RESTART", "Backend successfully recovered and validated healthy.");
+                        if (Application.Current != null)
+                        {
+                            Application.Current.Dispatcher.Invoke(new Action(() =>
+                            {
+                                var mainWin = Application.Current.MainWindow as AppMainWindow;
+                                if (mainWin != null && mainWin._webView != null && mainWin._webView.CoreWebView2 != null)
+                                {
+                                    mainWin._webView.CoreWebView2.Reload();
+                                }
+                            }));
+                        }
                         return;
                     }
                 }
                 catch (Exception ex)
                 {
-                    WriteLog("BackendRestartError", ex.Message);
+                    WriteLog("ERROR", "Backend recovery attempt failed: " + ex.Message);
                 }
             }
 
@@ -638,70 +708,83 @@ namespace DiamondERP.App
 
         public static void ShutdownBackend()
         {
-            _isShuttingDown = true;
-            WriteLog("Shutdown", "Shutting down application launcher and backend services...");
-
-            if (_trayIcon != null)
+            if (Interlocked.Exchange(ref _shutdownInitiated, 1) != 0)
             {
+                return; // Idempotent: already in progress or completed
+            }
+
+            lock (_shutdownLock)
+            {
+                _isShuttingDown = true;
+                WriteLog("SHUTDOWN", "Shutting down application launcher and backend services...");
+
+                if (_trayIcon != null)
+                {
+                    try
+                    {
+                        _trayIcon.Visible = false;
+                        _trayIcon.Dispose();
+                    }
+                    catch { }
+                    _trayIcon = null;
+                }
+
                 try
                 {
-                    _trayIcon.Visible = false;
-                    _trayIcon.Dispose();
+                    // Only terminate the backend process if THIS launcher instance started it
+                    if (_backendStartedByThisLauncher && _backendProcess != null && !_backendProcess.HasExited)
+                    {
+                        WriteLog("SHUTDOWN", string.Format("Requesting graceful termination of owned backend process (PID: {0})...", _backendPid));
+
+                        // 1. Request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma
+                        try
+                        {
+                            string shutdownUrl = string.Format("http://{0}:{1}/api/system/shutdown", LOOPBACK_HOST, DEFAULT_PORT);
+                            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(shutdownUrl);
+                            req.Method = "POST";
+                            req.Timeout = 1500;
+                            req.ContentLength = 0;
+                            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) { }
+                        }
+                        catch { }
+
+                        // 2. Close standard input pipe (signals EOF to child Node process)
+                        try
+                        {
+                            _backendProcess.StandardInput.Close();
+                        }
+                        catch { }
+
+                        // 3. Allow up to 3000ms for clean database flush and exit
+                        if (!_backendProcess.WaitForExit(3000))
+                        {
+                            WriteLog("FORCED_TERMINATION", string.Format("Backend process (PID: {0}) did not exit within timeout. Forcing termination of process tree...", _backendPid));
+                            KillProcessTree(_backendPid);
+                        }
+                        else
+                        {
+                            WriteLog("SHUTDOWN", string.Format("Backend process (PID: {0}) exited cleanly.", _backendPid));
+                        }
+                    }
+                    else if (!_backendStartedByThisLauncher && _backendProcess == null)
+                    {
+                        WriteLog("SHUTDOWN", "Backend process was not started by this launcher; preserving existing process.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteLog("ERROR", "Error during backend shutdown: " + ex.Message);
+                }
+
+                try
+                {
+                    if (_devWebProcess != null && !_devWebProcess.HasExited)
+                    {
+                        KillProcessTree(_devWebProcess.Id);
+                    }
                 }
                 catch { }
-                _trayIcon = null;
             }
-
-            try
-            {
-                if (_backendProcess != null && !_backendProcess.HasExited)
-                {
-                    WriteLog("Shutdown", string.Format("Requesting graceful termination of backend process (PID: {0})...", _backendProcess.Id));
-
-                    // 1. Request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma
-                    try
-                    {
-                        string shutdownUrl = string.Format("http://{0}:{1}/api/system/shutdown", LOOPBACK_HOST, DEFAULT_PORT);
-                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(shutdownUrl);
-                        req.Method = "POST";
-                        req.Timeout = 1500;
-                        req.ContentLength = 0;
-                        using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) { }
-                    }
-                    catch { }
-
-                    // 2. Close standard input pipe (signals EOF to child Node process)
-                    try
-                    {
-                        _backendProcess.StandardInput.Close();
-                    }
-                    catch { }
-
-                    // 3. Allow up to 3000ms for clean database flush and exit
-                    if (!_backendProcess.WaitForExit(3000))
-                    {
-                        WriteLog("Shutdown", "Backend process did not exit within timeout. Forcing termination of process tree...");
-                        KillProcessTree(_backendProcess.Id);
-                    }
-                    else
-                    {
-                        WriteLog("Shutdown", "Backend process exited cleanly.");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                WriteLog("ShutdownError", ex.Message);
-            }
-
-            try
-            {
-                if (_devWebProcess != null && !_devWebProcess.HasExited)
-                {
-                    KillProcessTree(_devWebProcess.Id);
-                }
-            }
-            catch { }
         }
 
         // ── Helper Utilities ───────────────────────────────────────────────────
@@ -738,6 +821,24 @@ namespace DiamondERP.App
             }
         }
 
+        private static bool IsTcpPortInUse(int port)
+        {
+            try
+            {
+                var ipGlobalProperties = IPGlobalProperties.GetIPGlobalProperties();
+                var tcpConnInfoArray = ipGlobalProperties.GetActiveTcpListeners();
+                foreach (var endpoint in tcpConnInfoArray)
+                {
+                    if (endpoint.Port == port)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
         private static bool IsPortActive(string url)
         {
             try
@@ -758,6 +859,7 @@ namespace DiamondERP.App
 
         private static void KillProcessTree(int pid)
         {
+            if (pid <= 0) return;
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -767,9 +869,16 @@ namespace DiamondERP.App
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
-                Process.Start(psi);
+                var p = Process.Start(psi);
+                if (p != null)
+                {
+                    p.WaitForExit(2000);
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                WriteLog("ERROR", string.Format("Failed to execute taskkill on PID {0}: {1}", pid, ex.Message));
+            }
         }
 
         private void SetupTray()
