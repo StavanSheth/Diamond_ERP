@@ -28,6 +28,16 @@ using Microsoft.Web.WebView2.Wpf;
 
 namespace DiamondERP.App
 {
+    public enum BackendState
+    {
+        NotStarted,
+        Starting,
+        Running,
+        Stopping,
+        Stopped,
+        Failed
+    }
+
     public class AppMainWindow : Window
     {
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
@@ -59,8 +69,10 @@ namespace DiamondERP.App
         private static System.Windows.Forms.NotifyIcon _trayIcon;
         private static int _backendRestartCount = 0;
         private static volatile bool _isShuttingDown = false;
+        private static volatile bool _shutdownRequested = false;
         private static int _shutdownInitiated = 0;
         private static readonly object _shutdownLock = new object();
+        private static volatile BackendState _backendState = BackendState.NotStarted;
         private static Stopwatch _startupStopwatch;
 
         private WebView2 _webView;
@@ -168,6 +180,7 @@ namespace DiamondERP.App
                         {
                             shutdownEvent.WaitOne();
                             WriteLog("SHUTDOWN", "Shutdown signaled via IPC event. Initiating clean exit...");
+                            _shutdownRequested = true;
                             if (Application.Current != null)
                             {
                                 Application.Current.Dispatcher.Invoke(new Action(() =>
@@ -179,6 +192,7 @@ namespace DiamondERP.App
                             }
                             else
                             {
+                                _shutdownRequested = true;
                                 ShutdownBackend();
                                 try { Environment.Exit(0); } catch { }
                             }
@@ -310,6 +324,7 @@ namespace DiamondERP.App
 
             this.Closing += (s, e) =>
             {
+                _shutdownRequested = true;
                 ShutdownBackend();
                 if (Application.Current != null)
                 {
@@ -335,6 +350,7 @@ namespace DiamondERP.App
             if (msg == WM_CLOSE)
             {
                 WriteLog("SHUTDOWN", "WM_CLOSE received via WndProc. Initiating clean exit...");
+                _shutdownRequested = true;
                 ShutdownBackend();
                 if (Application.Current != null)
                 {
@@ -480,26 +496,34 @@ namespace DiamondERP.App
                 catch (Exception ex)
                 {
                     WriteLog("ERROR", "Startup failure: " + ex.ToString());
-                    ShutdownBackend();
-                    this.Dispatcher.Invoke(new Action(() =>
-                    {
-                        MessageBox.Show("Error starting DiamondERP services: " + ex.Message,
-                            "DiamondERP Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        if (Application.Current != null)
-                        {
-                            Application.Current.Shutdown();
-                        }
-                        else
-                        {
-                            this.Close();
-                        }
-                    }));
+                    FailStartup(ex.Message);
                 }
             });
         }
 
+        private void FailStartup(string reason)
+        {
+            _shutdownRequested = true;
+            _backendState = BackendState.Failed;
+            ShutdownBackend();
+            this.Dispatcher.Invoke(new Action(() =>
+            {
+                MessageBox.Show("Error starting DiamondERP services: " + reason,
+                    "DiamondERP Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (Application.Current != null)
+                {
+                    Application.Current.Shutdown();
+                }
+                else
+                {
+                    this.Close();
+                }
+            }));
+        }
+
         public static void StartBackend()
         {
+            _backendState = BackendState.Starting;
             WriteLog("BACKEND_START", "Starting backend process...");
 
             if (_isProductionMode)
@@ -555,6 +579,7 @@ namespace DiamondERP.App
                 {
                     _backendPid = _backendProcess.Id;
                     _backendStartedByThisLauncher = true;
+                    _backendState = BackendState.Running;
                     _backendProcess.OutputDataReceived += (s, e) =>
                     {
                         if (!string.IsNullOrEmpty(e.Data))
@@ -592,6 +617,7 @@ namespace DiamondERP.App
                 {
                     _backendPid = _backendProcess.Id;
                     _backendStartedByThisLauncher = true;
+                    _backendState = BackendState.Running;
                 }
                 WriteLog("BACKEND_START", string.Format("Started development API process via npm (PID: {0})", _backendPid));
             }
@@ -668,6 +694,7 @@ namespace DiamondERP.App
                     string msg = "Microsoft Edge WebView2 Runtime is required to run DiamondERP on Windows.\n\n" +
                                  "Please install Microsoft Edge WebView2, or contact your system administrator.";
                     MessageBox.Show(msg, "WebView2 Runtime Required", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    _shutdownRequested = true;
                     ShutdownBackend();
                     if (Application.Current != null) Application.Current.Shutdown();
                     return;
@@ -695,6 +722,7 @@ namespace DiamondERP.App
                     {
                         MessageBox.Show("The desktop view encountered an unrecoverable failure and must close.",
                             "DiamondERP View Failure", MessageBoxButton.OK, MessageBoxImage.Error);
+                        _shutdownRequested = true;
                         ShutdownBackend();
                         if (Application.Current != null) Application.Current.Shutdown();
                     }));
@@ -752,6 +780,7 @@ namespace DiamondERP.App
                 WriteLog("ERROR", "WebView2 initialization failure: " + ex.ToString());
                 MessageBox.Show("Could not initialize desktop application view: " + ex.Message,
                     "DiamondERP View Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                _shutdownRequested = true;
                 ShutdownBackend();
                 if (Application.Current != null) Application.Current.Shutdown();
             }
@@ -759,10 +788,20 @@ namespace DiamondERP.App
 
         public static void HandleBackendExit()
         {
-            if (_isShuttingDown) return;
-
             int code = (_backendProcess != null && _backendProcess.HasExited) ? _backendProcess.ExitCode : -1;
-            WriteLog("BACKEND_EXIT", string.Format("Backend process (PID: {0}) exited unexpectedly with code: {1}", _backendPid, code));
+            bool expected = _shutdownRequested || _isShuttingDown;
+
+            WriteLog("BACKEND_EXIT", string.Format(
+                "Backend process exited.\nPID={0}\nExitCode={1}\nExpected={2}\nState={3}",
+                _backendPid, code, expected, _backendState));
+
+            if (expected)
+            {
+                _backendState = BackendState.Stopped;
+                return;
+            }
+
+            _backendState = BackendState.Failed;
 
             // Bounded restart policy: up to 2 controlled attempts only if we started it
             if (_backendStartedByThisLauncher && _isProductionMode && _backendRestartCount < MAX_BACKEND_RESTARTS)
@@ -807,6 +846,7 @@ namespace DiamondERP.App
                         {
                             string msg = string.Format("The local Diamond ERP service stopped unexpectedly (exit code {0}) and could not be recovered.\n\nPlease restart Diamond ERP.", code);
                             MessageBox.Show(msg, "Diamond ERP Service Failure", MessageBoxButton.OK, MessageBoxImage.Error);
+                            _shutdownRequested = true;
                             ShutdownBackend();
                             Application.Current.Shutdown();
                         }
@@ -826,6 +866,8 @@ namespace DiamondERP.App
             lock (_shutdownLock)
             {
                 _isShuttingDown = true;
+                _shutdownRequested = true;
+                _backendState = BackendState.Stopping;
                 WriteLog("SHUTDOWN", "Shutting down application launcher and backend services...");
 
                 if (_trayIcon != null)
@@ -880,6 +922,7 @@ namespace DiamondERP.App
                     {
                         WriteLog("SHUTDOWN", "Backend process was not started by this launcher; preserving existing process.");
                     }
+                    _backendState = BackendState.Stopped;
                 }
                 catch (Exception ex)
                 {
@@ -1020,6 +1063,7 @@ namespace DiamondERP.App
                 {
                     this.Dispatcher.Invoke(new Action(() =>
                     {
+                        _shutdownRequested = true;
                         ShutdownBackend();
                         Application.Current.Shutdown();
                     }));

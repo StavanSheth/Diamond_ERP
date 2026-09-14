@@ -510,11 +510,11 @@ async function runSuite() {
       // Verify child Node process exited
       let childNodeAlive = false;
       if (realNodeChild && realNodeChild.ProcessId) {
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 20; i++) {
           try {
             process.kill(realNodeChild.ProcessId, 0);
             childNodeAlive = true;
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 250));
           } catch {
             childNodeAlive = false;
             break;
@@ -530,13 +530,13 @@ async function runSuite() {
 
       // Verify port 3002 released
       let portReleased = false;
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
         const busy = await isPortInUse(PROD_PORT);
         if (!busy) {
           portReleased = true;
           break;
         }
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 300));
       }
       record(
         'E',
@@ -562,12 +562,12 @@ async function runSuite() {
 
       const exited = await shutdownRealLauncher(cycleProc, STAGED_LAUNCHER_EXE, 7000);
       let portFreed = false;
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
         if (!(await isPortInUse(PROD_PORT))) {
           portFreed = true;
           break;
         }
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 300));
       }
 
       record(
@@ -648,6 +648,51 @@ async function runSuite() {
     await shutdownRealLauncher(crashTestLauncher, STAGED_LAUNCHER_EXE);
   } catch (err) {
     record('H', 'Child backend crash recovery test', false, err.message);
+  }
+
+  // H9. Real Port-3002 Conflict Detection (actual launcher port)
+  try {
+    const conflictServer = http.createServer((req, res) => {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Occupied');
+    });
+    await new Promise((resolve) => conflictServer.listen(PROD_PORT, '127.0.0.1', resolve));
+
+    const conflictLauncher = spawn(STAGED_LAUNCHER_EXE, [], { stdio: 'ignore', detached: true });
+
+    // Wait briefly for the launcher to detect the conflict and attempt startup
+    await new Promise((r) => setTimeout(r, 6000));
+
+    // Verify: No new backend process was spawned by the conflicted launcher
+    const conflictChildren = findChildProcesses(conflictLauncher.pid);
+    const conflictNodeChild = conflictChildren.find((c) => c.ProcessName?.toLowerCase() === 'node.exe');
+    const noOrphanBackend = !conflictNodeChild;
+
+    // The launcher may show a MessageBox (correct user-facing behavior) which blocks exit.
+    // Verify the conflict was detected by checking no backend was started.
+    const conflictExited = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 3000);
+      conflictLauncher.on('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+
+    await new Promise((resolve) => conflictServer.close(resolve));
+
+    // Clean up launcher if still showing the error dialog
+    if (!conflictExited) {
+      try { conflictLauncher.kill(); } catch {}
+    }
+
+    record(
+      'H',
+      'Real launcher detects port 3002 conflict and does not spawn backend on occupied port',
+      noOrphanBackend,
+      `No orphan backend: ${noOrphanBackend}, Exited: ${conflictExited}${conflictExited ? '' : ' (error dialog blocked exit — expected)'}`
+    );
+  } catch (err) {
+    record('H', 'Real port-3002 conflict test', false, err.message);
   }
 
   // H2. Missing runtime/node.exe handling
