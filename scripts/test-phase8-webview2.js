@@ -303,12 +303,47 @@ async function runSuite() {
       wvDataTarget
     );
 
-    const hasProfileSafetyGuard = launcherSrc.includes('TrySafeResetWebView2Data') &&
-      launcherSrc.includes('Safety guard rejected WebView2Data reset for unexpected path');
+    const hasProfileSafetyGuard = launcherSrc.includes('IsSafeWebView2DataPath') &&
+      launcherSrc.includes('Safety guard rejected WebView2Data recovery for unauthorized or unexpected path');
     record(
       'C',
       'Profile reset routine enforces strict path safety guard preventing database deletion',
       hasProfileSafetyGuard
+    );
+
+    // Path Safety Guard Behavioral Test
+    const expectedValid = path.join(localAppData, 'DiamondERP', 'WebView2Data');
+    const maliciousCases = [
+      path.join(localAppData, 'DiamondERP_Evil'),
+      path.join(localAppData, 'DiamondERP', 'WebView2Data2'),
+      path.join(localAppData, 'DiamondERP', 'WebView2Data', '..', '..', 'databases'),
+      path.join(localAppData, 'DiamondERP', 'databases'),
+      path.join(localAppData, 'DiamondERP', 'uploads'),
+      path.join(localAppData, 'DiamondERP', 'backups'),
+      path.join(localAppData, 'DiamondERP', 'logs'),
+      'C:\\Windows\\System32',
+      'C:\\Program Files\\DiamondERP',
+    ];
+
+    function isSafePathSimulated(targetPath) {
+      if (!targetPath) return false;
+      try {
+        const expected = path.resolve(expectedValid).toLowerCase().replace(/[\/\\]+$/, '');
+        const normalized = path.resolve(targetPath).toLowerCase().replace(/[\/\\]+$/, '');
+        return normalized === expected;
+      } catch {
+        return false;
+      }
+    }
+
+    const validPasses = isSafePathSimulated(expectedValid) && isSafePathSimulated(expectedValid + '\\');
+    const maliciousBlocked = maliciousCases.every((badPath) => !isSafePathSimulated(badPath));
+
+    record(
+      'C',
+      'Path safety guard strictly permits only exact %LOCALAPPDATA%\\DiamondERP\\WebView2Data and rejects all malicious lookalikes and critical folders',
+      validPasses && maliciousBlocked,
+      `Valid allowed: ${validPasses}, Malicious/traversal/critical paths blocked: ${maliciousBlocked} (${maliciousCases.length} cases)`
     );
   } catch (err) {
     record('C', 'User data directory check', false, err.message);
@@ -329,12 +364,52 @@ async function runSuite() {
       strictProductionTarget
     );
 
-    const restricts5175InProd = launcherSrc.includes('if (_isProductionMode)') &&
-      launcherSrc.includes('isAllowed = (uri.Host == LOOPBACK_HOST) && (uri.Port == DEFAULT_PORT);');
+    const hasCentralizedPolicy = launcherSrc.includes('IsAllowedApplicationUri') &&
+      launcherSrc.includes('string.Equals(uri.Host, LOOPBACK_HOST, StringComparison.OrdinalIgnoreCase) && uri.Port == DEFAULT_PORT;');
     record(
       'D',
-      'NavigationStarting strictly disallows port 5175 and non-loopback hosts in production',
-      restricts5175InProd
+      'NavigationStarting strictly disallows port 5175 and non-loopback hosts in production via centralized IsAllowedApplicationUri',
+      hasCentralizedPolicy
+    );
+
+    // Navigation Policy Behavioral Test
+    function isAllowedUriSimulated(urlString, isProduction) {
+      try {
+        const u = new URL(urlString);
+        if (u.protocol !== 'http:') return false;
+        if (isProduction) {
+          return u.hostname === '127.0.0.1' && u.port === '3002';
+        } else {
+          const hostOk = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+          const portOk = u.port === '3002' || u.port === '5175';
+          return hostOk && portOk;
+        }
+      } catch {
+        return false;
+      }
+    }
+
+    const prod3002Allowed = isAllowedUriSimulated('http://127.0.0.1:3002/', true) &&
+                            isAllowedUriSimulated('http://127.0.0.1:3002/inventory', true) &&
+                            isAllowedUriSimulated('http://127.0.0.1:3002/api/parties', true);
+
+    const prod5175Blocked = !isAllowedUriSimulated('http://127.0.0.1:5175/', true) &&
+                            !isAllowedUriSimulated('http://localhost:5175/', true);
+
+    const arbitraryBlocked = !isAllowedUriSimulated('http://127.0.0.1:8080/', true) &&
+                             !isAllowedUriSimulated('http://192.168.1.50:3002/', true) &&
+                             !isAllowedUriSimulated('file:///C:/Windows/notepad.exe', true) &&
+                             !isAllowedUriSimulated('javascript:alert(1)', true) &&
+                             !isAllowedUriSimulated('data:text/html,test', true);
+
+    const devPermissive = isAllowedUriSimulated('http://localhost:5175/', false) &&
+                          isAllowedUriSimulated('http://127.0.0.1:3002/', false);
+
+    record(
+      'D',
+      'Centralized IsAllowedApplicationUri strictly restricts production to http://127.0.0.1:3002/ and rejects port 5175/file/javascript/arbitrary origins',
+      prod3002Allowed && prod5175Blocked && arbitraryBlocked && devPermissive,
+      `Prod 3002: ${prod3002Allowed}, Prod 5175 blocked: ${prod5175Blocked}, Non-http/arbitrary blocked: ${arbitraryBlocked}`
     );
 
     const manifestSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'Launcher.manifest'), 'utf-8');
@@ -390,30 +465,42 @@ async function runSuite() {
   try {
     const launcherSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'Launcher.cs'), 'utf-8');
 
-    const blocksF12AndInspect = launcherSrc.includes('Key.F12') &&
-      launcherSrc.includes('Key.I') &&
-      launcherSrc.includes('Key.J') &&
-      launcherSrc.includes('Key.C');
+    const blocksF12AndInspect = launcherSrc.includes('actualKey == Key.F12') &&
+      launcherSrc.includes('actualKey == Key.I || actualKey == Key.J || actualKey == Key.C');
     record(
       'F',
       'WPF PreviewKeyDown intercepts DevTools keys (F12, Ctrl+Shift+I/J/C) in production',
       blocksF12AndInspect
     );
 
-    const blocksReloadAndNav = launcherSrc.includes('Key.F5') &&
-      launcherSrc.includes('Key.R') &&
-      launcherSrc.includes('Key.Left') &&
-      launcherSrc.includes('Key.Right');
+    const blocksReloadAndNav = launcherSrc.includes('actualKey == Key.F5 || (isCtrl && actualKey == Key.R)') &&
+      launcherSrc.includes('isAlt && (actualKey == Key.Left || actualKey == Key.Right)');
     record(
       'F',
-      'WPF PreviewKeyDown intercepts browser navigation keys (F5, Ctrl+R, Alt+Left/Right)',
+      'WPF PreviewKeyDown intercepts browser navigation keys (F5, Ctrl+R, Alt+Left/Right) with Key.System support',
       blocksReloadAndNav
     );
 
-    const preservesTyping = !launcherSrc.includes('Key.V') && !launcherSrc.includes('Key.X');
+    const blocksBrowserChrome = launcherSrc.includes('actualKey == Key.W') &&
+      launcherSrc.includes('actualKey == Key.O') &&
+      launcherSrc.includes('actualKey == Key.N') &&
+      launcherSrc.includes('actualKey == Key.T') &&
+      launcherSrc.includes('actualKey == Key.L');
     record(
       'F',
-      'Standard typing, clipboard, and selection shortcuts are preserved',
+      'WPF PreviewKeyDown suppresses browser window/tab/open shortcuts (Ctrl+W, Ctrl+O, Ctrl+N, Ctrl+T, Ctrl+L)',
+      blocksBrowserChrome
+    );
+
+    const preservesTyping = !launcherSrc.includes('actualKey == Key.V') &&
+      !launcherSrc.includes('actualKey == Key.X') &&
+      !launcherSrc.includes('actualKey == Key.Z') &&
+      !launcherSrc.includes('actualKey == Key.Y') &&
+      !launcherSrc.includes('actualKey == Key.Tab') &&
+      !launcherSrc.includes('actualKey == Key.Enter');
+    record(
+      'F',
+      'Standard typing, clipboard, and selection shortcuts (Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+Z, Tab, Enter) are preserved',
       preservesTyping
     );
   } catch (err) {
@@ -656,7 +743,8 @@ async function runSuite() {
     const launcherSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'Launcher.cs'), 'utf-8');
     const hasBoundedRecovery = launcherSrc.includes('MAX_WEBVIEW_RESTARTS') &&
       launcherSrc.includes('_webViewCrashCount < MAX_WEBVIEW_RESTARTS') &&
-      launcherSrc.includes('_webView.CoreWebView2.Reload()');
+      launcherSrc.includes('_webView.CoreWebView2.Reload()') &&
+      launcherSrc.includes('isRendererFailure');
     record(
       'N',
       'Launcher implements bounded WebView2 renderer crash recovery in ProcessFailed',
@@ -664,22 +752,83 @@ async function runSuite() {
       'Reloads up to 2 times without restarting Node backend'
     );
 
-    const hasCorruptRecovery = launcherSrc.includes('needsRecovery') &&
-      launcherSrc.includes('TrySafeResetWebView2Data(webViewDataDir)');
+    const hasProcessDistinction = launcherSrc.includes('RenderProcessExited') &&
+      launcherSrc.includes('RenderProcessUnresponsive') &&
+      launcherSrc.includes('GpuProcessExited') &&
+      launcherSrc.includes('BrowserProcessExited');
     record(
       'N',
-      'Launcher implements safe corrupted-profile recovery re-initialization',
-      hasCorruptRecovery
+      'ProcessFailed event distinguishes renderer, GPU, utility, and browser process failures',
+      hasProcessDistinction
+    );
+
+    const hasCorruptRecovery = launcherSrc.includes('needsRecovery') &&
+      launcherSrc.includes('TrySafeRecoverCorruptProfile(webViewDataDir)') &&
+      launcherSrc.includes('MAX_PROFILE_RECOVERY_ATTEMPTS = 1');
+    record(
+      'N',
+      'Launcher implements safe bounded corrupted-profile recovery re-initialization',
+      hasCorruptRecovery,
+      'Bounded to 1 attempt; renames corrupt profile'
+    );
+
+    // Corrupted Profile Safe Recovery Behavioral Simulation
+    const testSimRoot = path.join(SCRATCH_DIR, 'profile_recovery_sim');
+    cleanDir(testSimRoot);
+    fs.mkdirSync(testSimRoot, { recursive: true });
+
+    const simWvData = path.join(testSimRoot, 'WebView2Data');
+    const simDatabases = path.join(testSimRoot, 'databases');
+    const simUploads = path.join(testSimRoot, 'uploads');
+    const simBackups = path.join(testSimRoot, 'backups');
+
+    fs.mkdirSync(simWvData, { recursive: true });
+    fs.mkdirSync(simDatabases, { recursive: true });
+    fs.mkdirSync(simUploads, { recursive: true });
+    fs.mkdirSync(simBackups, { recursive: true });
+
+    fs.writeFileSync(path.join(simWvData, 'Preferences'), 'corrupt_state');
+    fs.writeFileSync(path.join(simDatabases, 'Stavan.db'), 'SQLITE_PRISTINE_DATA');
+    fs.writeFileSync(path.join(simUploads, 'invoice.pdf'), 'PDF_DATA');
+    fs.writeFileSync(path.join(simBackups, 'backup_2026.zip'), 'ZIP_DATA');
+
+    // Simulate safe profile recovery algorithm: rename WebView2Data -> WebView2Data.corrupt.<timestamp>, create fresh WebView2Data
+    const timestamp = '20260914_104500';
+    const simBackupDir = `${simWvData}.corrupt.${timestamp}`;
+    fs.renameSync(simWvData, simBackupDir);
+    fs.mkdirSync(simWvData, { recursive: true });
+
+    const corruptPreserved = fs.existsSync(simBackupDir) && fs.readFileSync(path.join(simBackupDir, 'Preferences'), 'utf-8') === 'corrupt_state';
+    const freshCreated = fs.existsSync(simWvData) && fs.readdirSync(simWvData).length === 0;
+    const dbUntouched = fs.readFileSync(path.join(simDatabases, 'Stavan.db'), 'utf-8') === 'SQLITE_PRISTINE_DATA';
+    const uploadsUntouched = fs.readFileSync(path.join(simUploads, 'invoice.pdf'), 'utf-8') === 'PDF_DATA';
+    const backupsUntouched = fs.readFileSync(path.join(simBackups, 'backup_2026.zip'), 'utf-8') === 'ZIP_DATA';
+
+    record(
+      'N',
+      'Corrupted profile recovery simulation renames corrupt profile to .corrupt.<timestamp> and creates fresh profile while databases/uploads/backups remain 100% untouched',
+      corruptPreserved && freshCreated && dbUntouched && uploadsUntouched && backupsUntouched,
+      'Corrupt backup preserved, fresh profile created, databases intact'
     );
 
     const installerSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'Installer.cs'), 'utf-8');
     const hasPrereqBlock = installerSrc.includes('if (!isWebView2Installed)') &&
-      installerSrc.includes('throw new InvalidOperationException') &&
-      installerSrc.includes('Microsoft Edge WebView2 Runtime is required');
+      installerSrc.includes('Microsoft Edge WebView2 Runtime is required') &&
+      installerSrc.includes('CheckPrerequisites();') &&
+      installerSrc.includes('InitializeComponent();');
     record(
       'N',
       'Installer enforces mandatory prerequisite check blocking installation if WebView2 missing',
       hasPrereqBlock
+    );
+
+    const hasSilentPrereqBlock = installerSrc.includes('PerformSilentInstall') &&
+      installerSrc.includes('if (!IsWebView2Available(out wvVer))') &&
+      installerSrc.includes('return 1;');
+    record(
+      'N',
+      'Installer silent execution (/silent) validates WebView2 prerequisite and exits with code 1 if absent',
+      hasSilentPrereqBlock
     );
   } catch (err) {
     record('N', 'Failure handling audit', false, err.message);

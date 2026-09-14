@@ -61,6 +61,8 @@ namespace DiamondERP.App
         private const int MAX_BACKEND_RESTARTS = 2;
         private static int _webViewCrashCount = 0;
         private const int MAX_WEBVIEW_RESTARTS = 2;
+        private static int _profileRecoveryAttempts = 0;
+        private const int MAX_PROFILE_RECOVERY_ATTEMPTS = 1;
 
         private static string _appDir;
         private static string _dataDir;
@@ -323,41 +325,47 @@ namespace DiamondERP.App
             {
                 if (_isProductionMode)
                 {
+                    Key actualKey = (e.Key == Key.System) ? e.SystemKey : e.Key;
+                    var mods = Keyboard.Modifiers;
+                    bool isCtrl = (mods & ModifierKeys.Control) == ModifierKeys.Control;
+                    bool isShift = (mods & ModifierKeys.Shift) == ModifierKeys.Shift;
+                    bool isAlt = (mods & ModifierKeys.Alt) == ModifierKeys.Alt;
+
                     // Suppress DevTools (F12)
-                    if (e.Key == Key.F12)
+                    if (actualKey == Key.F12)
                     {
                         e.Handled = true;
                         return;
                     }
                     // Suppress Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C (Chromium DevTools / Inspect)
-                    if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control &&
-                        (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift &&
-                        (e.Key == Key.I || e.Key == Key.J || e.Key == Key.C))
+                    if (isCtrl && isShift && (actualKey == Key.I || actualKey == Key.J || actualKey == Key.C))
                     {
                         e.Handled = true;
                         return;
                     }
                     // Suppress Ctrl+R, F5 (unwanted browser reloads)
-                    if (e.Key == Key.F5 ||
-                        ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && e.Key == Key.R))
+                    if (actualKey == Key.F5 || (isCtrl && actualKey == Key.R))
                     {
                         e.Handled = true;
                         return;
                     }
-                    // Suppress Ctrl+N, Ctrl+T, Ctrl+L, Ctrl+U (new browser window, new tab, address bar, view source)
-                    if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control &&
-                        (e.Key == Key.N || e.Key == Key.T || e.Key == Key.L || e.Key == Key.U))
+                    // Suppress Ctrl+N, Ctrl+T, Ctrl+W, Ctrl+L, Ctrl+O, Ctrl+U, Ctrl+D, Ctrl+H, Ctrl+J (browser window/tab/history actions)
+                    if (isCtrl && !isShift && !isAlt &&
+                        (actualKey == Key.N || actualKey == Key.T || actualKey == Key.W || actualKey == Key.L ||
+                         actualKey == Key.O || actualKey == Key.U || actualKey == Key.D || actualKey == Key.H || actualKey == Key.J))
                     {
                         e.Handled = true;
                         return;
                     }
                     // Suppress Alt+Left, Alt+Right (browser history back/forward navigation)
-                    if ((Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt &&
-                        (e.Key == Key.Left || e.Key == Key.Right))
+                    if (isAlt && (actualKey == Key.Left || actualKey == Key.Right))
                     {
                         e.Handled = true;
                         return;
                     }
+
+                    // Note: Legitimate ERP user input MUST remain unaffected:
+                    // Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+Z, Ctrl+Y, Tab, Shift+Tab, Enter, Escape, Arrow keys
                 }
             };
 
@@ -371,6 +379,7 @@ namespace DiamondERP.App
             this.Closing += (s, e) =>
             {
                 _shutdownRequested = true;
+                DisposeWebView();
                 ShutdownBackend();
                 if (Application.Current != null)
                 {
@@ -378,6 +387,20 @@ namespace DiamondERP.App
                 }
                 try { Environment.Exit(0); } catch { }
             };
+        }
+
+        private void DisposeWebView()
+        {
+            try
+            {
+                if (_webView != null)
+                {
+                    _webView.Stop();
+                    _webView.Dispose();
+                    _webView = null;
+                }
+            }
+            catch { }
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -752,7 +775,7 @@ namespace DiamondERP.App
                     Directory.CreateDirectory(webViewDataDir);
                 }
 
-                WriteLog("WEBVIEW_START", "Initializing WebView2 desktop environment...");
+                WriteLog("WEBVIEW_START", string.Format("Initializing WebView2 desktop environment (Runtime: {0}, Profile: {1})...", wvVersion, webViewDataDir));
                 CoreWebView2Environment env = null;
                 bool needsRecovery = false;
                 try
@@ -762,18 +785,34 @@ namespace DiamondERP.App
                 }
                 catch (Exception initEx)
                 {
-                    WriteLog("WARN", "Initial WebView2 environment creation failed: " + initEx.Message + ". Attempting safe profile recovery...");
-                    needsRecovery = true;
+                    WriteLog("WARN", "Initial WebView2 environment creation failed: " + initEx.Message + ". Checking profile recovery eligibility...");
+                    if (_profileRecoveryAttempts < MAX_PROFILE_RECOVERY_ATTEMPTS)
+                    {
+                        needsRecovery = true;
+                    }
+                    else
+                    {
+                        WriteLog("ERROR", "Max profile recovery attempts reached. Cannot recover WebView2 profile.");
+                        throw;
+                    }
                 }
 
                 if (needsRecovery)
                 {
+                    _profileRecoveryAttempts++;
+                    WriteLog("PROFILE_RECOVERY", string.Format("Attempting safe profile recovery ({0}/{1})...", _profileRecoveryAttempts, MAX_PROFILE_RECOVERY_ATTEMPTS));
+
                     // Safe Corrupted Profile Recovery:
-                    // Clean ONLY %LOCALAPPDATA%\DiamondERP\WebView2Data (NEVER touching databases, uploads, backups, or logs!)
-                    TrySafeResetWebView2Data(webViewDataDir);
+                    // Back up and recreate ONLY %LOCALAPPDATA%\DiamondERP\WebView2Data (NEVER touching databases, uploads, backups, or logs!)
+                    bool recovered = TrySafeRecoverCorruptProfile(webViewDataDir);
+                    if (!recovered)
+                    {
+                        throw new InvalidOperationException("Could not safely recover corrupted WebView2 profile.");
+                    }
+
                     env = await CoreWebView2Environment.CreateAsync(null, webViewDataDir);
                     await _webView.EnsureCoreWebView2Async(env);
-                    WriteLog("WEBVIEW_START", "WebView2 desktop environment successfully initialized after profile recovery.");
+                    WriteLog("WEBVIEW_START", "WebView2 desktop environment successfully initialized after safe profile recovery.");
                 }
 
                 _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
@@ -783,14 +822,33 @@ namespace DiamondERP.App
                 _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = !_isProductionMode;
                 _webView.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = false;
 
-                // Handle post-initialization process failure (e.g. renderer process or GPU process crash)
+                // Handle post-initialization process failure (renderer, GPU, utility, or browser crash)
                 _webView.CoreWebView2.ProcessFailed += (s, args) =>
                 {
-                    WriteLog("ERROR", string.Format("WebView2 Core Process Failed. Kind: {0}, Reason: {1}", args.ProcessFailedKind, args.Reason));
-                    if (!_shutdownRequested && !_isShuttingDown && _webViewCrashCount < MAX_WEBVIEW_RESTARTS)
+                    WriteLog("ERROR", string.Format("WebView2 Core Process Failed. Kind: {0}, Reason: {1}, ExitCode: {2}", 
+                        args.ProcessFailedKind, args.Reason, args.ExitCode));
+
+                    if (_shutdownRequested || _isShuttingDown)
+                    {
+                        return;
+                    }
+
+                    bool isRendererFailure =
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited ||
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive ||
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.FrameRenderProcessExited;
+
+                    bool isGpuOrUtilityFailure =
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.GpuProcessExited ||
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.UtilityProcessExited;
+
+                    bool isBrowserExit =
+                        args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited;
+
+                    if ((isRendererFailure || isGpuOrUtilityFailure) && _webViewCrashCount < MAX_WEBVIEW_RESTARTS)
                     {
                         _webViewCrashCount++;
-                        WriteLog("WEBVIEW_RESTART", string.Format("Attempting controlled WebView2 renderer reload ({0}/{1})...", _webViewCrashCount, MAX_WEBVIEW_RESTARTS));
+                        WriteLog("WEBVIEW_RESTART", string.Format("Attempting bounded WebView2 renderer reload ({0}/{1})...", _webViewCrashCount, MAX_WEBVIEW_RESTARTS));
                         bool reloaded = false;
                         this.Dispatcher.Invoke(new Action(() =>
                         {
@@ -798,6 +856,7 @@ namespace DiamondERP.App
                             {
                                 _webView.CoreWebView2.Reload();
                                 reloaded = true;
+                                WriteLog("WEBVIEW_RESTART", "WebView2 CoreWebView2.Reload() executed successfully.");
                             }
                             catch (Exception reloadEx)
                             {
@@ -806,10 +865,30 @@ namespace DiamondERP.App
                         }));
                         if (reloaded) return;
                     }
+                    else if (isBrowserExit && _webViewCrashCount < MAX_WEBVIEW_RESTARTS)
+                    {
+                        _webViewCrashCount++;
+                        WriteLog("WEBVIEW_RESTART", string.Format("Attempting controlled WebView2 browser process recovery ({0}/{1})...", _webViewCrashCount, MAX_WEBVIEW_RESTARTS));
+                        bool reinitialized = false;
+                        this.Dispatcher.Invoke(new Action(() =>
+                        {
+                            try
+                            {
+                                InitializeWebView2(targetUrl);
+                                reinitialized = true;
+                            }
+                            catch (Exception reinEx)
+                            {
+                                WriteLog("ERROR", "WebView2 re-initialization failed: " + reinEx.Message);
+                            }
+                        }));
+                        if (reinitialized) return;
+                    }
 
+                    WriteLog("ERROR", "WebView2 process failure limit exceeded or unrecoverable. Initiating clean application shutdown.");
                     this.Dispatcher.Invoke(new Action(() =>
                     {
-                        MessageBox.Show("The desktop view encountered an unrecoverable failure and must close.",
+                        MessageBox.Show("The desktop display encountered an unexpected failure and must close.\n\nYour business database records in AppData have been safely preserved.",
                             "DiamondERP View Failure", MessageBoxButton.OK, MessageBoxImage.Error);
                         _shutdownRequested = true;
                         ShutdownBackend();
@@ -817,33 +896,22 @@ namespace DiamondERP.App
                     }));
                 };
 
-                // Security: Restrict navigation strictly to loopback origin
+                // Security: Restrict navigation strictly according to centralized policy
                 _webView.CoreWebView2.NavigationStarting += (s, args) =>
                 {
                     Uri uri;
                     if (Uri.TryCreate(args.Uri, UriKind.Absolute, out uri))
                     {
-                        bool isAllowed;
-                        if (_isProductionMode)
-                        {
-                            // Production mode: Strictly loopback DEFAULT_PORT (3002) only. Disallow 5175 and arbitrary ports.
-                            isAllowed = (uri.Host == LOOPBACK_HOST) && (uri.Port == DEFAULT_PORT);
-                        }
-                        else
-                        {
-                            // Development mode: Allow loopback or localhost on 3002 or 5175
-                            isAllowed = (uri.Host == LOOPBACK_HOST || uri.Host == "localhost") && (uri.Port == DEFAULT_PORT || uri.Port == 5175);
-                        }
-
-                        if (isAllowed)
+                        if (IsAllowedApplicationUri(uri))
                         {
                             return;
                         }
 
                         args.Cancel = true;
-                        WriteLog("NAV_RESTRICT", "Blocked non-loopback navigation: " + args.Uri);
+                        WriteLog("NAV_RESTRICT", "Blocked navigation to URI: " + args.Uri);
 
                         // Route external web links (http/https) to default system browser
+                        // Reject file://, javascript:, data:, vbscript:, arbitrary ports
                         if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
                         {
                             try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
@@ -852,6 +920,7 @@ namespace DiamondERP.App
                     else
                     {
                         args.Cancel = true;
+                        WriteLog("NAV_RESTRICT", "Blocked invalid navigation: " + args.Uri);
                     }
                 };
 
@@ -861,7 +930,14 @@ namespace DiamondERP.App
                     args.Handled = true;
                     if (!string.IsNullOrEmpty(args.Uri))
                     {
-                        try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
+                        Uri uri;
+                        if (Uri.TryCreate(args.Uri, UriKind.Absolute, out uri))
+                        {
+                            if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                            {
+                                try { Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true }); } catch { }
+                            }
+                        }
                     }
                 };
 
@@ -890,39 +966,96 @@ namespace DiamondERP.App
             }
         }
 
-        private static void TrySafeResetWebView2Data(string webViewDataDir)
+        public static bool IsAllowedApplicationUri(Uri uri)
         {
+            if (uri == null) return false;
+            if (uri.Scheme != Uri.UriSchemeHttp) return false;
+
+            if (_isProductionMode)
+            {
+                // Production mode: Strictly loopback DEFAULT_PORT (3002) only. Disallow 5175 and arbitrary ports.
+                return string.Equals(uri.Host, LOOPBACK_HOST, StringComparison.OrdinalIgnoreCase) && uri.Port == DEFAULT_PORT;
+            }
+            else
+            {
+                // Development mode: Allow loopback or localhost on 3002 or 5175
+                bool isHostAllowed = string.Equals(uri.Host, LOOPBACK_HOST, StringComparison.OrdinalIgnoreCase) ||
+                                     string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
+                bool isPortAllowed = (uri.Port == DEFAULT_PORT) || (uri.Port == 5175);
+                return isHostAllowed && isPortAllowed;
+            }
+        }
+
+        public static bool IsSafeWebView2DataPath(string targetPath)
+        {
+            if (string.IsNullOrEmpty(targetPath)) return false;
             try
             {
-                // CRITICAL SAFETY GUARD:
-                // Verify target is strictly within LocalAppData\DiamondERP\WebView2Data
-                // Never allow resetting databases, uploads, backups, or logs!
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string expectedParent = Path.Combine(localAppData, "DiamondERP", "WebView2Data");
-                string fullTarget = Path.GetFullPath(webViewDataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                string fullExpected = Path.GetFullPath(expectedParent).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string expected = Path.Combine(localAppData, "DiamondERP", "WebView2Data");
+                string normalizedTarget = Path.GetFullPath(targetPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string normalizedExpected = Path.GetFullPath(expected).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return string.Equals(normalizedTarget, normalizedExpected, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
-                if (!fullTarget.Equals(fullExpected, StringComparison.OrdinalIgnoreCase))
-                {
-                    WriteLog("ERROR", "Safety guard rejected WebView2Data reset for unexpected path: " + webViewDataDir);
-                    return;
-                }
+        private static bool TrySafeRecoverCorruptProfile(string webViewDataDir)
+        {
+            // CRITICAL SAFETY GUARD:
+            // Path MUST be EXACTLY %LOCALAPPDATA%\DiamondERP\WebView2Data (normalized).
+            // NEVER touch databases, uploads, backups, or logs!
+            if (!IsSafeWebView2DataPath(webViewDataDir))
+            {
+                WriteLog("ERROR", "Safety guard rejected WebView2Data recovery for unauthorized or unexpected path: " + webViewDataDir);
+                return false;
+            }
 
+            try
+            {
                 if (Directory.Exists(webViewDataDir))
                 {
-                    foreach (string file in Directory.GetFiles(webViewDataDir))
+                    string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+                    string backupDir = webViewDataDir + ".corrupt." + timestamp;
+                    WriteLog("PROFILE_RECOVERY", string.Format("Renaming corrupt profile from '{0}' to '{1}'", webViewDataDir, backupDir));
+
+                    try
                     {
-                        try { File.Delete(file); } catch { }
+                        Directory.Move(webViewDataDir, backupDir);
+                        WriteLog("PROFILE_RECOVERY", "Corrupt profile directory renamed successfully to: " + backupDir);
                     }
-                    foreach (string dir in Directory.GetDirectories(webViewDataDir))
+                    catch (Exception moveEx)
                     {
-                        try { Directory.Delete(dir, true); } catch { }
+                        WriteLog("WARN", "Atomic profile rename failed (" + moveEx.Message + "); copying contents to backup directory...");
+                        if (!Directory.Exists(backupDir))
+                        {
+                            Directory.CreateDirectory(backupDir);
+                        }
+                        foreach (string file in Directory.GetFiles(webViewDataDir))
+                        {
+                            try { File.Move(file, Path.Combine(backupDir, Path.GetFileName(file))); } catch { }
+                        }
+                        foreach (string dir in Directory.GetDirectories(webViewDataDir))
+                        {
+                            try { Directory.Move(dir, Path.Combine(backupDir, Path.GetFileName(dir))); } catch { }
+                        }
                     }
                 }
+
+                if (!Directory.Exists(webViewDataDir))
+                {
+                    Directory.CreateDirectory(webViewDataDir);
+                }
+                WriteLog("PROFILE_RECOVERY", "Fresh WebView2Data directory created successfully.");
+                return true;
             }
             catch (Exception ex)
             {
-                WriteLog("WARN", "Could not fully reset WebView2Data: " + ex.Message);
+                WriteLog("ERROR", "Failed to recover corrupt WebView2 profile: " + ex.Message);
+                return false;
             }
         }
 
@@ -1020,6 +1153,23 @@ namespace DiamondERP.App
                     catch { }
                     _trayIcon = null;
                 }
+
+                // Safely and idempotently dispose WebView2 desktop view
+                try
+                {
+                    if (Application.Current != null && Application.Current.Dispatcher != null)
+                    {
+                        Application.Current.Dispatcher.Invoke(new Action(() =>
+                        {
+                            var mainWin = Application.Current.MainWindow as AppMainWindow;
+                            if (mainWin != null)
+                            {
+                                mainWin.DisposeWebView();
+                            }
+                        }));
+                    }
+                }
+                catch { }
 
                 try
                 {

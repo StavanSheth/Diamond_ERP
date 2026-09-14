@@ -145,8 +145,8 @@ namespace DiamondERP.Setup
                 appDir = baseDir;
             }
 
-            InitializeComponent();
             CheckPrerequisites();
+            InitializeComponent();
             ShowPage(0);
         }
 
@@ -354,10 +354,22 @@ namespace DiamondERP.Setup
                        "It is recommended that you close all other applications before continuing.\n\n" +
                        "Click Next to continue, or Cancel to exit Setup.",
                 Location = new Point(16, 74),
-                Size = new Size(295, 220),
+                Size = new Size(295, 140),
                 ForeColor = Color.FromArgb(40, 40, 40)
             };
             rightContent.Controls.Add(lblDesc);
+
+            Label lblPrereq = new Label
+            {
+                Text = isWebView2Installed
+                    ? "✔ System Prerequisite: Microsoft Edge WebView2 Runtime is installed (v" + webView2Version + ")."
+                    : "⚠ Prerequisite Alert: Microsoft Edge WebView2 Runtime is REQUIRED, but was not detected.",
+                Font = new Font("Segoe UI", 8.25f, isWebView2Installed ? FontStyle.Regular : FontStyle.Bold),
+                ForeColor = isWebView2Installed ? Color.FromArgb(22, 101, 52) : Color.FromArgb(185, 28, 28),
+                Location = new Point(16, 218),
+                Size = new Size(295, 36)
+            };
+            rightContent.Controls.Add(lblPrereq);
 
             pages[0].Controls.Add(leftBar);
             pages[0].Controls.Add(rightContent);
