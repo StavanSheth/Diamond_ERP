@@ -863,6 +863,63 @@ namespace DiamondERP.Setup
             txtSummary.Text = summary;
         }
 
+        public static bool ValidateInstallationPath(string path, out string errorMessage)
+        {
+            errorMessage = null;
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(path.Trim()))
+            {
+                errorMessage = "Installation path cannot be empty.";
+                return false;
+            }
+
+            try
+            {
+                string trimmed = path.Trim();
+                if (trimmed.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+                {
+                    errorMessage = "Installation path contains invalid characters.";
+                    return false;
+                }
+
+                string fullPath = Path.GetFullPath(trimmed);
+                if (!Path.IsPathRooted(fullPath))
+                {
+                    errorMessage = "Installation path must be an absolute path (e.g. C:\\Program Files\\DiamondERP).";
+                    return false;
+                }
+
+                string root = Path.GetPathRoot(fullPath);
+                if (fullPath.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                    fullPath.Equals(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                {
+                    errorMessage = "Cannot install directly into the root of a drive (" + root + "). Please specify an application folder.";
+                    return false;
+                }
+
+                string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                if (!string.IsNullOrEmpty(winDir) && (fullPath.Equals(winDir, StringComparison.OrdinalIgnoreCase) || fullPath.StartsWith(winDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                {
+                    errorMessage = "Cannot install into the Windows system directory.";
+                    return false;
+                }
+
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string userDbDir = Path.Combine(localAppData, "DiamondERP");
+                if (fullPath.Equals(userDbDir, StringComparison.OrdinalIgnoreCase) || fullPath.StartsWith(userDbDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorMessage = "Installation directory cannot be inside the customer data directory:\r\n" + userDbDir + "\r\n\r\nApplication binaries belong in Program Files, while your business data remains in AppData.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = "Invalid installation path: " + ex.Message;
+                return false;
+            }
+        }
+
         private void BtnNext_Click(object sender, EventArgs e)
         {
             if (currentPage == 0 && !isWebView2Installed)
@@ -875,6 +932,17 @@ namespace DiamondERP.Setup
                     MessageBoxIcon.Warning
                 );
                 return;
+            }
+
+            if (currentPage == 2)
+            {
+                string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text.Trim() : "";
+                string pathErr;
+                if (!ValidateInstallationPath(targetDir, out pathErr))
+                {
+                    MessageBox.Show(pathErr, "Invalid Destination Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
             }
 
             if (currentPage < 5)
@@ -927,8 +995,14 @@ namespace DiamondERP.Setup
                 try
                 {
                     string defaultDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DiamondERP");
-                    string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : defaultDir;
+                    string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text.Trim() : defaultDir;
                     installedTargetDir = targetDir;
+
+                    string validErr;
+                    if (!ValidateInstallationPath(targetDir, out validErr))
+                    {
+                        throw new ArgumentException(validErr);
+                    }
 
                     SetInstallStatus("Validating environment...", 15);
                     AppendLog("[1/4] Validating offline standalone installation environment...");
@@ -963,21 +1037,12 @@ namespace DiamondERP.Setup
                     catch (Exception) { }
 
                     // Gracefully close any running DiamondERP process
-                    EnsureAppNotRunning(true);
-
-                    // Upgrade Safety Guard: Verify target is not pointing to mutable user data dir
-                    string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string userAppDataDir = Path.Combine(localAppData, "DiamondERP");
-                    if (targetDir.Equals(userAppDataDir, StringComparison.OrdinalIgnoreCase) ||
-                        targetDir.StartsWith(userAppDataDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidOperationException("Installation directory cannot be inside the mutable user data directory: " + userAppDataDir);
-                    }
+                    EnsureAppNotRunning(true, targetDir);
 
                     SetInstallStatus("Deploying application binaries...", 45);
                     AppendLog("[2/4] Deploying application payload to: " + targetDir);
 
-                    // Universal payload deployment (embedded resource, adjacent zip, or directory copy)
+                    // Universal transactional payload deployment (embedded resource, adjacent zip, or directory copy)
                     DeployPayload(appDir, targetDir, AppendLog, pct => SetInstallStatus("Deploying application binaries...", pct));
 
                     string shortcutTarget = Path.Combine(targetDir, "DiamondERP.exe");
@@ -991,13 +1056,17 @@ namespace DiamondERP.Setup
                     if (chkDesktopShortcut.Checked)
                     {
                         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                        CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
-                        AppendLog("✔ Created Desktop shortcut: " + Path.Combine(desktopPath, "DiamondERP.lnk"));
+                        string lnk1 = Path.Combine(desktopPath, "DiamondERP.lnk");
+                        if (CreateShortcut(lnk1, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", AppendLog))
+                        {
+                            AppendLog("✔ Created Desktop shortcut: " + lnk1);
+                        }
 
                         string localDesktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
                         if (!localDesktop.Equals(desktopPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(localDesktop))
                         {
-                            CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                            string lnk2 = Path.Combine(localDesktop, "DiamondERP.lnk");
+                            CreateShortcut(lnk2, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", AppendLog);
                         }
                     }
 
@@ -1005,13 +1074,17 @@ namespace DiamondERP.Setup
                     {
                         string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
                         string lnkPath = Path.Combine(startMenu, "DiamondERP.lnk");
-                        CreateShortcut(lnkPath, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
-                        AppendLog("✔ Created Start Menu shortcut: " + lnkPath);
+                        if (CreateShortcut(lnkPath, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", AppendLog))
+                        {
+                            AppendLog("✔ Created Start Menu shortcut: " + lnkPath);
+                        }
                     }
 
                     // Register uninstaller in Add/Remove Programs
-                    RegisterUninstall(targetDir, targetIcon);
-                    AppendLog("✔ Registered uninstaller in Windows Add/Remove Programs");
+                    if (RegisterUninstall(targetDir, targetIcon, AppendLog))
+                    {
+                        AppendLog("✔ Registered uninstaller in Windows Add/Remove Programs");
+                    }
 
                     SetInstallStatus("Installation completed!", 100);
                     AppendLog("[4/4] Installation finished successfully.");
@@ -1031,26 +1104,46 @@ namespace DiamondERP.Setup
             });
         }
 
-        private static void CreateShortcut(string shortcutPath, string targetPath, string workingDir, string iconPath, string description)
+        private static bool CreateShortcut(string shortcutPath, string targetPath, string workingDir, string iconPath, string description, Action<string> logWarning = null)
         {
             try
             {
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType != null)
+                string dir = Path.GetDirectoryName(shortcutPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {
-                    dynamic shell = Activator.CreateInstance(shellType);
-                    dynamic shortcut = shell.CreateShortcut(shortcutPath);
-                    shortcut.TargetPath = targetPath;
-                    shortcut.WorkingDirectory = workingDir;
-                    if (File.Exists(iconPath))
-                    {
-                        shortcut.IconLocation = iconPath + ",0";
-                    }
-                    shortcut.Description = description;
-                    shortcut.Save();
+                    Directory.CreateDirectory(dir);
                 }
+
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null)
+                {
+                    if (logWarning != null)
+                    {
+                        logWarning("Warning: WScript.Shell COM type not found. Shortcut could not be created at: " + shortcutPath);
+                    }
+                    return false;
+                }
+
+                dynamic shell = Activator.CreateInstance(shellType);
+                dynamic shortcut = shell.CreateShortcut(shortcutPath);
+                shortcut.TargetPath = targetPath;
+                shortcut.WorkingDirectory = workingDir;
+                if (File.Exists(iconPath))
+                {
+                    shortcut.IconLocation = iconPath + ",0";
+                }
+                shortcut.Description = description;
+                shortcut.Save();
+                return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (logWarning != null)
+                {
+                    logWarning(string.Format("Warning: Could not create shortcut '{0}': {1}", shortcutPath, ex.Message));
+                }
+                return false;
+            }
         }
 
         private void LaunchApp()
@@ -1130,8 +1223,14 @@ namespace DiamondERP.Setup
             }
         }
 
-        private static void ExtractZipStream(Stream zipStream, string targetDir, Action<string> logAction, Action<int> progressAction)
+        public static void ExtractZipStream(Stream zipStream, string targetDir, Action<string> logAction = null, Action<int> progressAction = null)
         {
+            string targetRoot = Path.GetFullPath(targetDir);
+            if (!targetRoot.EndsWith(Path.DirectorySeparatorChar.ToString()))
+            {
+                targetRoot += Path.DirectorySeparatorChar;
+            }
+
             using (ZipArchive archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
             {
                 int totalEntries = archive.Entries.Count;
@@ -1139,17 +1238,50 @@ namespace DiamondERP.Setup
                 foreach (ZipArchiveEntry entry in archive.Entries)
                 {
                     current++;
-                    if (string.IsNullOrEmpty(entry.Name) && (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\")))
+                    string rawName = entry.FullName;
+                    if (string.IsNullOrEmpty(rawName)) continue;
+
+                    // Security: Reject leading directory separators, drive roots, UNC paths
+                    string normalized = rawName.Replace('/', Path.DirectorySeparatorChar);
+                    if (normalized.StartsWith(Path.DirectorySeparatorChar.ToString()) ||
+                        normalized.StartsWith(Path.AltDirectorySeparatorChar.ToString()) ||
+                        Path.IsPathRooted(normalized))
                     {
-                        string dirPath = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
-                        if (!Directory.Exists(dirPath))
+                        throw new System.Security.SecurityException(
+                            string.Format("Security violation: Malicious archive entry has absolute or rooted path '{0}'. Extraction aborted.", rawName));
+                    }
+
+                    // Security: Reject any segment with directory traversal ".."
+                    string[] segments = normalized.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    foreach (string seg in segments)
+                    {
+                        if (seg == "..")
                         {
-                            Directory.CreateDirectory(dirPath);
+                            throw new System.Security.SecurityException(
+                                string.Format("Security violation: Malicious archive entry contains directory traversal ('..') sequence '{0}'. Extraction aborted.", rawName));
+                        }
+                    }
+
+                    // Canonical destination full path
+                    string destFile = Path.GetFullPath(Path.Combine(targetRoot, normalized));
+
+                    // Security: Strictly enforce directory boundary within targetRoot
+                    if (!destFile.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new System.Security.SecurityException(
+                            string.Format("Security violation: Archive entry '{0}' resolves outside installation root '{1}' -> '{2}'. Extraction aborted.", rawName, targetRoot, destFile));
+                    }
+
+                    // Directory entry handling
+                    if (string.IsNullOrEmpty(entry.Name) && (rawName.EndsWith("/") || rawName.EndsWith("\\")))
+                    {
+                        if (!Directory.Exists(destFile))
+                        {
+                            Directory.CreateDirectory(destFile);
                         }
                         continue;
                     }
 
-                    string destFile = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
                     string destDir = Path.GetDirectoryName(destFile);
                     if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
                     {
@@ -1169,13 +1301,34 @@ namespace DiamondERP.Setup
             if (logAction != null) logAction("✔ Payload extraction completed successfully.");
         }
 
-        private static void DeployPayload(string sourceDir, string targetDir, Action<string> logAction = null, Action<int> progressAction = null)
+        private static void VerifyPayloadIntegrity(string dir)
         {
-            if (!Directory.Exists(targetDir))
+            string[] criticalFiles = new string[]
             {
-                Directory.CreateDirectory(targetDir);
-            }
+                "DiamondERP.exe",
+                Path.Combine("runtime", "node.exe"),
+                Path.Combine("api", "dist", "index.js"),
+                Path.Combine("web", "dist", "index.html"),
+                Path.Combine("api", "prisma", "template.db")
+            };
 
+            foreach (string cf in criticalFiles)
+            {
+                string fullPath = Path.Combine(dir, cf);
+                if (!File.Exists(fullPath))
+                {
+                    throw new FileNotFoundException("Payload integrity check failed: missing critical runtime file '" + cf + "' in: " + dir);
+                }
+                FileInfo fi = new FileInfo(fullPath);
+                if (fi.Length == 0)
+                {
+                    throw new InvalidDataException("Payload integrity check failed: critical runtime file '" + cf + "' is 0 bytes (corrupt) in: " + dir);
+                }
+            }
+        }
+
+        private static void ExtractRawPayload(string sourceDir, string targetDir, Action<string> logAction, Action<int> progressAction)
+        {
             // Mode 1: Embedded Zip Resource inside executing assembly (Single-file Setup.exe)
             Assembly asm = Assembly.GetExecutingAssembly();
             string[] resNames = asm.GetManifestResourceNames();
@@ -1261,6 +1414,132 @@ namespace DiamondERP.Setup
             throw new FileNotFoundException("Could not locate DiamondERP production payload. Expected embedded resource, adjacent zip package, or staged application directory.");
         }
 
+        private static void DeployPayload(string sourceDir, string targetDir, Action<string> logAction = null, Action<int> progressAction = null)
+        {
+            targetDir = Path.GetFullPath(targetDir);
+            string parentDir = Path.GetDirectoryName(targetDir);
+            if (!Directory.Exists(parentDir))
+            {
+                Directory.CreateDirectory(parentDir);
+            }
+
+            bool isExistingInstall = Directory.Exists(targetDir) && File.Exists(Path.Combine(targetDir, "DiamondERP.exe"));
+
+            if (isExistingInstall)
+            {
+                string stagingDir = Path.Combine(parentDir, Path.GetFileName(targetDir) + ".staging_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                string backupDir = Path.Combine(parentDir, Path.GetFileName(targetDir) + ".backup_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+
+                try
+                {
+                    if (logAction != null) logAction("Preparing staged upgrade package...");
+                    if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
+                    Directory.CreateDirectory(stagingDir);
+
+                    // 1. Extract into isolated staging directory
+                    ExtractRawPayload(sourceDir, stagingDir, logAction, progressAction);
+
+                    // 2. Validate extracted files before modifying active installation
+                    if (logAction != null) logAction("Validating deployment payload integrity...");
+                    VerifyPayloadIntegrity(stagingDir);
+
+                    // 3. Gracefully stop running app before file swap
+                    EnsureAppNotRunning(false, targetDir);
+
+                    // 4. Atomic directory swap with automatic rollback protection
+                    if (logAction != null) logAction("Upgrading application files...");
+                    bool moveSucceeded = false;
+                    for (int attempt = 0; attempt < 10; attempt++)
+                    {
+                        try
+                        {
+                            Directory.Move(targetDir, backupDir);
+                            moveSucceeded = true;
+                            break;
+                        }
+                        catch (Exception)
+                        {
+                            Thread.Sleep(400);
+                        }
+                    }
+
+                    if (moveSucceeded)
+                    {
+                        try
+                        {
+                            Directory.Move(stagingDir, targetDir);
+                        }
+                        catch (Exception ex)
+                        {
+                            // ROLLBACK: Restore previous installation if swap fails!
+                            if (logAction != null) logAction("ERROR: Staged swap failed. Initiating automatic rollback: " + ex.Message);
+                            if (Directory.Exists(backupDir) && !Directory.Exists(targetDir))
+                            {
+                                try { Directory.Move(backupDir, targetDir); } catch { }
+                            }
+                            throw;
+                        }
+
+                        // Cleanup backup directory on success
+                        try
+                        {
+                            if (Directory.Exists(backupDir)) Directory.Delete(backupDir, true);
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        // Fallback: in-place transactional file deployment when folder handle is held
+                        if (logAction != null) logAction("Note: Directory handle locked, executing transactional in-place file upgrade...");
+                        CopyDirectoryRecursive(targetDir, backupDir);
+                        try
+                        {
+                            CopyDirectoryRecursive(stagingDir, targetDir);
+                            VerifyPayloadIntegrity(targetDir);
+                        }
+                        catch (Exception ex)
+                        {
+                            if (logAction != null) logAction("ERROR: File-level upgrade failed. Restoring from backup: " + ex.Message);
+                            try { CopyDirectoryRecursive(backupDir, targetDir); } catch { }
+                            throw;
+                        }
+                        finally
+                        {
+                            try { if (Directory.Exists(backupDir)) Directory.Delete(backupDir, true); } catch { }
+                        }
+                    }
+
+                    if (logAction != null) logAction("✔ Application upgrade committed successfully.");
+                }
+                catch
+                {
+                    // If anything fails during staging, clean up staging dir
+                    try { if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true); } catch { }
+                    throw;
+                }
+            }
+            else
+            {
+                // Fresh installation: extract directly and verify
+                if (!Directory.Exists(targetDir))
+                {
+                    Directory.CreateDirectory(targetDir);
+                }
+
+                try
+                {
+                    ExtractRawPayload(sourceDir, targetDir, logAction, progressAction);
+                    VerifyPayloadIntegrity(targetDir);
+                }
+                catch
+                {
+                    // Clean up partial fresh installation so broken state is not left
+                    try { if (Directory.Exists(targetDir)) Directory.Delete(targetDir, true); } catch { }
+                    throw;
+                }
+            }
+        }
+
         private static bool IsAdministrator()
         {
             try
@@ -1277,7 +1556,7 @@ namespace DiamondERP.Setup
             }
         }
 
-        private static void EnsureAppNotRunning(bool promptUser = false)
+        private static void EnsureAppNotRunning(bool promptUser = false, string targetDir = null)
         {
             Process[] procs = Process.GetProcessesByName("DiamondERP");
             if (procs != null && procs.Length > 0)
@@ -1295,17 +1574,6 @@ namespace DiamondERP.Setup
                         throw new InvalidOperationException("Setup was cancelled by user because Diamond ERP is currently running.");
                     }
                 }
-
-                // 1. Request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma cleanly
-                try
-                {
-                    var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://127.0.0.1:3002/api/system/shutdown");
-                    req.Method = "POST";
-                    req.Timeout = 1500;
-                    req.ContentLength = 0;
-                    using (var resp = (System.Net.HttpWebResponse)req.GetResponse()) { }
-                }
-                catch { }
 
                 // 2. Request graceful window close on each process
                 foreach (var p in procs)
@@ -1346,13 +1614,78 @@ namespace DiamondERP.Setup
                     }
                     catch { }
                 }
-
-                // 5. Allow 500ms for OS port/socket cleanup
-                Thread.Sleep(500);
             }
+
+            // Always request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma cleanly
+            try
+            {
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://127.0.0.1:3002/api/system/shutdown");
+                req.Method = "POST";
+                req.Timeout = 2000;
+                req.ContentLength = 0;
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse()) { }
+            }
+            catch { }
+
+            // Wait up to 2500ms for loopback port 3002 to close gracefully
+            for (int i = 0; i < 25; i++)
+            {
+                bool portInUse = false;
+                try
+                {
+                    using (var client = new System.Net.Sockets.TcpClient())
+                    {
+                        var result = client.BeginConnect("127.0.0.1", 3002, null, null);
+                        bool connected = result.AsyncWaitHandle.WaitOne(100);
+                        if (connected)
+                        {
+                            client.EndConnect(result);
+                            portInUse = true;
+                        }
+                    }
+                }
+                catch { }
+
+                if (!portInUse) break;
+                Thread.Sleep(100);
+            }
+
+            // Terminate any DiamondERP-owned bundled Node processes inside targetDir
+            if (!string.IsNullOrEmpty(targetDir))
+            {
+                try
+                {
+                    string canonicalTarget = Path.GetFullPath(targetDir);
+                    Process[] nodeProcs = Process.GetProcessesByName("node");
+                    foreach (var np in nodeProcs)
+                    {
+                        try
+                        {
+                            if (!np.HasExited && np.MainModule != null)
+                            {
+                                string nodePath = np.MainModule.FileName;
+                                if (!string.IsNullOrEmpty(nodePath) &&
+                                    nodePath.StartsWith(canonicalTarget, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (!np.HasExited)
+                                    {
+                                        np.Kill();
+                                        np.WaitForExit(1500);
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+
+            // Allow 800ms for OS port and file handle release
+            Thread.Sleep(800);
         }
 
-        private static void RegisterUninstall(string targetDir, string iconPath)
+        private static bool RegisterUninstall(string targetDir, string iconPath, Action<string> logWarning = null)
         {
             try
             {
@@ -1371,10 +1704,17 @@ namespace DiamondERP.Setup
                         key.SetValue("EstimatedSize", 185000, RegistryValueKind.DWord);
                         key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                         key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                        return true;
                     }
                 }
+                if (logWarning != null) logWarning("Warning: Could not open uninstall registry key for writing.");
+                return false;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (logWarning != null) logWarning("Warning: Failed to register uninstaller in registry: " + ex.Message);
+                return false;
+            }
         }
 
         public static int PerformSilentInstall(string sourceDir, string targetDir, bool createDesktop, bool createStartMenu, bool launchAfter)
@@ -1385,6 +1725,18 @@ namespace DiamondERP.Setup
                 {
                     string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
                     targetDir = Path.Combine(pf, "DiamondERP");
+                }
+                else
+                {
+                    targetDir = targetDir.Trim();
+                }
+
+                // Destination Path Validation
+                string pathValidationErr;
+                if (!ValidateInstallationPath(targetDir, out pathValidationErr))
+                {
+                    Console.Error.WriteLine("Error: " + pathValidationErr);
+                    return 1;
                 }
 
                 // WebView2 Prerequisite Check for Silent Install
@@ -1403,17 +1755,7 @@ namespace DiamondERP.Setup
                     return 1;
                 }
 
-                // Upgrade Safety Guard: Ensure target is not pointing to mutable user data dir
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string userAppDataDir = Path.Combine(localAppData, "DiamondERP");
-                if (targetDir.Equals(userAppDataDir, StringComparison.OrdinalIgnoreCase) ||
-                    targetDir.StartsWith(userAppDataDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.Error.WriteLine("Error: Installation directory cannot be inside user data directory: " + userAppDataDir);
-                    return 1;
-                }
-
-                EnsureAppNotRunning(false);
+                EnsureAppNotRunning(false, targetDir);
 
                 if (!Directory.Exists(targetDir))
                 {
@@ -1428,11 +1770,17 @@ namespace DiamondERP.Setup
                 if (createDesktop)
                 {
                     string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                    CreateShortcut(Path.Combine(desktopPath, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                    string lnk1 = Path.Combine(desktopPath, "DiamondERP.lnk");
+                    if (CreateShortcut(lnk1, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", msg => Console.Error.WriteLine(msg)))
+                    {
+                        Console.WriteLine("✔ Created Desktop shortcut: " + lnk1);
+                    }
+
                     string localDesktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
                     if (!localDesktop.Equals(desktopPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(localDesktop))
                     {
-                        CreateShortcut(Path.Combine(localDesktop, "DiamondERP.lnk"), shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                        string lnk2 = Path.Combine(localDesktop, "DiamondERP.lnk");
+                        CreateShortcut(lnk2, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", msg => Console.Error.WriteLine(msg));
                     }
                 }
 
@@ -1440,10 +1788,13 @@ namespace DiamondERP.Setup
                 {
                     string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
                     string lnkPath = Path.Combine(startMenu, "DiamondERP.lnk");
-                    CreateShortcut(lnkPath, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management");
+                    if (CreateShortcut(lnkPath, shortcutTarget, targetDir, targetIcon, "DiamondERP Enterprise Management", msg => Console.Error.WriteLine(msg)))
+                    {
+                        Console.WriteLine("✔ Created Start Menu shortcut: " + lnkPath);
+                    }
                 }
 
-                RegisterUninstall(targetDir, targetIcon);
+                RegisterUninstall(targetDir, targetIcon, msg => Console.Error.WriteLine(msg));
 
                 if (launchAfter && File.Exists(shortcutTarget))
                 {
@@ -1493,7 +1844,7 @@ namespace DiamondERP.Setup
                 }
             }
 
-            EnsureAppNotRunning(!silent);
+            EnsureAppNotRunning(!silent, installDir);
 
             try
             {
@@ -1518,45 +1869,41 @@ namespace DiamondERP.Setup
                 }
                 catch { }
 
-                // 4. Clean up application installation files (excluding user databases in AppData)
+                // 4. Clean up application installation files (strictly preserving customer AppData)
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 string userDbDir = Path.Combine(localAppData, "DiamondERP");
+                string canonicalInstallDir = Path.GetFullPath(installDir);
 
-                if (!installDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase))
+                if (!canonicalInstallDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase) &&
+                    !canonicalInstallDir.StartsWith(userDbDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (silent)
+                    // Ensure we never delete system roots
+                    string root = Path.GetPathRoot(canonicalInstallDir);
+                    string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                    if (!canonicalInstallDir.Equals(root, StringComparison.OrdinalIgnoreCase) &&
+                        !canonicalInstallDir.Equals(winDir, StringComparison.OrdinalIgnoreCase))
                     {
                         try
                         {
-                            if (Directory.Exists(installDir))
+                            if (Directory.Exists(canonicalInstallDir))
                             {
-                                Directory.Delete(installDir, true);
+                                Directory.Delete(canonicalInstallDir, true);
                             }
                         }
                         catch
                         {
+                            // Self-deleting executable workaround: sanitize against injection before calling delayed rmdir
+                            string safeDir = canonicalInstallDir.Replace("\"", "").Replace("&", "").Replace("|", "").Replace(";", "");
                             ProcessStartInfo psi = new ProcessStartInfo
                             {
                                 FileName = "cmd.exe",
-                                Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", installDir),
+                                Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", safeDir),
                                 CreateNoWindow = true,
                                 UseShellExecute = false,
                                 WindowStyle = ProcessWindowStyle.Hidden
                             };
                             Process.Start(psi);
                         }
-                    }
-                    else
-                    {
-                        ProcessStartInfo psi = new ProcessStartInfo
-                        {
-                            FileName = "cmd.exe",
-                            Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", installDir),
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            WindowStyle = ProcessWindowStyle.Hidden
-                        };
-                        Process.Start(psi);
                     }
                 }
 

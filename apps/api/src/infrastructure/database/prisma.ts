@@ -245,7 +245,13 @@ function createPrismaClient(dbUrl: string): PrismaClient {
 
 // ── System Client ───────────────────────────────────────────────────────
 // Dedicated client for system/tenant metadata, user auth, and sessions
-const systemDbUrl = process.env.DATABASE_URL || `file:${path.resolve(DB_DIR, `${defaultProfile}.db`)}`;
+const defaultDbPath = path.resolve(DB_DIR, `${defaultProfile}.db`);
+ensureProfileDbFile(defaultDbPath);
+if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
+  const customFile = process.env.DATABASE_URL.slice(5);
+  ensureProfileDbFile(path.resolve(customFile));
+}
+const systemDbUrl = process.env.DATABASE_URL || `file:${defaultDbPath}`;
 export const systemPrisma = createPrismaClient(systemDbUrl);
 configureSqlitePragmas(systemPrisma).catch(() => {});
 

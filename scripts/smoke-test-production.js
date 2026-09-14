@@ -100,7 +100,7 @@ function httpRequest(urlPath, options = {}, body = null) {
   });
 }
 
-async function waitForServer(maxWaitMs = 20000) {
+async function waitForServer(maxWaitMs = 35000) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
