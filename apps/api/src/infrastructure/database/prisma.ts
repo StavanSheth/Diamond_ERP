@@ -32,7 +32,9 @@ function readConfig(): ProfileConfig {
   } catch {
     // Ignore read errors, fall back to default
   }
-  return { activeProfile: 'Stavan', allowedProfiles: ['Stavan'] };
+  // Fresh install default: use 'default' profile name.
+  // Existing installs will always have a persisted config that overrides this.
+  return { activeProfile: 'default', allowedProfiles: ['default'] };
 }
 
 export function saveConfig(cfg: ProfileConfig): void {
@@ -55,13 +57,14 @@ export function ensureProfileDbFile(dbPath: string): void {
     }
 
     const templateDb = getDatabaseTemplatePath();
-    const fallbackDb = path.resolve(DB_DIR, 'Stavan.db');
 
     if (templateDb && fs.existsSync(templateDb)) {
+      // Copy the schema-only template (no data rows)
       fs.copyFileSync(templateDb, dbPath);
-    } else if (fs.existsSync(fallbackDb)) {
-      fs.copyFileSync(fallbackDb, dbPath);
     } else {
+      // No template available — create an empty file.
+      // Prisma will auto-migrate the schema on first connect.
+      console.warn('[Prisma] No template.db found, creating empty database file:', dbPath);
       fs.writeFileSync(dbPath, '');
     }
   }
