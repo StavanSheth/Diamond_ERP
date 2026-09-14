@@ -33,6 +33,7 @@
     "test:phase7": "node scripts/test-phase7-launcher.js",
     "test:phase8": "node scripts/test-phase8-webview2.js",
     "test:phase9": "node scripts/test-phase9-installer.js",
+    "test:phase10": "node scripts/test-phase10-final-release.js",
     "manifest:release": "node scripts/create-release-manifest.js",
     "verify:release": "node scripts/verify-windows-release.js",
     "release:windows": "node scripts/package-windows-release.js"
