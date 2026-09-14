@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.IO.Compression;
 using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
@@ -67,6 +68,7 @@ namespace DiamondERP.Setup
 
         // Context
         private string appDir;
+        private string installedTargetDir;
         private string webView2Version = "";
         private bool isWebView2Installed = false;
 
@@ -400,9 +402,9 @@ namespace DiamondERP.Setup
                 Text = "DiamondERP V3.0 — Enterprise Software License Agreement\r\n\r\n" +
                        "Copyright (c) 2026 DiamondERP Enterprise Systems. All rights reserved.\r\n\r\n" +
                        "1. GRANT OF LICENSE\r\n" +
-                       "This software is licensed, not sold. DiamondERP grants you the non-exclusive, non-transferable right to install and execute this software on authorized devices solely for diamond trading, parcel inventory management, and ledger accounting operations.\r\n\r\n" +
-                       "2. SECURITY & ACCESS CONTROL\r\n" +
-                       "Access to this software is secured by device hardware locks and an authorized master key. You agree to protect the installation credentials and not distribute unauthorized copies of the runtime.\r\n\r\n" +
+                       "This software is licensed, not sold. DiamondERP grants you the non-exclusive, non-transferable right to install and execute this software solely for diamond trading, parcel inventory management, and ledger accounting operations.\r\n\r\n" +
+                       "2. LOCAL DESKTOP DEPLOYMENT\r\n" +
+                       "This standalone enterprise desktop application runs fully offline on your local computer. All backend processing, database transactions, and data management operate entirely on your machine without external network dependencies.\r\n\r\n" +
                        "3. DATA OWNERSHIP & PRIVACY\r\n" +
                        "All local database records, inventory entries, customer party records, and financial transaction ledgers belong exclusively to your organization and are stored locally on your machine.\r\n\r\n" +
                        "4. DISCLAIMER OF WARRANTIES\r\n" +
@@ -675,9 +677,9 @@ namespace DiamondERP.Setup
             };
             Label lblSecNote = new Label
             {
-                Text = "Security Note: On first start, you will be prompted once for your master password to activate this computer for its lifetime.",
+                Text = "Offline Operation: DiamondERP runs entirely on your local machine with no internet connection required. Your business data is stored locally in your secure user profile.",
                 Font = new Font("Segoe UI", 7.75f),
-                ForeColor = Color.FromArgb(55, 48, 163),
+                ForeColor = Color.FromArgb(30, 64, 175),
                 Location = new Point(6, 6),
                 Size = new Size(280, 46)
             };
@@ -926,10 +928,11 @@ namespace DiamondERP.Setup
                 {
                     string defaultDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DiamondERP");
                     string targetDir = !string.IsNullOrEmpty(txtDestPath.Text) ? txtDestPath.Text : defaultDir;
+                    installedTargetDir = targetDir;
 
-                    SetInstallStatus("Validating environment...", 20);
+                    SetInstallStatus("Validating environment...", 15);
                     AppendLog("[1/4] Validating offline standalone installation environment...");
-                    Thread.Sleep(200);
+                    Thread.Sleep(150);
 
                     if (!isWebView2Installed)
                     {
@@ -943,21 +946,24 @@ namespace DiamondERP.Setup
                         throw new UnauthorizedAccessException("Installing into " + targetDir + " requires administrator privileges. Please restart Setup as Administrator.");
                     }
 
+                    // Disk space check (verify at least 250 MB free)
+                    try
+                    {
+                        string driveRoot = Path.GetPathRoot(Path.GetFullPath(targetDir));
+                        if (!string.IsNullOrEmpty(driveRoot))
+                        {
+                            DriveInfo di = new DriveInfo(driveRoot);
+                            if (di.IsReady && di.AvailableFreeSpace < 250L * 1024 * 1024)
+                            {
+                                throw new IOException(string.Format("Insufficient disk space on drive {0}. At least 250 MB free space is required (found {1:N1} MB).", driveRoot, di.AvailableFreeSpace / (1024.0 * 1024.0)));
+                            }
+                        }
+                    }
+                    catch (IOException) { throw; }
+                    catch (Exception) { }
+
                     // Gracefully close any running DiamondERP process
                     EnsureAppNotRunning(true);
-
-                    // Verify pre-built DiamondERP.exe launcher
-                    string targetLauncherExe = Path.Combine(targetDir, "DiamondERP.exe");
-                    string sourceLauncherExe = Path.Combine(appDir, "DiamondERP.exe");
-                    if (!File.Exists(sourceLauncherExe))
-                    {
-                        sourceLauncherExe = Path.Combine(appDir, "installer", "DiamondERP.exe");
-                    }
-                    string iconPath = Path.Combine(appDir, "installer", "app.ico");
-                    if (!File.Exists(iconPath)) { iconPath = Path.Combine(appDir, "app.ico"); }
-
-                    SetInstallStatus("Preparing desktop application binaries...", 45);
-                    AppendLog("[2/4] Verifying pre-built application binaries...");
 
                     // Upgrade Safety Guard: Verify target is not pointing to mutable user data dir
                     string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -968,25 +974,19 @@ namespace DiamondERP.Setup
                         throw new InvalidOperationException("Installation directory cannot be inside the mutable user data directory: " + userAppDataDir);
                     }
 
-                    // If installing into a different folder (e.g. C:\Program Files\DiamondERP), copy full application payload
-                    if (!targetDir.Equals(appDir, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!Directory.Exists(targetDir))
-                        {
-                            Directory.CreateDirectory(targetDir);
-                        }
-                        AppendLog("Deploying full application payload to: " + targetDir);
-                        CopyApplicationPayload(appDir, targetDir, AppendLog);
-                    }
+                    SetInstallStatus("Deploying application binaries...", 45);
+                    AppendLog("[2/4] Deploying application payload to: " + targetDir);
+
+                    // Universal payload deployment (embedded resource, adjacent zip, or directory copy)
+                    DeployPayload(appDir, targetDir, AppendLog, pct => SetInstallStatus("Deploying application binaries...", pct));
 
                     string shortcutTarget = Path.Combine(targetDir, "DiamondERP.exe");
-                    if (!File.Exists(shortcutTarget)) { shortcutTarget = sourceLauncherExe; }
                     string targetIcon = Path.Combine(targetDir, "app.ico");
-                    if (!File.Exists(targetIcon)) { targetIcon = iconPath; }
+                    if (!File.Exists(targetIcon)) { targetIcon = Path.Combine(appDir, "app.ico"); }
 
-                    SetInstallStatus("Creating application shortcuts...", 75);
+                    SetInstallStatus("Creating application shortcuts...", 80);
                     AppendLog("[3/4] Creating application shortcuts pointing to: " + Path.GetFileName(shortcutTarget));
-                    Thread.Sleep(200);
+                    Thread.Sleep(150);
 
                     if (chkDesktopShortcut.Checked)
                     {
@@ -1015,7 +1015,7 @@ namespace DiamondERP.Setup
 
                     SetInstallStatus("Installation completed!", 100);
                     AppendLog("[4/4] Installation finished successfully.");
-                    Thread.Sleep(300);
+                    Thread.Sleep(250);
 
                     this.Invoke(new Action(() => ShowPage(6)));
                 }
@@ -1055,30 +1055,14 @@ namespace DiamondERP.Setup
 
         private void LaunchApp()
         {
-            string launcherExe = Path.Combine(appDir, "DiamondERP.exe");
+            string target = !string.IsNullOrEmpty(installedTargetDir) ? installedTargetDir : appDir;
+            string launcherExe = Path.Combine(target, "DiamondERP.exe");
+            if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "DiamondERP.exe"); }
             if (!File.Exists(launcherExe)) { launcherExe = Path.Combine(appDir, "installer", "DiamondERP.exe"); }
 
             if (File.Exists(launcherExe))
             {
-                Process.Start(new ProcessStartInfo(launcherExe) { WorkingDirectory = appDir });
-            }
-        }
-
-        private void RunProcess(string fileName, string arguments)
-        {
-            ProcessStartInfo psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                WorkingDirectory = appDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using (Process p = Process.Start(psi))
-            {
-                p.WaitForExit(30000);
+                Process.Start(new ProcessStartInfo(launcherExe) { WorkingDirectory = target });
             }
         }
 
@@ -1146,6 +1130,137 @@ namespace DiamondERP.Setup
             }
         }
 
+        private static void ExtractZipStream(Stream zipStream, string targetDir, Action<string> logAction, Action<int> progressAction)
+        {
+            using (ZipArchive archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+            {
+                int totalEntries = archive.Entries.Count;
+                int current = 0;
+                foreach (ZipArchiveEntry entry in archive.Entries)
+                {
+                    current++;
+                    if (string.IsNullOrEmpty(entry.Name) && (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\")))
+                    {
+                        string dirPath = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                        if (!Directory.Exists(dirPath))
+                        {
+                            Directory.CreateDirectory(dirPath);
+                        }
+                        continue;
+                    }
+
+                    string destFile = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                    string destDir = Path.GetDirectoryName(destFile);
+                    if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+                    {
+                        Directory.CreateDirectory(destDir);
+                    }
+
+                    entry.ExtractToFile(destFile, true);
+
+                    if (current % 300 == 0 || current == totalEntries)
+                    {
+                        int pct = 45 + (int)((current / (double)totalEntries) * 30);
+                        if (progressAction != null) progressAction(pct);
+                        if (logAction != null) logAction(string.Format("  [{0}/{1}] Deployed: {2}", current, totalEntries, entry.FullName));
+                    }
+                }
+            }
+            if (logAction != null) logAction("✔ Payload extraction completed successfully.");
+        }
+
+        private static void DeployPayload(string sourceDir, string targetDir, Action<string> logAction = null, Action<int> progressAction = null)
+        {
+            if (!Directory.Exists(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+
+            // Mode 1: Embedded Zip Resource inside executing assembly (Single-file Setup.exe)
+            Assembly asm = Assembly.GetExecutingAssembly();
+            string[] resNames = asm.GetManifestResourceNames();
+            string payloadRes = null;
+            foreach (string r in resNames)
+            {
+                if (r.EndsWith("DiamondERP.Payload.zip", StringComparison.OrdinalIgnoreCase) || r.Equals("DiamondERP.Payload.zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    payloadRes = r;
+                    break;
+                }
+            }
+
+            if (payloadRes != null)
+            {
+                if (logAction != null) logAction("Extracting embedded self-contained payload archive (" + payloadRes + ")...");
+                using (Stream s = asm.GetManifestResourceStream(payloadRes))
+                {
+                    if (s != null)
+                    {
+                        ExtractZipStream(s, targetDir, logAction, progressAction);
+                        return;
+                    }
+                }
+            }
+
+            // Mode 2: Adjacent zip package in sourceDir or baseDir
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string[] candidateZips = new string[]
+            {
+                Path.Combine(sourceDir, "DiamondERP-3.0.0-Windows-x64.zip"),
+                Path.Combine(sourceDir, "DiamondERP-Windows-x64.zip"),
+                Path.Combine(sourceDir, "payload.zip"),
+                Path.Combine(baseDir, "DiamondERP-3.0.0-Windows-x64.zip"),
+                Path.Combine(baseDir, "DiamondERP-Windows-x64.zip"),
+                Path.Combine(baseDir, "payload.zip")
+            };
+
+            foreach (string cz in candidateZips)
+            {
+                if (File.Exists(cz))
+                {
+                    if (logAction != null) logAction("Extracting adjacent payload archive: " + Path.GetFileName(cz) + "...");
+                    using (FileStream fs = File.OpenRead(cz))
+                    {
+                        ExtractZipStream(fs, targetDir, logAction, progressAction);
+                        return;
+                    }
+                }
+            }
+
+            // Mode 3: Directory-based copy from sourceDir
+            string runtimeNode = Path.Combine(sourceDir, "runtime", "node.exe");
+            string launcherExe = Path.Combine(sourceDir, "DiamondERP.exe");
+            if (File.Exists(runtimeNode) && File.Exists(launcherExe))
+            {
+                if (logAction != null) logAction("Deploying application payload from staged directory: " + sourceDir);
+                CopyApplicationPayload(sourceDir, targetDir, logAction);
+                return;
+            }
+
+            // Mode 4: Staged development directory fallback
+            string[] fallbackDirs = new string[]
+            {
+                Path.Combine(sourceDir, "..", "windows", "DiamondERP"),
+                Path.Combine(sourceDir, "..", "..", "build", "windows", "DiamondERP"),
+                Path.Combine(sourceDir, "build", "windows", "DiamondERP"),
+                Path.Combine(baseDir, "..", "windows", "DiamondERP"),
+                Path.Combine(baseDir, "..", "..", "build", "windows", "DiamondERP"),
+                Path.Combine(baseDir, "build", "windows", "DiamondERP")
+            };
+            foreach (string fb in fallbackDirs)
+            {
+                if (File.Exists(Path.Combine(fb, "runtime", "node.exe")) && File.Exists(Path.Combine(fb, "DiamondERP.exe")))
+                {
+                    string fullFb = Path.GetFullPath(fb);
+                    if (logAction != null) logAction("Deploying application payload from staged directory: " + fullFb);
+                    CopyApplicationPayload(fullFb, targetDir, logAction);
+                    return;
+                }
+            }
+
+            throw new FileNotFoundException("Could not locate DiamondERP production payload. Expected embedded resource, adjacent zip package, or staged application directory.");
+        }
+
         private static bool IsAdministrator()
         {
             try
@@ -1170,7 +1285,7 @@ namespace DiamondERP.Setup
                 if (promptUser)
                 {
                     var res = MessageBox.Show(
-                        "Diamond ERP is currently running.\n\nSetup must close the application to proceed. Would you like Setup to close it automatically?",
+                        "Diamond ERP is currently running.\n\nSetup must close the application to proceed with installation or upgrade.\n\nWould you like Setup to close it automatically?",
                         "Diamond ERP Running",
                         MessageBoxButtons.OKCancel,
                         MessageBoxIcon.Warning
@@ -1181,18 +1296,59 @@ namespace DiamondERP.Setup
                     }
                 }
 
+                // 1. Request graceful HTTP shutdown to flush SQLite WAL and disconnect Prisma cleanly
+                try
+                {
+                    var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://127.0.0.1:3002/api/system/shutdown");
+                    req.Method = "POST";
+                    req.Timeout = 1500;
+                    req.ContentLength = 0;
+                    using (var resp = (System.Net.HttpWebResponse)req.GetResponse()) { }
+                }
+                catch { }
+
+                // 2. Request graceful window close on each process
                 foreach (var p in procs)
                 {
                     try
                     {
                         p.CloseMainWindow();
-                        if (!p.WaitForExit(3000))
+                    }
+                    catch { }
+                }
+
+                // 3. Wait up to 4000ms for exit
+                for (int i = 0; i < 40; i++)
+                {
+                    Thread.Sleep(100);
+                    bool anyRunning = false;
+                    foreach (var p in procs)
+                    {
+                        try
+                        {
+                            if (!p.HasExited) anyRunning = true;
+                        }
+                        catch { }
+                    }
+                    if (!anyRunning) break;
+                }
+
+                // 4. Force terminate if any process still running after timeout
+                foreach (var p in procs)
+                {
+                    try
+                    {
+                        if (!p.HasExited)
                         {
                             p.Kill();
+                            p.WaitForExit(1000);
                         }
                     }
                     catch { }
                 }
+
+                // 5. Allow 500ms for OS port/socket cleanup
+                Thread.Sleep(500);
             }
         }
 
@@ -1211,6 +1367,8 @@ namespace DiamondERP.Setup
                         key.SetValue("InstallLocation", targetDir);
                         key.SetValue("DisplayIcon", iconPath);
                         key.SetValue("UninstallString", string.Format("\"{0}\" /uninstall", Path.Combine(targetDir, "Installer.exe")));
+                        key.SetValue("InstallDate", DateTime.Now.ToString("yyyyMMdd"));
+                        key.SetValue("EstimatedSize", 185000, RegistryValueKind.DWord);
                         key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                         key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
                     }
@@ -1262,10 +1420,7 @@ namespace DiamondERP.Setup
                     Directory.CreateDirectory(targetDir);
                 }
 
-                if (!targetDir.Equals(sourceDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    CopyApplicationPayload(sourceDir, targetDir, msg => Console.WriteLine(msg));
-                }
+                DeployPayload(sourceDir, targetDir, msg => Console.WriteLine(msg), null);
 
                 string shortcutTarget = Path.Combine(targetDir, "DiamondERP.exe");
                 string targetIcon = Path.Combine(targetDir, "app.ico");

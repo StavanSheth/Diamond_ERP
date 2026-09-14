@@ -77,27 +77,30 @@ async function main() {
   runCommand('Staged Production Smoke Test Gate', 'npm run test:smoke:staged');
 
   // Step 5: Assemble Distribution Artifacts
-  logStep(5, 'Assemble Distribution Artifacts in build/releases/');
-  const installerSrc = path.join(STAGING_DIR, 'Installer.exe');
-  const releaseSetupExe = path.join(RELEASES_DIR, `DiamondERP-${version}-Setup.exe`);
-
-  if (!fs.existsSync(installerSrc)) {
-    console.error(`❌ Source installer binary not found at: ${installerSrc}`);
-    process.exit(1);
-  }
-
-  // 5a. Copy and name setup installer
-  fs.copyFileSync(installerSrc, releaseSetupExe);
-  const setupStat = fs.statSync(releaseSetupExe);
-  console.log(`✔ Created Setup Installer: ${releaseSetupExe} (${(setupStat.size / (1024 * 1024)).toFixed(2)} MB)`);
-
-  // 5b. Create Portable Zip Distribution Package
+  // 5a. Create Portable Zip Distribution Package
   const zipPath = path.join(RELEASES_DIR, `DiamondERP-${version}-Windows-x64.zip`);
   console.log(`Compressing staged payload to portable zip: ${zipPath}...`);
   const psZipCmd = `powershell -NoProfile -Command "Compress-Archive -Path '${STAGING_DIR}\\*' -DestinationPath '${zipPath}' -Force"`;
   runCommand('Portable Zip Archive Compression', psZipCmd);
   const zipStat = fs.statSync(zipPath);
   console.log(`✔ Created Portable Zip Package: ${zipPath} (${(zipStat.size / (1024 * 1024)).toFixed(2)} MB)`);
+
+  // 5b. Compile Self-Contained Setup Wizard embedding the complete production payload
+  const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+  const canonicalSetupExe = path.join(RELEASES_DIR, 'DiamondERP-Setup.exe');
+  const versionedSetupExe = path.join(RELEASES_DIR, `DiamondERP-${version}-Setup.exe`);
+  const installerCs = path.join(ROOT_DIR, 'installer', 'Installer.cs');
+  const iconPath = path.join(ROOT_DIR, 'installer', 'app.ico');
+  const manifestPath = path.join(ROOT_DIR, 'installer', 'Installer.manifest');
+
+  console.log(`Compiling self-contained Windows setup installer embedding payload archive...`);
+  const cscCmd = `"${cscPath}" /nologo /out:"${canonicalSetupExe}" /target:winexe /win32icon:"${iconPath}" /win32manifest:"${manifestPath}" /resource:"${zipPath}",DiamondERP.Payload.zip /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll "${installerCs}"`;
+  runCommand('Self-Contained Windows Setup Compilation', cscCmd);
+
+  fs.copyFileSync(canonicalSetupExe, versionedSetupExe);
+  const setupStat = fs.statSync(canonicalSetupExe);
+  console.log(`✔ Created Self-Contained Setup Installer: ${canonicalSetupExe} (${(setupStat.size / (1024 * 1024)).toFixed(2)} MB)`);
+  console.log(`✔ Created Versioned Setup Installer Alias: ${versionedSetupExe} (${(setupStat.size / (1024 * 1024)).toFixed(2)} MB)`);
 
   // Step 6: Generate Release Manifest & SHA256 Checksums
   logStep(6, 'Generate Release Manifest & Cryptographic Hashes');

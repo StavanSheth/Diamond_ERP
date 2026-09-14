@@ -226,12 +226,12 @@ async function main() {
     throw new Error(`Staged node.exe failed verification execution: ${err.message}`);
   }
 
-  // 8. Copy Backend (API) dist and runtime assets
+  // 8. Copy Backend (API) dist and runtime assets (excluding sourcemaps)
   const apiDest = path.join(STAGING_DIR, 'api');
   const apiDistSrc = path.join(ROOT_DIR, 'apps', 'api', 'dist');
   const apiDistDest = path.join(apiDest, 'dist');
-  copyDirRecursive(apiDistSrc, apiDistDest);
-  log('Copied: api/dist/');
+  copyDirRecursive(apiDistSrc, apiDistDest, (filename, isDir) => isDir || !filename.endsWith('.map'));
+  log('Copied: api/dist/ (sourcemaps excluded)');
 
   // Prisma schema and template
   const prismaDest = path.join(apiDest, 'prisma');
@@ -325,11 +325,11 @@ async function main() {
   const engineSizeMb = (fs.statSync(enginePath).size / (1024 * 1024)).toFixed(1);
   log(`✔ Staged Prisma query engine: ${enginePath} (${engineSizeMb} MB)`);
 
-  // 11. Copy Web (Frontend) production bundle
+  // 11. Copy Web (Frontend) production bundle (excluding sourcemaps)
   const webDistSrc = path.join(ROOT_DIR, 'apps', 'web', 'dist');
   const webDistDest = path.join(STAGING_DIR, 'web', 'dist');
-  copyDirRecursive(webDistSrc, webDistDest);
-  log('Copied: web/dist/');
+  copyDirRecursive(webDistSrc, webDistDest, (filename, isDir) => isDir || !filename.endsWith('.map'));
+  log('Copied: web/dist/ (sourcemaps excluded)');
 
   // 12. Verify Staging Completeness
   const requiredFiles = [

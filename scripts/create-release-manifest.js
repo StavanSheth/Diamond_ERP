@@ -71,6 +71,7 @@ function main() {
   const gitMeta = getGitMetadata();
 
   const targets = [
+    { name: 'DiamondERP-Setup.exe', path: path.join(RELEASES_DIR, 'DiamondERP-Setup.exe') },
     { name: `DiamondERP-${version}-Setup.exe`, path: path.join(RELEASES_DIR, `DiamondERP-${version}-Setup.exe`) },
     { name: `DiamondERP-${version}-Windows-x64.zip`, path: path.join(RELEASES_DIR, `DiamondERP-${version}-Windows-x64.zip`) },
     { name: 'Installer.exe', path: path.join(STAGING_DIR, 'Installer.exe') },
