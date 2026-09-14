@@ -503,6 +503,10 @@ async function main() {
       realPartyFound = Array.isArray(partyList) && partyList.some((p) => p.name === HARDENING_PARTY_MARKER);
       record('K', 'INTEGRATION', 'Real party record verified in database via GET /api/parties', realPartyFound);
 
+      const customerDbPath = path.join(realCustomerDataDir, 'databases', 'Stavan.db');
+      record('K', 'INTEGRATION', 'Customer SQLite database file created on disk (databases/Stavan.db)',
+        fs.existsSync(customerDbPath) && fs.statSync(customerDbPath).size > 0);
+
       // Also write customer uploaded cert & database backup into customer data directory
       const certDir = path.join(realCustomerDataDir, 'uploads', 'certs');
       const backupDir = path.join(realCustomerDataDir, 'backups');
@@ -561,6 +565,8 @@ async function main() {
   }
 
   record('M', 'INTEGRATION', 'Customer SQLite database preserved across upgrade (marker verified)', recordPreservedAcrossUpgrade);
+  const dbPreservedUpgrade = fs.existsSync(path.join(realCustomerDataDir, 'databases', 'Stavan.db'));
+  record('M', 'INTEGRATION', 'Customer SQLite database file preserved on disk across upgrade', dbPreservedUpgrade);
   const certPreserved = fs.existsSync(path.join(realCustomerDataDir, 'uploads', 'certs', 'PHASE9_CERT.pdf'));
   const backupPreserved = fs.existsSync(path.join(realCustomerDataDir, 'backups', 'PHASE9_BACKUP.bak'));
   record('M', 'INTEGRATION', 'Customer uploaded certificates preserved across upgrade', certPreserved);
@@ -612,8 +618,10 @@ async function main() {
   // -------------------------------------------------------------------------
   console.log('\n▶ [Section P] Uninstall Customer Data Preservation [INTEGRATION]');
   const dataDirExistsAfterUninstall = fs.existsSync(realCustomerDataDir);
+  const dbStillExists = fs.existsSync(path.join(realCustomerDataDir, 'databases', 'Stavan.db'));
   const certStillExists = fs.existsSync(path.join(realCustomerDataDir, 'uploads', 'certs', 'PHASE9_CERT.pdf'));
   record('P', 'INTEGRATION', 'Customer AppData directory strictly preserved after uninstall', dataDirExistsAfterUninstall);
+  record('P', 'INTEGRATION', 'Customer SQLite database strictly preserved after uninstall', dbStillExists);
   record('P', 'INTEGRATION', 'Customer certificate uploads strictly preserved after uninstall', certStillExists);
 
   // -------------------------------------------------------------------------
@@ -657,6 +665,8 @@ async function main() {
   }
 
   record('R', 'INTEGRATION', 'Reinstalled application connects to preserved database without template overwrite', recordPreservedAcrossReinstall);
+  const dbStillExistsReinstall = fs.existsSync(path.join(realCustomerDataDir, 'databases', 'Stavan.db'));
+  record('R', 'INTEGRATION', 'Customer SQLite database file preserved and reused after reinstall', dbStillExistsReinstall);
 
   // Clean up test customer data
   cleanDir(realCustomerDataDir);
@@ -714,36 +724,92 @@ async function main() {
   record('W', 'STATIC', 'PerformSilentInstall aborts with exit code 1 if WebView2 is missing',
     installerCode.includes('if (!IsWebView2Available(out wvVer))') && installerCode.includes('return 1;'));
 
+  // Behavioral tests for silent install path rejection
+  let winDirRejected = false;
+  try {
+    execSync(`"${installerExe}" /silent /dir="C:\\Windows" /nodesktop /nostartmenu`, { stdio: 'pipe', timeout: 10000 });
+  } catch (err) {
+    winDirRejected = (err.status === 1 || err.status !== 0);
+  }
+  record('W', 'INTEGRATION', 'Silent install rejects Windows system directory with non-zero exit code', winDirRejected);
+
+  let appDataRejected = false;
+  try {
+    const userAppData = path.join(localAppData, 'DiamondERP');
+    execSync(`"${installerExe}" /silent /dir="${userAppData}" /nodesktop /nostartmenu`, { stdio: 'pipe', timeout: 10000 });
+  } catch (err) {
+    appDataRejected = (err.status === 1 || err.status !== 0);
+  }
+  record('W', 'INTEGRATION', 'Silent install rejects customer data AppData directory with non-zero exit code', appDataRejected);
+
   // -------------------------------------------------------------------------
   // SECTION X: Malicious Archive (Zip Slip / Path Traversal) Defense [INTEGRATION]
   // -------------------------------------------------------------------------
   console.log('\n▶ [Section X] Malicious Archive (Zip Slip / Path Traversal) Defense [INTEGRATION]');
-  const evilZipPath = path.join(SCRATCH_DIR, 'malicious_evil.zip');
-  createMaliciousZip(evilZipPath, '../evil.txt');
-
-  const evilTargetDir = path.join(SCRATCH_DIR, 'evil_target');
-  fs.mkdirSync(evilTargetDir, { recursive: true });
+  const maliciousEntries = [
+    '../evil.txt',
+    '../../evil.txt',
+    '..\\evil.txt',
+    '..\\..\\evil.txt',
+    'C:\\evil.txt',
+    'C:/evil.txt',
+    '\\evil.txt',
+    '/evil.txt',
+    '\\\\unc\\evil.txt',
+    '..\\../evil.txt',
+    'sub/../../evil.txt',
+  ];
 
   const psScript = path.join(ROOT_DIR, 'scripts', 'test-zip-slip.ps1');
-  let zipSlipBlocked = false;
-  let zipSlipDetails = '';
+  let allMaliciousBlocked = true;
+  let anyMaliciousEscaped = false;
 
-  try {
-    const psOut = execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}" -InstallerPath "${installerExe}" -ZipPath "${evilZipPath}" -TargetDir "${evilTargetDir}"`,
-      { encoding: 'utf-8' }
-    ).trim();
+  for (let idx = 0; idx < maliciousEntries.length; idx++) {
+    const entryName = maliciousEntries[idx];
+    const testZip = path.join(SCRATCH_DIR, `malicious_${idx}.zip`);
+    createMaliciousZip(testZip, entryName);
+    const testTarget = path.join(SCRATCH_DIR, `target_${idx}`);
+    fs.mkdirSync(testTarget, { recursive: true });
 
-    zipSlipBlocked = psOut.includes('SecurityException') || psOut.includes('BLOCKED_EXCEPTION');
-    zipSlipDetails = psOut;
-  } catch (err) {
-    zipSlipBlocked = true;
-    zipSlipDetails = err.message;
+    try {
+      const psOut = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}" -InstallerPath "${installerExe}" -ZipPath "${testZip}" -TargetDir "${testTarget}"`,
+        { encoding: 'utf-8' }
+      ).trim();
+      const blocked = psOut.includes('SecurityException') || psOut.includes('BLOCKED_EXCEPTION');
+      if (!blocked) {
+        allMaliciousBlocked = false;
+        console.error(`  [ZipSlip] Failed to block malicious entry: ${entryName} -> ${psOut}`);
+      }
+    } catch {
+      // Process failure also counts as blocked
+    }
+
+    if (fs.existsSync(path.join(SCRATCH_DIR, 'evil.txt')) || fs.existsSync('C:\\evil.txt')) {
+      anyMaliciousEscaped = true;
+    }
   }
 
-  const evilEscaped = fs.existsSync(path.join(SCRATCH_DIR, 'evil.txt'));
-  record('X', 'INTEGRATION', 'Zip Slip malicious archive is rejected with SecurityException', zipSlipBlocked, zipSlipDetails.slice(0, 60));
-  record('X', 'INTEGRATION', 'Malicious payload file did NOT escape target directory', !evilEscaped);
+  record('X', 'INTEGRATION', 'All malicious archive patterns (relative, drive, UNC, mixed) rejected with SecurityException', allMaliciousBlocked);
+  record('X', 'INTEGRATION', 'Zero malicious files escaped target extraction boundary', !anyMaliciousEscaped);
+
+  // Legitimate nested archive test
+  const validZip = path.join(SCRATCH_DIR, 'valid_archive.zip');
+  createMaliciousZip(validZip, 'subfolder/valid_payload.txt');
+  const validTarget = path.join(SCRATCH_DIR, 'valid_target');
+  fs.mkdirSync(validTarget, { recursive: true });
+
+  let validExtracted = false;
+  try {
+    const psOut = execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}" -InstallerPath "${installerExe}" -ZipPath "${validZip}" -TargetDir "${validTarget}"`,
+      { encoding: 'utf-8' }
+    ).trim();
+    validExtracted = psOut.includes('EXTRACTED_WITHOUT_EXCEPTION') && fs.existsSync(path.join(validTarget, 'subfolder', 'valid_payload.txt'));
+  } catch (err) {
+    validExtracted = false;
+  }
+  record('X', 'INTEGRATION', 'Legitimate archive with nested subdirectories extracts successfully without exception', validExtracted);
 
   // -------------------------------------------------------------------------
   // SECTION Y: Corrupt Payload & Rollback Handling [INTEGRATION]

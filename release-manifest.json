@@ -3,10 +3,10 @@
   "version": "3.0.0",
   "platform": "win32",
   "architecture": "x64",
-  "buildDate": "2026-09-14T06:52:45.167Z",
+  "buildDate": "2026-09-14T07:15:37.780Z",
   "git": {
-    "commit": "63651a9bca3eeca3ac275a66c5d758bebbb864cd",
-    "shortCommit": "63651a9b",
+    "commit": "999f582828863a925d39b8cfe0950b7fa859e4eb",
+    "shortCommit": "999f5828",
     "branch": "v3"
   },
   "runtime": {
@@ -19,9 +19,9 @@
     "DiamondERP-Setup.exe": {
       "relativePath": "DiamondERP-Setup.exe",
       "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\releases\\DiamondERP-Setup.exe",
-      "sizeBytes": 62774272,
+      "sizeBytes": 62775296,
       "sizeMb": "59.87",
-      "sha256": "a515738c4df6f1fddf3443695a54863aec43cf442d74ddcba223b10319021426",
+      "sha256": "f5ff027e2e27cd037c1bb9180b236cc817c75e1dcdf46a5c21fd3320937dac33",
       "authenticode": {
         "signed": false,
         "status": "2",
@@ -35,9 +35,9 @@
     "DiamondERP-3.0.0-Setup.exe": {
       "relativePath": "DiamondERP-3.0.0-Setup.exe",
       "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\releases\\DiamondERP-3.0.0-Setup.exe",
-      "sizeBytes": 62774272,
+      "sizeBytes": 62775296,
       "sizeMb": "59.87",
-      "sha256": "a515738c4df6f1fddf3443695a54863aec43cf442d74ddcba223b10319021426",
+      "sha256": "f5ff027e2e27cd037c1bb9180b236cc817c75e1dcdf46a5c21fd3320937dac33",
       "authenticode": {
         "signed": false,
         "status": "2",
@@ -63,9 +63,9 @@
     "Installer.exe": {
       "relativePath": "Installer.exe",
       "absolutePath": "C:\\Projects\\ERP - Copy\\Test\\TestV3.0\\build\\windows\\DiamondERP\\Installer.exe",
-      "sizeBytes": 57856,
+      "sizeBytes": 58880,
       "sizeMb": "0.06",
-      "sha256": "d23d679f727d5ce48888d6ba1085c74b436b23a1ddd2a0e4289dde84365f1a8e",
+      "sha256": "89d47a4143a47d1f2db643f92cddb8a115ab620a27a3fc17d478abe357c9a33f",
       "authenticode": {
         "signed": false,
         "status": "2",

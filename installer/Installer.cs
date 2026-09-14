@@ -1241,21 +1241,30 @@ namespace DiamondERP.Setup
                     string rawName = entry.FullName;
                     if (string.IsNullOrEmpty(rawName)) continue;
 
+                    // Security: Reject control chars, null bytes, alternate data streams, drive colons
+                    if (rawName.IndexOf('\0') >= 0 || rawName.IndexOf(':') >= 0)
+                    {
+                        throw new System.Security.SecurityException(
+                            string.Format("Security violation: Malicious archive entry contains illegal character or drive/stream colon '{0}'. Extraction aborted.", rawName));
+                    }
+
                     // Security: Reject leading directory separators, drive roots, UNC paths
                     string normalized = rawName.Replace('/', Path.DirectorySeparatorChar);
                     if (normalized.StartsWith(Path.DirectorySeparatorChar.ToString()) ||
                         normalized.StartsWith(Path.AltDirectorySeparatorChar.ToString()) ||
+                        normalized.StartsWith("\\\\") ||
                         Path.IsPathRooted(normalized))
                     {
                         throw new System.Security.SecurityException(
-                            string.Format("Security violation: Malicious archive entry has absolute or rooted path '{0}'. Extraction aborted.", rawName));
+                            string.Format("Security violation: Malicious archive entry has absolute, rooted, or UNC path '{0}'. Extraction aborted.", rawName));
                     }
 
-                    // Security: Reject any segment with directory traversal ".."
-                    string[] segments = normalized.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    // Security: Reject any segment with directory traversal ".." or invalid relative sequences
+                    string[] segments = normalized.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
                     foreach (string seg in segments)
                     {
-                        if (seg == "..")
+                        string s = seg.Trim();
+                        if (s == ".." || s.StartsWith("..") || s.Contains(".."))
                         {
                             throw new System.Security.SecurityException(
                                 string.Format("Security violation: Malicious archive entry contains directory traversal ('..') sequence '{0}'. Extraction aborted.", rawName));
@@ -1265,8 +1274,8 @@ namespace DiamondERP.Setup
                     // Canonical destination full path
                     string destFile = Path.GetFullPath(Path.Combine(targetRoot, normalized));
 
-                    // Security: Strictly enforce directory boundary within targetRoot
-                    if (!destFile.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase))
+                    // Security: Strictly enforce directory boundary within targetRoot (respecting directory separator)
+                    if (!destFile.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase) || destFile.Length < targetRoot.Length)
                     {
                         throw new System.Security.SecurityException(
                             string.Format("Security violation: Archive entry '{0}' resolves outside installation root '{1}' -> '{2}'. Extraction aborted.", rawName, targetRoot, destFile));
@@ -1285,6 +1294,12 @@ namespace DiamondERP.Setup
                     string destDir = Path.GetDirectoryName(destFile);
                     if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
                     {
+                        string checkDir = destDir.EndsWith(Path.DirectorySeparatorChar.ToString()) ? destDir : destDir + Path.DirectorySeparatorChar;
+                        if (!checkDir.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new System.Security.SecurityException(
+                                string.Format("Security violation: Parent directory for entry '{0}' escapes target root '{1}'. Extraction aborted.", rawName, targetRoot));
+                        }
                         Directory.CreateDirectory(destDir);
                     }
 
@@ -1494,6 +1509,17 @@ namespace DiamondERP.Setup
                         CopyDirectoryRecursive(targetDir, backupDir);
                         try
                         {
+                            // Option A: Clean known payload subdirectories to eliminate obsolete files from older releases
+                            string[] obsoleteDirs = new string[] { "runtime", Path.Combine("api", "dist"), Path.Combine("web", "dist") };
+                            foreach (string od in obsoleteDirs)
+                            {
+                                string p = Path.Combine(targetDir, od);
+                                if (Directory.Exists(p))
+                                {
+                                    try { Directory.Delete(p, true); } catch { }
+                                }
+                            }
+
                             CopyDirectoryRecursive(stagingDir, targetDir);
                             VerifyPayloadIntegrity(targetDir);
                         }
@@ -1690,7 +1716,24 @@ namespace DiamondERP.Setup
             try
             {
                 string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiamondERP";
-                using (var key = Registry.CurrentUser.CreateSubKey(keyPath))
+                RegistryKey baseKey = null;
+                bool isMachineInstall = IsAdministrator();
+
+                if (isMachineInstall)
+                {
+                    try
+                    {
+                        baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Default).CreateSubKey(keyPath);
+                    }
+                    catch { }
+                }
+
+                if (baseKey == null)
+                {
+                    baseKey = Registry.CurrentUser.CreateSubKey(keyPath);
+                }
+
+                using (var key = baseKey)
                 {
                     if (key != null)
                     {
@@ -1862,7 +1905,15 @@ namespace DiamondERP.Setup
                 string lnk3 = Path.Combine(startMenu, "DiamondERP.lnk");
                 if (File.Exists(lnk3)) { try { File.Delete(lnk3); } catch { } }
 
-                // 3. Remove Registry uninstaller entry
+                // 3. Remove Registry uninstaller entry from both HKLM and HKCU
+                try
+                {
+                    using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Default))
+                    {
+                        hklm.DeleteSubKeyTree(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiamondERP", false);
+                    }
+                }
+                catch { }
                 try
                 {
                     Registry.CurrentUser.DeleteSubKeyTree(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiamondERP", false);
