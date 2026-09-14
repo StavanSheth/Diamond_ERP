@@ -687,39 +687,72 @@ namespace DiamondERP.Setup
             wizardBodyPanel.Controls.Add(pages[6]);
         }
 
-        private void CheckPrerequisites()
+        public static bool IsWebView2Available(out string version)
         {
+            version = "";
+            string[] subKeys = new string[]
+            {
+                @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+                @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+            };
+
+            // Check HKLM 64-bit and 32-bit registry views
             try
             {
-                // Check WebView2 Runtime in registry (both 64-bit and 32-bit hives)
-                using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+                foreach (var sk in subKeys)
                 {
-                    if (key != null)
-                    {
-                        object val = key.GetValue("pv");
-                        if (val != null && !string.IsNullOrEmpty(val.ToString()))
-                        {
-                            webView2Version = val.ToString();
-                            isWebView2Installed = true;
-                        }
-                    }
-                }
-                if (!isWebView2Installed)
-                {
-                    using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+                    using (var key = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64).OpenSubKey(sk))
                     {
                         if (key != null)
                         {
                             object val = key.GetValue("pv");
-                            if (val != null && !string.IsNullOrEmpty(val.ToString()))
+                            if (val != null && !string.IsNullOrEmpty(val.ToString()) && val.ToString() != "0.0.0.0")
                             {
-                                webView2Version = val.ToString();
-                                isWebView2Installed = true;
+                                version = val.ToString();
+                                return true;
+                            }
+                        }
+                    }
+                    using (var key = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32).OpenSubKey(sk))
+                    {
+                        if (key != null)
+                        {
+                            object val = key.GetValue("pv");
+                            if (val != null && !string.IsNullOrEmpty(val.ToString()) && val.ToString() != "0.0.0.0")
+                            {
+                                version = val.ToString();
+                                return true;
                             }
                         }
                     }
                 }
-            } catch { }
+            }
+            catch { }
+
+            // Check HKCU
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+                {
+                    if (key != null)
+                    {
+                        object val = key.GetValue("pv");
+                        if (val != null && !string.IsNullOrEmpty(val.ToString()) && val.ToString() != "0.0.0.0")
+                        {
+                            version = val.ToString();
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private void CheckPrerequisites()
+        {
+            isWebView2Installed = IsWebView2Available(out webView2Version);
         }
 
         private void ShowPage(int pageIndex)
@@ -809,8 +842,8 @@ namespace DiamondERP.Setup
 
             summary += "\r\nSystem Prerequisites:\r\n";
             summary += isWebView2Installed 
-                ? "      WebView2 Runtime: v" + webView2Version + " (Detected)\r\n" 
-                : "      WebView2 Runtime: Recommended (Evergreen)\r\n";
+                ? "      WebView2 Runtime: v" + webView2Version + " (Required - Detected)\r\n" 
+                : "      WebView2 Runtime: Required (Evergreen — NOT DETECTED)\r\n";
             summary += "      Architecture: Standalone Desktop (Pre-compiled, no dev tools needed)\r\n";
 
             txtSummary.Text = summary;
@@ -818,6 +851,18 @@ namespace DiamondERP.Setup
 
         private void BtnNext_Click(object sender, EventArgs e)
         {
+            if (currentPage == 0 && !isWebView2Installed)
+            {
+                MessageBox.Show(
+                    "DiamondERP requires Microsoft Edge WebView2 Runtime to display the application.\n\n" +
+                    "Please install Microsoft Edge WebView2 Runtime and start Setup again.",
+                    "WebView2 Runtime Required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+
             if (currentPage < 5)
             {
                 ShowPage(currentPage + 1);
@@ -873,6 +918,11 @@ namespace DiamondERP.Setup
                     SetInstallStatus("Validating environment...", 20);
                     AppendLog("[1/4] Validating offline standalone installation environment...");
                     Thread.Sleep(200);
+
+                    if (!isWebView2Installed)
+                    {
+                        throw new InvalidOperationException("Microsoft Edge WebView2 Runtime is required to run DiamondERP, but was not detected on this computer.\r\n\r\nPlease install Microsoft Edge WebView2 Runtime before installing DiamondERP.");
+                    }
 
                     // Check elevation if target is in Program Files
                     string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -1165,6 +1215,14 @@ namespace DiamondERP.Setup
                 {
                     string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
                     targetDir = Path.Combine(pf, "DiamondERP");
+                }
+
+                // WebView2 Prerequisite Check for Silent Install
+                string wvVer;
+                if (!IsWebView2Available(out wvVer))
+                {
+                    Console.Error.WriteLine("Error: DiamondERP requires Microsoft Edge WebView2 Runtime, but it was not detected on this system. Installation aborted.");
+                    return 1;
                 }
 
                 // Elevation Safety Check for System Folders
