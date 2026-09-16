@@ -19,6 +19,7 @@ import { createAuthRouter } from './modules/auth/auth.routes';
 import diamondRouter from './modules/diamonds/diamond.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import systemRoutes from './modules/system/system.routes';
+import { lifecycleController } from './modules/system/lifecycle.controller';
 import { authenticate } from './middleware/auth';
 import { profileMiddleware, optionalProfileMiddleware } from './middleware/profile';
 import { idempotencyMiddleware } from './middleware/idempotency';
@@ -27,7 +28,7 @@ import { idempotencyMiddleware } from './middleware/idempotency';
  * Route aggregator — registers all application routes.
  * 
  * Security architecture:
- *   - /health (with /liveness and /readiness) and /api/auth (login, bootstrap) are PUBLIC
+ *   - /health, /api/auth, and /api/system/lifecycle (probe) are PUBLIC
  *   - All other /api/* routes run through `protectedStack` [authenticate, profileMiddleware, idempotencyMiddleware]:
  *       1. Authenticate user via JWT & session check
  *       2. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
@@ -50,6 +51,7 @@ export function createRoutes(
   // ── Public routes (no authentication) ────────────────────────────────
   router.use('/health', createHealthRouter(healthController));
   router.use('/api/auth', createAuthRouter());
+  router.get('/api/system/lifecycle', lifecycleController.getLifecycleStatus);
 
   // ── Protected routes requiring explicit profile context ───────────────
   const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];

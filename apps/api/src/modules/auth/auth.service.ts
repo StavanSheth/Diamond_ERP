@@ -441,6 +441,71 @@ export class AuthService {
   }
 
   /**
+   * Safe user deactivation (Phase 2 foundation).
+   * Soft-deletes user record and revokes sessions without touching SQLite database files.
+   * Guarantees: DELETE USER != DELETE DATABASE.
+   */
+  async deactivateUser(userId: string): Promise<{ id: string; username: string; isActive: boolean; deletedAt: Date | null }> {
+    const user = await systemPrisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new AuthenticationError('User not found');
+    }
+
+    const now = new Date();
+    await systemPrisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          isActive: false,
+          deletedAt: now,
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      // Revoke all active sessions
+      await tx.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+    });
+
+    logger.info(`User deactivated (soft-deleted): ${user.username} (${user.id}). Database files remain strictly preserved.`);
+
+    return {
+      id: user.id,
+      username: user.username,
+      isActive: false,
+      deletedAt: now,
+    };
+  }
+
+  /**
+   * Reactivate a previously deactivated user.
+   */
+  async reactivateUser(userId: string): Promise<{ id: string; username: string; isActive: boolean }> {
+    const user = await systemPrisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new AuthenticationError('User not found');
+    }
+
+    await systemPrisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    logger.info(`User reactivated: ${user.username} (${user.id})`);
+
+    return {
+      id: user.id,
+      username: user.username,
+      isActive: true,
+    };
+  }
+
+  /**
    * Seed a default admin user and default profile if database contains no users.
    */
   async seedDefaultAdmin(): Promise<void> {

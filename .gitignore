@@ -15,6 +15,7 @@ build/
 .profile-config.json
 .app-activation.json
 .app-profile/
+.installation-id
 
 # IDE
 .vscode/

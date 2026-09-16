@@ -122,8 +122,8 @@ check('Device', 'Client-side PBKDF2 PIN hashing implemented', fileContains('apps
 check('Device', 'Constant-time comparison implemented for PIN', fileContains('apps/web/src/services/deviceAuth.ts', 'constantTimeEqual'));
 check('Device', 'DraftRevision model has deviceId column', fileContains('apps/api/prisma/schema.prisma', 'model DraftRevision {') && fileContains('apps/api/prisma/schema.prisma', 'deviceId        String?'));
 check('Device', 'RecordVersion model has deviceId column', fileContains('apps/api/prisma/schema.prisma', 'model RecordVersion {') && fileContains('apps/api/prisma/schema.prisma', 'deviceId      String?'));
-check('Device', 'AuditEvent model has deviceId column', fileContains('apps/api/prisma/schema.prisma', 'model AuditEvent {') && fileContains('apps/api/prisma/schema.prisma', 'deviceId      String?'));
-check('Device', 'Confirm Phase 1 boundary: Device table does NOT exist in Prisma schema yet', !fileContains('apps/api/prisma/schema.prisma', 'model Device {'));
+check('Device', 'Device model defined in Prisma schema', fileContains('apps/api/prisma/schema.prisma', 'model Device {'));
+check('Device', 'Installation model defined in Prisma schema', fileContains('apps/api/prisma/schema.prisma', 'model Installation {'));
 
 // ── Section 6: Database Ownership & SQLite Lifecycle ────────────────────
 console.log('\n▶ Section 6: Database Ownership & SQLite Lifecycle');

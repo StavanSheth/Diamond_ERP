@@ -8,6 +8,43 @@ datasource db {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// LIFECYCLE & DEVICE FOUNDATION (PHASE 2)
+// ═══════════════════════════════════════════════════════════════
+
+model Installation {
+  id              String    @id @default(uuid())
+  installationId  String    @unique
+  appVersion      String    @default("3.0.0")
+  status          String    @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED
+  lifecycleState  String    @default("NOT_INITIALIZED") // NOT_INITIALIZED, APP_SETUP, PIN_SETUP, DEVICE_SETUP, USER_DISCOVERY, DATABASE_DISCOVERY, DATABASE_VALIDATION, DATABASE_SETUP, READY
+  initializedAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  devices         Device[]
+
+  @@index([status])
+  @@index([lifecycleState])
+}
+
+model Device {
+  id              String       @id @default(uuid())
+  installationId  String
+  deviceName      String
+  platform        String       @default("WINDOWS")
+  osVersion       String?
+  status          String       @default("ACTIVE") // ACTIVE, REVOKED, PENDING
+  lastSeenAt      DateTime     @default(now())
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════════════
 // AUTHENTICATION & AUTHORIZATION
 // ═══════════════════════════════════════════════════════════════
 
@@ -20,6 +57,7 @@ model User {
   isActive     Boolean   @default(true)
   tokenVersion Int       @default(1)
   lastLoginAt  DateTime?
+  deletedAt    DateTime? // Safe soft-deletion timestamp
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -30,14 +68,17 @@ model User {
 }
 
 model Profile {
-  id          String   @id @default(uuid())
-  code        String   @unique // e.g. "stavan", "stuti"
-  name        String
-  description String?
-  dbPath      String?  // Server-controlled absolute or relative path to DB file
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(uuid())
+  code            String   @unique // e.g. "stavan", "stuti"
+  name            String
+  description     String?
+  dbPath          String?  // Server-controlled absolute or relative path to DB file
+  schemaVersion   Int      @default(1)
+  status          String   @default("ACTIVE") // ACTIVE, INACTIVE, ORPHANED, UNAVAILABLE, INVALID, CORRUPTED, UNSUPPORTED
+  lastValidatedAt DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   userProfiles UserProfile[]
 }

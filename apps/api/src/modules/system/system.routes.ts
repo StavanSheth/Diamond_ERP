@@ -1,15 +1,17 @@
 import { Router } from 'express';
 import { activationController } from './activation.controller';
+import { lifecycleController } from './lifecycle.controller';
 import { authorize } from '../../middleware/authorize';
 
 const router = Router();
 
-// Notice: activation-status and activate are typically used before the app is fully configured
-// But they are mounted under /api/system which requires authenticate in routes.ts
-// Depending on design, these might need to be moved to public routes if they should be accessible
-// before the first user logs in. For now, requiring system.activate role.
-
+// Notice: activation-status and activate are used for software lock
 router.get('/activation-status', authorize('system.activate'), activationController.getActivationStatus);
 router.post('/activate', authorize('system.activate'), activationController.activate);
+
+// Protected installation & device lifecycle management
+router.get('/installation', authorize('settings.read'), lifecycleController.getInstallation);
+router.post('/lifecycle-state', authorize('settings.update'), lifecycleController.updateLifecycleState);
+router.post('/device', authorize('settings.update'), lifecycleController.registerDevice);
 
 export default router;
