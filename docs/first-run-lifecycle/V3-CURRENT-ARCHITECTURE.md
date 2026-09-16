@@ -63,35 +63,156 @@ c:\Projects\ERP - Copy\Test\TestV3.0\
 
 ---
 
-## 3. Frontend Architecture
+## 3. Frontend Architecture (Code-Level Audit)
 
-- **Framework & Libraries:**
-  - **React:** `19.1.0` ([`apps/web/package.json`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/package.json))
-  - **Vite:** `6.4.3` (bundler and dev server)
-  - **Routing:** `react-router-dom` `7.5.0`
-  - **Styling:** Vanilla CSS design system + TailwindCSS utilities ([`apps/web/src/index.css`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/index.css))
-- **Entry & Layout:**
-  - Entry Point: [`apps/web/src/main.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/main.tsx) mounting `<App />` inside `React.StrictMode` and `BrowserRouter`.
-  - Root Component: [`apps/web/src/App.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/App.tsx)
-  - Layout Wrapper: Horizontal desktop split with collapsible liquid-glass [`Sidebar`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/layout/Sidebar.tsx) and main content area managed by [`TopBar`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/layout/TopBar.tsx).
-- **Existing Route Map:**
-  - `/` -> [`DashboardPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/DashboardPage.tsx)
-  - `/inventory` -> [`InventoryPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/InventoryPage.tsx)
-  - `/ledger` -> [`LedgerPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/LedgerPage.tsx)
-  - `/certificates` -> [`CertificatesPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/CertificatesPage.tsx)
-  - `/parties` -> [`PartiesPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/PartiesPage.tsx)
-  - `/repairs` -> [`RepairsPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/RepairsPage.tsx)
-  - `/reports` -> [`ReportsPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/ReportsPage.tsx)
-  - `/settings` -> [`SettingsPage`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/SettingsPage.tsx)
-  - `*` -> Catch-all fallback navigation redirect to `/`.
-- **Global Contexts & Overlays:**
-  - [`AuthProvider`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AuthContext.tsx): Manages active token, logged-in user state, active profile (`diamond_erp_active_profile_id`), and auto-hydrates from `sessionStore`. Falls back to hardcoded `DEFAULT_USER` (`stavan`, `SUPER_ADMIN`).
-  - [`AppLockProvider`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AppLockContext.tsx): Manages auto-lock timeouts (idle timer), PIN lock state, and lock overlay visibility.
-  - [`FirstRunActivationOverlay`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/security/FirstRunActivationOverlay.tsx): Fullscreen master password lock on initial launch checking `/api/system/activation-status`.
-- **API Client:**
-  - Located at [`apps/web/src/services/api/client.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/api/client.ts) and [`apps/web/src/services/api.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/api.ts).
-  - Automatically attaches `Authorization: Bearer <token>` and `X-Profile-Id: <activeProfile>`.
-  - Base URL defaults to empty string `''` in production (relative loopback `/api`) and proxy port `5175` -> `3002` in development.
+### 3.1 Complete Frontend Source Tree (`apps/web/src/`)
+
+```
+apps/web/src/
+├── components/                  # Global and Shared UI Components
+│   ├── layout/                  # Application Shell & Navigation
+│   │   ├── Sidebar.tsx          # Liquid-glass collapsible navigation dock with pop-out colorful icons
+│   │   └── TopBar.tsx           # Mobile / desktop header with sync status and manual refresh trigger
+│   ├── security/                # Security & Access Guards
+│   │   ├── FirstRunActivationOverlay.tsx  # Master password lifetime activation shield
+│   │   └── AppLockOverlay.tsx   # PIN & Windows Hello biometric workstation screen-lock
+│   └── ui/                      # Reusable atom components (badges, modals, cards, inputs)
+├── contexts/                    # Global React Context Providers
+│   ├── AuthContext.tsx          # User session, JWT hydration, profile switching, DEFAULT_USER fallback
+│   └── AppLockContext.tsx       # Idle inactivity timer, WebAuthn integration, PIN verification
+├── domains/                     # Domain-Driven ERP Modules
+│   ├── common/                  # Shared domain buttons and pagination hooks (useEntityPage.ts)
+│   ├── inventory/               # Diamond item modals, filter drawers, stock cards, detail drawers
+│   ├── ledger/                  # Double-entry ledger views, payment summaries, transaction registers
+│   ├── parties/                 # Party modal, party types (CUSTOMER, SUPPLIER, WORKSHOP, BROKER)
+│   ├── repairs/                 # Workshop repair modals, carat loss trackers, vendor assignments
+│   ├── reports/                 # KPI analytics charts, report filter sections, preset cards
+│   └── transactions/            # Multi-item transaction composer, brokerage calculator, payment splits
+├── hooks/                       # Domain & Data Synchronization Hooks
+│   ├── useStocks.ts             # Primary stock parcel fetcher, CRUD, sync status tracker
+│   ├── useLocations.ts          # Physical stock location hierarchy resolver
+│   ├── useDrafts.ts             # In-memory and IndexedDB draft state manager
+│   ├── useDraftAutoSave.ts      # Periodic background autosave trigger for open forms
+│   └── useReferenceData.ts      # Party, category, and currency lookup caches
+├── pages/                       # Primary Route View Controllers (React Router DOM)
+│   ├── DashboardPage.tsx        # High-level inventory KPI cards, recent transactions, stock summaries
+│   ├── InventoryPage.tsx        # Diamond parcel catalog, search filters, carat/price aggregations
+│   ├── LedgerPage.tsx           # Financial transactions, receivables/payables, balance reconciliation
+│   ├── CertificatesPage.tsx     # Lab report tracking (GIA, IGI, HRD), document viewer, upload dropzone
+│   ├── PartiesPage.tsx          # Business entity directory, GSTIN records, ledger statement access
+│   ├── RepairsPage.tsx          # Workshop job tracking, polish/symmetry recut monitoring
+│   ├── ReportsPage.tsx          # Comprehensive financial, inventory, and transaction reports
+│   └── SettingsPage.tsx         # System settings, manual SQLite WAL checkpoint, database backup
+├── services/                    # Client Services & Local Data Stores
+│   ├── api.ts                   # Centralized API service aggregator
+│   ├── deviceAuth.ts            # WebAuthn platform authenticator (Windows Hello) & PBKDF2 PIN hashing
+│   ├── draftDb.ts               # Dexie.js (IndexedDB) client-side offline autosave & draft store
+│   └── api/                     # Domain-specific REST API client wrappers
+│       ├── client.ts            # Fetch wrapper, bearer auth, X-Profile-Id attachment, sessionStore
+│       ├── auth.api.ts          # Login, bootstrap, change-password API calls
+│       ├── stocks.api.ts        # Stock CRUD API endpoints
+│       ├── ledger.api.ts        # Ledger & financial API endpoints
+│       ├── parties.api.ts       # Party directory API endpoints
+│       ├── repairs.api.ts       # Workshop repair API endpoints
+│       ├── certificates.api.ts  # Certificate & PDF upload API endpoints
+│       ├── reports.api.ts       # Report definitions & Excel download API endpoints
+│       └── settings.api.ts      # System settings, WAL checkpoint, backup API endpoints
+├── types/                       # TypeScript Domain Definitions & Enums
+├── utils/                       # Utility functions (blob downloads, currency formatters, floral colors)
+├── App.tsx                      # Root component, provider tree, security overlays, route definitions
+├── main.tsx                     # Vite DOM mount entry point (React.StrictMode, BrowserRouter)
+└── index.css                    # Design system tokens, liquid-glass CSS styles, TailwindCSS directives
+```
+
+### 3.2 Authoritative Startup Rendering Flow
+
+```text
+Browser / WebView2 Host (Navigates to http://127.0.0.1:3002/)
+    ↓
+index.html (Loads /src/main.tsx)
+    ↓
+main.tsx (Initializes React 19 root)
+    ↓
+<BrowserRouter>
+    ↓
+<AuthProvider> (Checks sessionStore.getToken() in localStorage: 'diamond_erp_auth_token')
+    ├─ If Token Found: Calls GET /api/auth/me to hydrate User state
+    └─ If No Token: Defaults state to DEFAULT_USER (stavan / SUPER_ADMIN)
+    ↓
+<AppLockProvider> (Reads localStorage: 'appLock_enabled', 'appLock_timeout', 'appLock_locked')
+    ├─ Checks isPlatformAuthenticatorAvailable() (Windows Hello / Platform Credential)
+    └─ Evaluates elapsed inactivity against 'appLock_lastActive'
+    ↓
+<AppContent>
+    ├─ <FirstRunActivationOverlay />
+    │    └─ Queries GET /api/system/activation-status
+    │         ├─ If Unactivated: Renders modal blocking ALL user interaction
+    │         └─ If Activated: Stores 'diamond_erp_lifetime_activated' = 'true', unblocks
+    ├─ <AppLockOverlay />
+    │    └─ If isLocked === true: Renders fullscreen workstation shield requiring PIN / Windows Hello
+    ├─ <Sidebar /> (Collapsible desktop dock with liquid-glass aesthetic)
+    ├─ <TopBar /> (Mobile header & manual sync trigger)
+    └─ <Routes> (Renders active page component based on window.location.pathname)
+```
+
+### 3.3 Complete Route & Authentication Mapping
+
+| Route | Component | Layout Wrapper | Auth / Security Requirement | Data Loading Behavior |
+|---|---|---|---|---|
+| `/` | `DashboardPage` | Shell (`Sidebar` + `TopBar`) | Requires Token (or `DEFAULT_USER` dev fallback) | Fetches stocks summary via `useStocks()` hook on mount |
+| `/inventory` | `InventoryPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches parcels, categories, locations via `useStocks()` |
+| `/ledger` | `LedgerPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches transactions, party balances, payment summaries |
+| `/certificates` | `CertificatesPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches GIA/IGI certificates, pending submissions |
+| `/parties` | `PartiesPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches customer, supplier, and workshop party directory |
+| `/repairs` | `RepairsPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches active repair jobs, recutting carat logs |
+| `/reports` | `ReportsPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches report definitions, KPI summaries, chart datasets |
+| `/settings` | `SettingsPage` | Shell (`Sidebar` + `TopBar`) | Requires Token | Fetches system settings, profile list, backup logs |
+| `*` | `<Navigate to="/" replace />` | None | Fallback | Redirects any unknown route to `/` |
+
+### 3.4 Local Browser Storage & Persistence Audit
+
+The frontend relies on two client-side storage mechanisms:
+
+#### A. LocalStorage Keys:
+- `diamond_erp_auth_token`: Holds the active JWT bearer token for backend API requests.
+- `diamond_erp_active_profile_id`: Holds the active multi-tenant profile code (e.g. `'Stavan'`) attached as `X-Profile-Id`.
+- `diamond_erp_lifetime_activated`: Cached boolean flag (`'true'`) indicating master password unlock status.
+- `appLock_enabled`: Boolean flag indicating whether the workstation screen shield is enabled.
+- `appLock_timeout`: Inactivity timeout duration in minutes (clamped between 1 and 525,600 minutes).
+- `appLock_locked`: Boolean flag indicating whether the screen lock is currently engaged.
+- `appLock_credentialId`: Base64URL credential ID for WebAuthn platform authenticator (Windows Hello).
+- `appLock_pinHash`: PBKDF2 salted hash (`salt:hex` format, 100,000 iterations) for fallback workstation PIN.
+- `appLock_lastActive`: Timestamp (milliseconds) of user's last keyboard/mouse activity.
+
+#### B. IndexedDB Client Store (`Dexie.js` in `apps/web/src/services/draftDb.ts`):
+- Database Name: `DiamondERP_DraftDB`
+- Tables:
+  - `drafts`: Stores offline uncommitted business entity drafts (`TRANSACTION`, `STOCK`, `CERTIFICATION`, `REPAIR`).
+  - `revisions`: Stores point-in-time snapshots and JSON diff changesets for document recovery.
+  - `syncQueue`: Offline mutation queue storing pending actions (`CREATE`, `SAVE_REVISION`, `COMMIT`) with retry counters.
+
+### 3.5 API Client Architecture & Tenancy Routing
+
+- **Implementation:** [`apps/web/src/services/api/client.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/api/client.ts)
+- **Base URL Resolution:**
+  - Production (WebView2): Resolves to empty string `''` (relative loopback `http://127.0.0.1:3002`).
+  - Development (Vite): Routes through Vite proxy `http://localhost:5175/api` -> `http://127.0.0.1:3002/api`.
+- **Header Injection:**
+  Every outgoing request automatically injects:
+  - `Authorization: Bearer <token>` (from `sessionStore.getToken()`)
+  - `X-Profile-Id: <profileCode>` (from `sessionStore.getProfileId()` or `'Stavan'`)
+  - `Content-Type: application/json`
+- **Error & Session Handling:**
+  - Intercepts HTTP `401 Unauthorized`: Clears `diamond_erp_auth_token` from localStorage and dispatches a window event `'unauthorized'` to reset `AuthContext` without redirect loops.
+  - Profile switching: When switching profiles via `sessionStore.setProfileId(code)`, dispatches `'profileChanged'` event causing all active queries and hooks to refetch against the new tenant database.
+
+### 3.6 Recommended Future Onboarding Integration Point
+
+- **Target Component:** [`apps/web/src/App.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/App.tsx#L18-L48)
+- **Mechanism:**
+  Insert an `<OnboardingWizard />` container above the primary `<main>` layout.
+  When the application initializes, query `GET /api/system/onboarding-status`.
+  If the installation is unconfigured (`isInitialized === false`), render the Onboarding Wizard full-screen, bypassing the standard ERP shell until device binding, PIN creation, and database selection are committed.
 
 ---
 

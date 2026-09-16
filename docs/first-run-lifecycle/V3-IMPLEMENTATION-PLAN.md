@@ -8,23 +8,62 @@
 
 ---
 
-## 1. Mandatory Data Safety Invariants
+## 1. Mandatory Data Safety Invariants (Section 22 Alignment)
 
-Every future phase MUST strictly comply with these 13 invariants. Any proposed code change that violates these invariants is considered a critical security and integrity regression:
+Every future phase MUST strictly comply with these 12 data safety invariants:
 
-1. **INVARIANT 1 (User-Database Isolation):** Creating a new user creates a completely new, blank SQLite database provisioned from the verified template.
-2. **INVARIANT 2 (Zero Inheritance):** A newly created user must never inherit or automatically connect to another user's database file.
-3. **INVARIANT 3 (Explicit Discovery Only):** An existing database file must never be attached automatically simply because its filename matches a pattern or looks relevant.
-4. **INVARIANT 4 (Pre-Attachment Validation):** Every SQLite database file must undergo cryptographic header validation, schema parity check, and `PRAGMA integrity_check` before it can be attached.
-5. **INVARIANT 5 (User Consent for Attachment):** Database attachment requires explicit, affirmative user confirmation in the user interface.
-6. **INVARIANT 6 (Non-Destructive User Deletion):** Deleting a user or changing a profile name **MUST NEVER delete the underlying SQLite database file** on disk.
-7. **INVARIANT 7 (Uninstall Data Preservation):** Uninstallation must preserve or back up all user data located under `%LOCALAPPDATA%\DiamondERP`.
-8. **INVARIANT 8 (Pre-Uninstall Backup Verification):** If a destructive uninstall or reset is requested, a full database backup must be created and verified before any deletion proceeds.
-9. **INVARIANT 9 (Native Recoverability):** All SQLite database files must remain standard, unencrypted, and fully recoverable using standard SQLite tools (`sqlite3.exe`).
-10. **INVARIANT 10 (Restart Resilience):** First-run configuration, activation, and onboarding states must survive application restarts and system reboots.
-11. **INVARIANT 11 (No Plaintext PINs):** User PINs must never be stored in plaintext. PINs must be hashed using salted `bcryptjs` with work factor >= 10.
-12. **INVARIANT 12 (Log/Export Sanitization):** PINs, passwords, and encryption keys must never appear in application logs, error messages, or exported files.
-13. **INVARIANT 13 (Zero Business Logic Regression):** All existing ERP modules (Stock, Ledger, Parties, Repairs, Certificates, Transactions, Reports) must remain 100% backward compatible and unchanged.
+- **I1:** New user → new blank database.
+- **I2:** New user cannot inherit an unrelated database automatically.
+- **I3:** Existing DB must be validated before attachment.
+- **I4:** Existing DB attachment requires explicit confirmation.
+- **I5:** Deleting a user never deletes the database.
+- **I6:** Uninstall must not silently destroy user data.
+- **I7:** Backup must be verified before destructive removal where the final product policy requires it.
+- **I8:** Native SQLite backup should remain available.
+- **I9:** First-run state must survive restart.
+- **I10:** PIN must never be plaintext.
+- **I11:** PIN must never be exported.
+- **I12:** Existing ERP functionality must remain unchanged.
+
+---
+
+## 1.1 Conceptual Future Architecture Map (Section 21)
+
+> [!NOTE]
+> **PROPOSED FUTURE ARCHITECTURE — NOT IMPLEMENTED IN PHASE 1**
+
+```
+INSTALLATION
+      │
+      ▼
+DEVICE
+      │
+      ▼
+USER
+      │
+      ▼
+USER ↔ DATABASE
+      │
+      ▼
+SQLITE
+```
+
+And for lifecycle cleanup:
+
+```
+UNINSTALL
+    │
+    ▼
+BACKUP
+    │
+ ┌──┴────┐
+ ▼       ▼
+SQLite  Excel/CSV
+    │
+    ▼
+Application removal
+```
+
 
 ---
 

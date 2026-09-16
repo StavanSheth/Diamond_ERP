@@ -1,60 +1,132 @@
-# Diamond ERP V3.0 — File Impact Map
+# Diamond ERP V3.0 — File Impact Map (Phases 2–8)
 
-> **Phase 1 Audit Artifact**  
+> **Phase 1 Audit Artifact — Authoritative Implementation Matrix**  
 > **Repository:** `https://github.com/StavanSheth/Diamond_ERP`  
 > **Branch:** `v3`  
-> **Status:** Authoritative Implementation Matrix for Phases 2–8  
-> **Design Principle:** REUSE > EXTEND > REFACTOR > NEW FILE (Zero unnecessary deletions)
+> **Authority:** Actual V3 Source Code  
+> **Status:** Remediated Phase 1 Architecture Audit (Confidence $\ge 90\%$)  
+> **Standard:** `NO CHANGE` | `EXTEND` | `REFACTOR` | `NEW FILE`
 
 ---
 
-## 1. File-Level Modification Matrix
+## 1. Frontend Architecture File Classification
 
-| File Path | Current Responsibility in V3 | Why It Matters for Lifecycle | Phase Affected | Modification Type | Risk & Mitigation |
-|---|---|---|---|---|---|
-| [`apps/api/prisma/schema.prisma`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/prisma/schema.prisma) | Authoritative database schema for Prisma (`User`, `Profile`, `UserProfile`, `Session`, `Setting`, etc.) | Must define new device identity, local PIN hashes, installation binding, and user-to-database association metadata. | Phase 2 | **EXTEND** | **MEDIUM**: Altering schema requires updating pre-migrated `template.db` so existing business logic remains backward compatible. |
-| [`apps/api/src/infrastructure/paths.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/paths.ts) | Authoritative Windows `%LOCALAPPDATA%\DiamondERP` and dev path resolution service | Resolves database discovery paths, backup folders, system config directories, and template DB discovery. | Phase 5, 6, 7 | **EXTEND** | **LOW**: Centralized path contract is robust; adding path helpers for user databases and export directories is safe. |
-| [`apps/api/src/infrastructure/database/prisma.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/database/prisma.ts) | Dynamic SQLite multi-tenant client pool, LRU cache, mutex locks, and `prismaProxy` | Must decouple hardcoded `'Stavan'` profile fallback and support dynamic attachment of validated SQLite databases. | Phase 2, 5, 6 | **REFACTOR** | **HIGH**: Core DB routing layer. Must preserve thread-safe caching, `AsyncLocalStorage`, and connection disconnection invariants. |
-| [`apps/api/src/config/index.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/config/index.ts) | Server environment variables, loopback host/port, and database URL configuration | Hardcodes `file:${path.join(getDatabasesDir(), 'Stavan.db')}` as fallback database URL. | Phase 2, 6 | **REFACTOR** | **LOW**: Replace hardcoded `'Stavan.db'` fallback with dynamically resolved active tenant or system database path. |
-| [`apps/api/src/middleware/profile.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/middleware/profile.ts) | Validates `X-Profile-Id` header and sets `AsyncLocalStorage` tenant context | Enforces that incoming HTTP requests operate within the authorized user database boundary. | Phase 4, 6 | **EXTEND** | **MEDIUM**: Must handle first-run unauthenticated onboarding routes without throwing `400 PROFILE_CONTEXT_REQUIRED`. |
-| [`apps/api/src/middleware/auth.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/middleware/auth.ts) | Validates JWT bearer tokens, checks DB session revocation, enforces role-based permissions | Must support local PIN-based authentication sessions and device fingerprint verification alongside password auth. | Phase 3, 4 | **EXTEND** | **MEDIUM**: Must maintain strict fail-closed security guarantees during offline desktop operation. |
-| [`apps/api/src/modules/auth/auth.service.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.service.ts) | User authentication, bcrypt hashing, JWT issuance, session persistence, and brute-force lockout | Core authentication service. Must be extended with PIN hashing (`bcryptjs`), PIN verification, and user onboarding creation. | Phase 3, 6 | **EXTEND** | **MEDIUM**: Must ensure PIN is never logged or exposed in plaintext and adheres to rate-limiting rules. |
-| [`apps/api/src/modules/auth/auth.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.controller.ts) | Express HTTP controller for `/api/auth/*` | Handles login, logout, password change, and bootstrap. | Phase 3, 6 | **EXTEND** | **LOW**: Add endpoints for PIN verification, device setup, and new user onboarding registration. |
-| [`apps/api/src/modules/auth/auth.routes.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.routes.ts) | Express route definitions for `/api/auth` | Mounts authentication endpoints with appropriate rate limiters. | Phase 3, 6 | **EXTEND** | **LOW**: Register new `/api/auth/pin-login`, `/api/auth/setup-pin`, `/api/auth/device` routes. |
-| [`apps/api/src/modules/system/activation.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/system/activation.controller.ts) | Controls `.app-activation.json` and `Setting.app_activated` lifetime master password lock | Bridge between initial software activation and subsequent user/device onboarding. | Phase 4 | **EXTEND** | **LOW**: Coordinate activation status check with first-run user onboarding state. |
-| [`apps/api/src/modules/system/system.routes.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/system/system.routes.ts) | Express route definitions for `/api/system` | Hosts health checks, activation status, and transformation services. | Phase 4, 5 | **EXTEND** | **LOW**: Mount lifecycle discovery and device registration endpoints under `/api/system/lifecycle`. |
-| `apps/api/src/modules/system/lifecycle.service.ts` | *(New service)* | Discovers existing `.db` files, performs PRAGMA integrity checks, verifies schema compatibility, and binds devices. | Phase 3, 5, 6 | **NEW FILE** | **MEDIUM**: Must rigorously validate SQLite files before allowing attachment to prevent schema corruption or arbitrary code execution. |
-| `apps/api/src/modules/system/lifecycle.controller.ts` | *(New controller)* | HTTP controller exposing discovery, validation, provisioning, and device binding APIs. | Phase 4, 5, 6 | **NEW FILE** | **LOW**: Pure HTTP mapping to `lifecycle.service.ts`. |
-| [`apps/api/src/modules/settings/settings.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts) | Settings management, SQLite WAL checkpointing, and `VACUUM INTO` backup | Hosts existing backup endpoints (`/api/settings/backup`). Must be extended to support structured export. | Phase 7 | **EXTEND** | **LOW**: Leverage existing SQLite backup logic for pre-uninstall and recovery backups. |
-| [`apps/api/src/modules/reports/reports.service.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/reports/reports.service.ts) | Report aggregation and Excel streaming via `exceljs` | Contains established patterns for streaming workbook and CSV data from SQLite models. | Phase 7 | **NO CHANGE** | **NONE**: Reused as reference for data export formats. |
-| [`apps/api/src/routes.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/routes.ts) | Central backend router assembly | Assembles all domain routes. | Phase 4, 5, 6 | **EXTEND** | **LOW**: Mount lifecycle router alongside system and auth routers. |
-| [`apps/web/src/App.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/App.tsx) | Root React application component and router switch | Houses root layout, `Sidebar`, `TopBar`, and security overlays (`FirstRunActivationOverlay`, `AppLockOverlay`). | Phase 4 | **EXTEND** | **MEDIUM**: Must conditionally intercept navigation to render the First-Run Lifecycle Onboarding Wizard when uninitialized. |
-| [`apps/web/src/contexts/AuthContext.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AuthContext.tsx) | Client auth state, user identity, profile switching | Contains hardcoded `DEFAULT_USER` fallback (`stavan`, `SUPER_ADMIN`). Must support dynamic user switching and PIN auth. | Phase 3, 4, 6 | **REFACTOR** | **MEDIUM**: Remove hardcoded user fallback; accurately reflect real unauthenticated / first-run state. |
-| [`apps/web/src/contexts/AppLockContext.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AppLockContext.tsx) | Idle lock timer, PIN lock verification state | Currently uses local state for lock overlay. | Phase 3, 4 | **EXTEND** | **LOW**: Connect PIN lock verification to the backend PIN validation API. |
-| [`apps/web/src/components/security/FirstRunActivationOverlay.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/security/FirstRunActivationOverlay.tsx) | Fullscreen master password activation overlay | Unlocks application once master password is confirmed. | Phase 4 | **EXTEND** | **LOW**: After successful activation, transition seamlessly into the Onboarding Wizard (Phase 4). |
-| `apps/web/src/components/onboarding/OnboardingWizard.tsx` | *(New component)* | Interactive multi-step onboarding wizard: Device Setup → Existing User Detection → Database Discovery/Validation → New User Creation → Blank DB Provisioning. | Phase 4 | **NEW FILE** | **MEDIUM**: Complex UI flow; must enforce all 13 Data Safety Invariants without regressions to main ERP screens. |
-| [`apps/web/src/services/api/client.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/api/client.ts) | HTTP client wrapper and local token storage | Attaches `Authorization` and `X-Profile-Id` headers. | Phase 3, 4, 6 | **EXTEND** | **LOW**: Add methods for lifecycle API endpoints, device fingerprint header attachment (`X-Device-Id`). |
-| [`installer/Launcher.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs) | WPF + WebView2 desktop host executable (`DiamondERP.exe`) | Launches backend, waits for health check, initializes WebView2, handles single-instance and graceful shutdown. | Phase 3, 7 | **EXTEND** | **LOW**: Pass hardware device ID / machine GUID as environment variable to backend process; integrate pre-shutdown signals. |
-| [`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs) | Windows Setup wizard (`Installer.exe` / `Setup.exe`) | Handles fresh install, upgrade, atomic file swap, rollback, and uninstall while preserving `%LOCALAPPDATA%\DiamondERP`. | Phase 7 | **EXTEND** | **MEDIUM**: Add pre-uninstall automated backup verification step before removing application binaries; provide reinstall recovery prompt. |
-| [`scripts/stage-windows-build.js`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/scripts/stage-windows-build.js) | Production staging packager | Copies bundled Node runtime, compiled JS, Prisma template DB, and web dist into `build/windows/DiamondERP`. | Phase 2, 8 | **EXTEND** | **LOW**: Ensure new database template and any updated native dependencies are correctly staged and verified. |
-| [`scripts/package-windows-release.js`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/scripts/package-windows-release.js) | Release assembler | Produces `DiamondERP-Setup.exe` and `DiamondERP-Windows-x64.zip`. | Phase 8 | **NO CHANGE** | **NONE**: Existing automated compilation and embedding pipeline is production-hardened. |
+### 1.1 Frontend Files to REUSE (Call As-Is)
+- [`apps/web/src/services/deviceAuth.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/deviceAuth.ts): Reused for WebAuthn platform authenticator registration, verification, and client-side PBKDF2 PIN hashing.
+- [`apps/web/src/services/draftDb.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/draftDb.ts): Reused for IndexedDB offline auto-save and sync queue management.
+- [`apps/web/src/components/layout/Sidebar.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/layout/Sidebar.tsx): Reused as the primary ERP navigation sidebar.
+- [`apps/web/src/components/layout/TopBar.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/layout/TopBar.tsx): Reused for active user display and profile indicator.
+- [`apps/web/src/index.css`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/index.css): Reused for the complete CSS design token system and liquid glass styles.
+
+### 1.2 Frontend Files to EXTEND
+- [`apps/web/src/App.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/App.tsx): Extend router to conditionally render `OnboardingWizard` when first-run lifecycle state is detected.
+- [`apps/web/src/contexts/AuthContext.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AuthContext.tsx): Refactor out hardcoded `DEFAULT_USER` fallback; connect to dynamic user state and PIN authentication.
+- [`apps/web/src/contexts/AppLockContext.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AppLockContext.tsx): Extend idle lock timer to verify PIN against backend API.
+- [`apps/web/src/services/api/client.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/api/client.ts): Extend with lifecycle and database discovery API calls; attach `X-Device-Id` header.
+- [`apps/web/src/components/security/FirstRunActivationOverlay.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/components/security/FirstRunActivationOverlay.tsx): Extend post-activation transition to hand off to the Onboarding Wizard.
+
+### 1.3 Frontend Files to NOT TOUCH (Zero Changes)
+- `apps/web/src/domains/inventory/*` (Inventory views, diamond grids, parcel details)
+- `apps/web/src/domains/ledger/*` (Financial transactions, ledger records)
+- `apps/web/src/domains/parties/*` (Party directories, customer & supplier views)
+- `apps/web/src/domains/repairs/*` (Repair workflows, carat loss tracking)
+- `apps/web/src/domains/reports/*` (Financial reporting tables, analytics)
+- `apps/web/src/domains/transactions/*` (Transaction forms and authorization)
+- `apps/web/src/pages/InventoryPage.tsx`
+- `apps/web/src/pages/LedgerPage.tsx`
+- `apps/web/src/pages/PartiesPage.tsx`
+- `apps/web/src/pages/RepairsPage.tsx`
+- `apps/web/src/pages/ReportsPage.tsx`
 
 ---
 
-## 2. Protected Files — Must NOT Be Touched
+## 2. Phase 2 Files: Lifecycle Data Model & Schema
 
-The following functional business modules and core infrastructure components must remain completely unchanged throughout the upcoming lifecycle phases:
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| [`apps/api/prisma/schema.prisma`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/prisma/schema.prisma) | **EXTEND** | Add `Installation`, `Device`, `UserDatabase` models; add `pinHash String?` to `model User`. | **Medium**: Altering schema requires updating `template.db`. | Phase 1 baseline |
+| [`packages/contracts/src/index.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/packages/contracts/src/index.ts) | **EXTEND** | Add TypeScript contracts for `Device`, `Installation`, and `UserDatabase` entities. | **Low**: Pure type definitions. | `schema.prisma` |
+| [`scripts/sync-template-db.js`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/scripts/sync-template-db.js) | **EXTEND** | Ensure template DB checkpoint captures newly added tables with 0 rows. | **Low**: Dev script. | `schema.prisma` |
+| `apps/api/src/tests/schema.test.ts` | **NEW FILE** | Validate schema migration, relational integrity, and blank template state. | **Low**: Test-only. | Vitest |
 
-- [`apps/api/src/modules/stocks/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/stocks) (Stock parcel management, inventory tracking)
-- [`apps/api/src/modules/ledger/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/ledger) (Financial ledgers, payment tracking, balance calculations)
-- [`apps/api/src/modules/parties/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/parties) (Customer, supplier, and workshop party management)
-- [`apps/api/src/modules/repairs/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/repairs) (Repair workflow, carat loss tracking, vendor tracking)
-- [`apps/api/src/modules/certificates/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/certificates) (Diamond certification lab grading and document uploads)
-- [`apps/api/src/modules/transactions/*`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/transactions) (Transaction state machines, idempotency validation)
-- [`apps/web/src/pages/InventoryPage.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/InventoryPage.tsx) (Inventory management view)
-- [`apps/web/src/pages/LedgerPage.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/LedgerPage.tsx) (Ledger transaction records)
-- [`apps/web/src/pages/PartiesPage.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/PartiesPage.tsx) (Party directory)
-- [`apps/web/src/pages/RepairsPage.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/RepairsPage.tsx) (Repair management)
-- [`apps/web/src/pages/ReportsPage.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/pages/ReportsPage.tsx) (Financial and stock reports)
-- [`installer/Launcher.manifest`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.manifest) (DPI awareness and OS compatibility)
-- [`installer/Installer.manifest`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.manifest) (UAC administrator execution level)
+---
+
+## 3. Phase 3 Files: Device Setup & PIN Authentication
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| [`apps/api/src/modules/auth/auth.service.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.service.ts) | **EXTEND** | Add salted PIN hashing (`hashPin`, `verifyPin`) using `bcryptjs` and PIN lockout logic. | **Medium**: PIN must never be logged or exposed in plaintext. | Phase 2 schema |
+| [`apps/api/src/modules/auth/auth.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.controller.ts) | **EXTEND** | Add `pinLogin` and `setupPin` controller actions with rate limiting. | **Low**: Thin HTTP wrapper. | `auth.service.ts` |
+| [`apps/api/src/modules/auth/auth.routes.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.routes.ts) | **EXTEND** | Register `/api/auth/pin-login` and `/api/auth/setup-pin` routes. | **Low**: Route definitions. | `auth.controller.ts` |
+| `apps/api/src/modules/system/device.service.ts` | **NEW FILE** | Compute hardware fingerprint from Windows `MachineGuid`, bind device to installation. | **Medium**: Must handle virtual machines and hardware upgrades gracefully. | Phase 2 schema |
+| `apps/api/src/modules/system/device.controller.ts` | **NEW FILE** | Expose device registration and validation endpoints. | **Low**: Controller. | `device.service.ts` |
+| [`apps/web/src/services/deviceAuth.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/services/deviceAuth.ts) | **EXTEND** | Bridge client-side WebAuthn credentials with backend device verification. | **Low**: WebAuthn wrapper. | Browser WebAuthn API |
+
+---
+
+## 4. Phase 4 Files: First-Run Onboarding Flow
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| `apps/web/src/components/onboarding/OnboardingWizard.tsx` | **NEW FILE** | Interactive multi-step UI wizard: Device Setup $\to$ User Detection $\to$ DB Discovery $\to$ Provisioning. | **Medium**: Complex UI state; must adhere to liquid glass design. | Phase 3 auth APIs |
+| [`apps/web/src/App.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/App.tsx) | **EXTEND** | Intercept routing to render `OnboardingWizard` when system is uninitialized. | **Medium**: Router modification; must avoid infinite redirect loops. | `OnboardingWizard.tsx` |
+| [`apps/web/src/contexts/AuthContext.tsx`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/web/src/contexts/AuthContext.tsx) | **REFACTOR** | Replace hardcoded `'stavan'` fallback with real first-run / unauthenticated state. | **Medium**: Affects initial user identity in React tree. | API client |
+| [`apps/api/src/middleware/profile.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/middleware/profile.ts) | **EXTEND** | Exempt onboarding and lifecycle routes from requiring existing profile context. | **Low**: Route whitelist check. | Express middleware |
+
+---
+
+## 5. Phase 5 Files: Database Discovery, Validation & Attachment
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| `apps/api/src/modules/system/database-validation.service.ts` | **NEW FILE** | Validate SQLite file header, execute `PRAGMA integrity_check`, verify schema version. | **High**: Must reject corrupted or malicious SQLite files before opening. | `paths.ts` |
+| `apps/api/src/modules/system/database-discovery.service.ts` | **NEW FILE** | Scan `%LOCALAPPDATA%\DiamondERP\databases` for existing valid `.db` files. | **Medium**: Must enforce path traversal restrictions. | `paths.ts` |
+| `apps/api/src/modules/system/database-lifecycle.controller.ts` | **NEW FILE** | HTTP controller for discovery, validation, and attachment confirmation. | **Low**: Controller. | Discovery & validation services |
+| [`apps/api/src/modules/system/system.routes.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/system/system.routes.ts) | **EXTEND** | Mount database discovery and validation endpoints. | **Low**: Route definitions. | Controller |
+
+---
+
+## 6. Phase 6 Files: New User & Blank DB Provisioning
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| [`apps/api/src/infrastructure/database/prisma.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/database/prisma.ts) | **REFACTOR** | Decouple hardcoded `'Stavan'` default profile; dynamically provision blank DB from `template.db`. | **High**: Core DB routing layer. Must preserve LRU caching and mutexes. | Phase 2, 5 |
+| [`apps/api/src/config/index.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/config/index.ts) | **REFACTOR** | Update `databaseUrl` fallback to point to dynamic system database rather than `'Stavan.db'`. | **Low**: Config fallback. | `paths.ts` |
+| [`apps/api/src/modules/auth/auth.service.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/auth/auth.service.ts) | **EXTEND** | Support atomic creation of user + blank database provisioning in a single workflow. | **Medium**: Enforce Invariant 1 (New user $\to$ new blank database). | `prisma.ts` |
+
+---
+
+## 7. Phase 7 Files: Backup, Export & Uninstall Recovery
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| [`apps/api/src/modules/settings/settings.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts) | **EXTEND** | Enhance `backupDatabase` with multi-tenant backup, ZIP packaging, and structured CSV/Excel export. | **Medium**: Must not block event loop during large database backups. | `exceljs`, `csv-stringify` |
+| [`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs) | **EXTEND** | Add pre-uninstall backup hook prompt; preserve customer AppData directory. | **Medium**: C# installer code. Must handle cancellation cleanly. | Win32 / .NET 4.0 |
+| [`installer/Launcher.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs) | **EXTEND** | Pass hardware identifier / machine GUID to child node process via environment variables. | **Low**: Process startup. | Win32 / .NET 4.0 |
+| `apps/api/src/modules/settings/export.service.ts` | **NEW FILE** | Sanitize and export database tables to Excel and CSV while omitting passwords and PINs. | **Medium**: Enforce Invariant 12 (No PIN/password export). | `exceljs`, `csv-stringify` |
+
+---
+
+## 8. Phase 8 Files: Release Packaging & Verification
+
+| Existing / New File | Action | Why | Risk | Dependencies |
+|---|---|---|---|---|
+| [`scripts/stage-windows-build.js`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/scripts/stage-windows-build.js) | **EXTEND** | Ensure updated `template.db` and all required production assets are staged. | **Low**: Packaging script. | Node fs |
+| [`scripts/package-windows-release.js`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/scripts/package-windows-release.js) | **NO CHANGE** | Assembler pipeline is already robust. | **None** | CSC compiler |
+| `scripts/test-phase8-lifecycle-e2e.js` | **NEW FILE** | End-to-end automated test verifying fresh install, onboarding, discovery, backup, and recovery. | **Low**: Test suite. | Puppeteer / Node |
+
+---
+
+## 9. Protected Business Modules — Strictly NOT TO TOUCH
+
+The following functional business modules and core infrastructure components must remain completely unchanged:
+- `apps/api/src/modules/stocks/*` (Stock parcels, inventory movements)
+- `apps/api/src/modules/ledger/*` (Financial ledgers, payments, statements)
+- `apps/api/src/modules/parties/*` (Parties, customers, suppliers)
+- `apps/api/src/modules/repairs/*` (Repair workflows, carat loss)
+- `apps/api/src/modules/certificates/*` (Lab grading, certificate files)
+- `apps/api/src/modules/transactions/*` (Transaction state machines)
+- `apps/api/src/modules/diamonds/*` (Diamond item tracking)
+- `apps/web/src/domains/*` (All domain UI components)
+- `installer/Launcher.manifest` (DPI and OS compatibility)
+- `installer/Installer.manifest` (UAC administrator level)

@@ -1,10 +1,10 @@
-# Diamond ERP V3.0 — Windows Installer & Launcher Lifecycle
+# Diamond ERP V3.0 — Windows Installer, Launcher & Backup Lifecycle
 
-> **Phase 1 Audit Artifact**  
+> **Phase 1 Audit Artifact — Code-Level Architecture Mapping**  
 > **Repository:** `https://github.com/StavanSheth/Diamond_ERP`  
 > **Branch:** `v3`  
-> **Source Files:** [`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs) and [`installer/Launcher.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs)  
-> **Audited By:** Senior Software Architect
+> **Authority:** Actual V3 Source Code ([`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs), [`installer/Launcher.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs), [`apps/api/src/modules/settings/settings.controller.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts), [`apps/api/src/infrastructure/paths.ts`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/paths.ts))  
+> **Status:** Remediated Phase 1 Architecture Audit (Confidence $\ge 90\%$)
 
 ---
 
@@ -22,8 +22,8 @@ stateDiagram-v2
         
         state FreshInstallMode {
             ExtractPayload --> ValidateIntegrity
-            ValidateIntegrity --> CreateShortcuts
-            CreateShortcuts --> RegisterUninstall
+            ValidateIntegrity --> CreateShortcut
+            CreateShortcut --> RegisterUninstall
         }
         
         state UpgradeMode {
@@ -52,7 +52,8 @@ stateDiagram-v2
     
     state UninstallExecution {
         VerifyAdmin --> AppRunningCheck
-        AppRunningCheck --> DeleteShortcuts
+        AppRunningCheck --> PreUninstallBackupHook: FUTURE BACKUP INSERTION POINT
+        PreUninstallBackupHook --> DeleteShortcuts
         DeleteShortcuts --> DeleteRegistryKey
         DeleteRegistryKey --> DeleteBinaries
         DeleteBinaries --> PreserveAppData: %LOCALAPPDATA%\DiamondERP protected
@@ -66,106 +67,141 @@ stateDiagram-v2
 ## 2. Comprehensive Lifecycle Operation Breakdown
 
 ### 1. Fresh Installation
-- **Trigger:** User launches `DiamondERP-Setup.exe` on a computer where Diamond ERP is not yet installed.
+- **Trigger:** User launches `DiamondERP-Setup.exe` on a system where Diamond ERP is not installed.
 - **Responsible C# Methods in [`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs):**
-  - `IsAdministrator()` ([Line 1150](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1150)): Checks Windows Principal role `WindowsBuiltInRole.Administrator`.
-  - `GetDefaultInstallDir()` ([Line 1162](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1162)): Defaults to `C:\Program Files\DiamondERP`.
-  - `PerformInstall(string sourceDir, string targetDir, ...)` ([Lines 1445-1570](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1445-L1570)): Executes installation pipeline.
-  - `ExtractRawPayload(...)` ([Lines 1345-1397](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1345-L1397)): Extracts embedded `DiamondERP.Payload.zip` resource stream via `ExtractZipStream`.
+  - `IsAdministrator()` ([Line 1150](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1150)): Asserts Windows Built-in Administrator principal role.
+  - `GetDefaultInstallDir()` ([Line 1162](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1162)): Resolves default to `C:\Program Files\DiamondERP`.
+  - `PerformInstall(string sourceDir, string targetDir, ...)` ([Lines 1445-1570](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1445-L1570)): Orchestrates the file copy and installation sequence.
+  - `ExtractRawPayload(...)` ([Lines 1345-1397](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1345-L1397)): Extracts the embedded `DiamondERP.Payload.zip` resource stream via `ExtractZipStream`.
   - `ExtractZipStream(...)` ([Lines 1260-1315](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1260-L1315)): Extracts files while enforcing Zip Slip path traversal checks.
-  - `VerifyPayloadIntegrity(string dir)` ([Lines 1319-1343](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1319-L1343)): Asserts presence of `DiamondERP.exe`, `runtime/node.exe`, `api/dist/index.js`, `api/prisma/template.db`, and `web/dist/index.html`.
-  - `CreateShortcuts(string targetDir)` ([Lines 1700-1760](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1700-L1760)): Creates Desktop and Start Menu `.lnk` shortcuts using Windows Script Host COM (`WshShell`).
-  - `RegisterUninstallEntry(string installDir)` ([Lines 1770-1840](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1770-L1840)): Writes Windows Add/Remove Programs registry keys under `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DiamondERP`.
+  - `VerifyPayloadIntegrity(string dir)` ([Lines 1319-1343](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1319-L1343)): Confirms existence of `DiamondERP.exe`, `runtime/node.exe`, `api/dist/index.js`, `api/prisma/template.db`, and `web/dist/index.html`.
+  - `CreateShortcut(...)` ([Line 1107](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1107)): Generates Desktop and Start Menu `.lnk` shortcuts using Windows Script Host COM (`shell.CreateShortcut`).
+  - `RegisterUninstall(...)` ([Line 1714](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1714)): Writes Windows Add/Remove Programs registry keys under `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DiamondERP`.
 
 ### 2. First Launch
 - **Trigger:** User launches `DiamondERP.exe` immediately following installation.
 - **Responsible C# Methods in [`installer/Launcher.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs):**
-  - `Main(string[] args)` ([Line 88](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L88)): Entry point.
-  - `ResolveApplicationDirectory()` ([Line 435](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L435)): Resolves installation base directory.
-  - `ResolveDataDirectory()` ([Line 461](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L461)): Resolves `%LOCALAPPDATA%\DiamondERP` and creates directory tree if non-existent.
-  - `StartServicesAndNavigate()` ([Line 501](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L501)): Spawns worker thread.
+  - `Main(string[] args)` ([Line 88](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L88)): Application entry point.
+  - `ResolveApplicationDirectory()` ([Line 435](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L435)): Resolves binary location.
+  - `ResolveDataDirectory()` ([Line 461](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L461)): Resolves `%LOCALAPPDATA%\DiamondERP` and initializes folder tree (`databases`, `uploads`, `backups`, `logs`, `config`).
+  - `StartServicesAndNavigate()` ([Line 501](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L501)): Spawns background worker thread.
   - `StartBackendProcess()` ([Line 598](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L598)): Spawns `runtime/node.exe api/dist/index.js` with `DIAMOND_DATA_DIR` and port `3002`.
-  - `WaitForBackend(string probeUrl, ...)` ([Line 716](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L716)): Polls `http://127.0.0.1:3002/health` while showing WPF splash progress.
-  - `InitializeWebView2(string targetUrl)` ([Line 748](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L748)): Configures user data directory to `%LOCALAPPDATA%\DiamondERP\WebView2Data`, attaches navigation handlers, and loads the React application.
+  - `WaitForBackend(string probeUrl, ...)` ([Line 716](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L716)): Polls `http://127.0.0.1:3002/health` while rendering WPF splash progress.
+  - `InitializeWebView2(string targetUrl)` ([Line 748](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L748)): Configures user data directory to `%LOCALAPPDATA%\DiamondERP\WebView2Data`, attaches event listeners, and loads React application.
 
 ### 3. Normal Launch
-- **Operation:** Same as first launch, but AppData directory already exists.
-- **Single-Instance Mutex:**
-  - `Mutex mutex = new Mutex(true, "Global\\DiamondERP_SingleInstance_Mutex", out createdNew)` ([Line 164](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L164)).
-  - If `!createdNew`, finds existing window via Win32 `FindWindow(null, WINDOW_TITLE)` and brings it to the foreground with `ShowWindow` + `SetForegroundWindow` ([Lines 168-174](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L168-L174)), then terminates immediately.
+- **Single-Instance Protection:** Win32 Named Mutex `Global\DiamondERP_SingleInstance_Mutex` ([Line 164](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L164)). If already running, finds existing window via `FindWindow(null, WINDOW_TITLE)` and brings it to foreground with `ShowWindow` + `SetForegroundWindow` ([Lines 168-174](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Launcher.cs#L168-L174)), then terminates immediately.
 
-### 4. Upgrade
+### 4. Upgrade & Atomic File Swap
 - **Trigger:** Installer detects existing `DiamondERP.exe` in target directory.
-- **Execution Path in [`installer/Installer.cs`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1450-L1538):**
-  1. Creates isolated staging folder: `<targetDir>.staging_` ([Line 1451](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1451)).
-  2. Extracts new release payload into staging directory ([Line 1455](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1455)).
-  3. Verifies extracted staging integrity via `VerifyPayloadIntegrity()` ([Line 1459](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1459)).
-  4. Stops running application instances via `EnsureAppNotRunning()` ([Line 1462](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1462)).
-  5. Backs up current install directory to `<targetDir>.backup_` via `Directory.Move` ([Line 1475](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1475)).
-  6. Moves `<targetDir>.staging_` to `<targetDir>` ([Line 1481](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1481)).
-  7. Cleans up `.backup_` directory upon successful swap completion ([Line 1488](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1488)).
+- **Execution Path in [`installer/Installer.cs:1450-1538`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1450-L1538):**
+  1. Creates isolated staging folder: `<targetDir>.staging_`.
+  2. Extracts new release payload into staging directory.
+  3. Validates staging integrity via `VerifyPayloadIntegrity()`.
+  4. Stops running application instances via `EnsureAppNotRunning()`.
+  5. Backs up current install directory to `<targetDir>.backup_` via `Directory.Move`.
+  6. Moves `<targetDir>.staging_` to `<targetDir>`.
+  7. Purges `<targetDir>.backup_` upon successful swap completion.
 
 ### 5. Running-App Upgrade Handling
 - **Method:** `EnsureAppNotRunning(bool promptUser, string targetDir)` ([Lines 1580-1650](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1580-L1650)).
-- **Sequence:**
-  1. Scans running system processes for `DiamondERP` and `node`.
-  2. If prompt is enabled, displays dialog: *"Diamond ERP is currently running. Setup must close the application to proceed with installation or upgrade."*
-  3. Signals IPC shutdown event `Global\DiamondERP_Shutdown_Event` ([Line 1608](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1608)).
-  4. Waits up to 5 seconds for clean exit.
-  5. If still running, invokes `p.Kill()` with timeout to release file locks before upgrading binaries.
+- Signals IPC shutdown event `Global\DiamondERP_Shutdown_Event` ([Line 1608](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1608)), waits 5 seconds for clean exit, and terminates lingering processes with `p.Kill()` if unresponsive.
 
 ### 6. Rollback Protection
-- **Method:** Exception block in `PerformInstall` ([Lines 1493-1535](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1493-L1535)).
-- **Behavior:**
-  - If directory swap fails or is interrupted (e.g. anti-virus lock), the installer catches the exception.
-  - Automatically restores `<targetDir>.backup_` back to `<targetDir>`.
-  - Purges partial staging directory.
-  - Leaves the customer's prior working installation fully functional.
+- Exception block in `PerformInstall` ([Lines 1493-1535](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1493-L1535)): If directory swap fails, automatically restores `<targetDir>.backup_` back to `<targetDir>` and purges partial staging files.
 
 ### 7. Uninstallation
-- **Trigger:** User runs uninstall from Windows Settings or Add/Remove Programs.
 - **Method:** `PerformUninstall(string installDir, bool silent)` ([Lines 1857-1975](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1857-L1975)).
-- **Sequence:**
-  1. Elevation verification (`IsAdministrator()`).
-  2. Dialog notification: *"Are you sure you want to uninstall DiamondERP Enterprise Suite? Note: Your local business database records, parcel inventories, and ledgers stored in AppData will be safely preserved."*
-  3. Closes running instance via `EnsureAppNotRunning()`.
-  4. Deletes Desktop and Start Menu `.lnk` files ([Lines 1894-1906](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1894-L1906)).
-  5. Deletes registry uninstall keys from `HKLM` and `HKCU` ([Lines 1909-1921](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1909-L1921)).
-  6. Deletes application installation directory (e.g. `C:\Program Files\DiamondERP`) ([Lines 1923-1959](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1923-L1959)).
+- Deletes Desktop and Start Menu `.lnk` files ([Lines 1894-1906](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1894-L1906)).
+- Deletes registry uninstall keys from `HKLM` and `HKCU` ([Lines 1909-1921](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1909-L1921)).
+- Deletes `C:\Program Files\DiamondERP` binaries only ([Lines 1923-1959](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1923-L1959)).
+- **Guarantees that `%LOCALAPPDATA%\DiamondERP` is 100% EXCLUDED from deletion.**
 
 ### 8. Reinstallation & Recovery
-- **Operation:** When `Setup.exe` runs on a machine where Diamond ERP was previously uninstalled:
-  - Fresh binaries are written to `C:\Program Files\DiamondERP`.
-  - The newly installed launcher connects to the existing `%LOCALAPPDATA%\DiamondERP` data directory.
-  - All existing databases, ledgers, party master records, and inventory parcels automatically re-attach seamlessly without data loss.
+- When setup runs on a machine where Diamond ERP was previously uninstalled, binaries are restored to Program Files, and the launcher connects to the intact `%LOCALAPPDATA%\DiamondERP` data directory. All existing databases, ledgers, party master records, and inventory parcels automatically re-attach seamlessly without data loss.
 
 ---
 
-## 3. Strict Data Preservation Guarantee (Invariant 7)
+## 3. Existing Backup & Export Capabilities Audit
 
-```csharp
-// Source: installer/Installer.cs, Lines 1924-1930
-string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-string userDbDir = Path.Combine(localAppData, "DiamondERP");
-string canonicalInstallDir = Path.GetFullPath(installDir);
+| Capability | Exists in Code? | Exact Source File & Line | Implementation Details |
+|---|---|---|---|
+| **Native SQLite Atomic Backup** | **YES** | [`apps/api/src/modules/settings/settings.controller.ts:1458-1484`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts#L1458-L1484) | `POST /api/settings/backup` executes `systemPrisma.$executeRawUnsafe("VACUUM INTO '<backupsDir>/diamond_erp_backup_<timestamp>.db'")`. Falls back to `fs.copyFileSync` if unsupported. |
+| **Excel Export (.xlsx)** | **YES** | [`apps/api/src/modules/settings/settings.controller.ts:82-84`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts#L82-L84), [`reports.service.ts:1403`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/reports/reports.service.ts#L1403) | `GET /api/settings/export/inventory` uses `ExcelJS.stream.xlsx.WorkbookWriter`. `GET /api/reports/export` streams multi-sheet reports via `workbook.xlsx.write(res)`. |
+| **Excel Import (.xlsx)** | **YES** | [`apps/api/src/modules/settings/settings.controller.ts:820-834`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/modules/settings/settings.controller.ts#L820-L834) | `POST /api/settings/import/inventory` validates ZIP container header and parses workbook via `workbook.xlsx.load(req.file.buffer)`. |
+| **CSV Export / Stringify** | **YES (DEPENDENCY)** | [`apps/api/package.json:24`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/package.json#L24) | `csv-stringify: ^6.8.3` installed in API dependencies. |
+| **CSV Parsing** | **YES (DEPENDENCY)** | [`apps/api/package.json:23`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/package.json#L23) | `csv-parse: ^7.0.2` installed in API dependencies. |
+| **File Copy / File System** | **YES** | [`apps/api/src/infrastructure/database/prisma.ts:63`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/database/prisma.ts#L63) | `fs.copyFileSync`, `fs.mkdirSync`, `fs.statSync` standard Node `node:fs`. |
+| **Backup Path Configuration** | **YES** | [`apps/api/src/infrastructure/paths.ts:84-90`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/src/infrastructure/paths.ts#L84-L90) | `getBackupsDir()` checks `process.env.DIAMOND_BACKUPS_DIR` or returns `%LOCALAPPDATA%\DiamondERP\backups`. |
+| **Zip Archive Library** | **YES** | [`installer/Installer.cs:23`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L23), [`package.json:23`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/package.json#L23) | C# `System.IO.Compression.dll` and `System.IO.Compression.FileSystem.dll` for unzipping payload; Node built-in `node:zlib`. |
+| **Database Restore API** | **DOES NOT EXIST** | N/A | V3 has zero automated `/api/settings/restore` endpoint. Restoration is currently manual file replacement. |
+| **Uninstall Backup Hook** | **DOES NOT EXIST** | N/A | `Installer.cs` preserves AppData, but does not trigger an explicit backup before binary removal. |
 
-if (!canonicalInstallDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase) &&
-    !canonicalInstallDir.StartsWith(userDbDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+---
+
+## 4. Installed Dependencies Audit for Backup & Export
+
+```json
+// apps/api/package.json
 {
-    // Deletes Program Files installation directory only!
-    // %LOCALAPPDATA%\DiamondERP is 100% EXCLUDED from deletion.
+  "dependencies": {
+    "@prisma/client": "^5.22.0",    // SQLite query engine & schema
+    "exceljs": "^4.4.0",            // Streaming Excel (.xlsx) generation & ingestion
+    "csv-parse": "^7.0.2",          // High-performance CSV parser
+    "csv-stringify": "^6.8.3",      // CSV serializer with stream support
+    "uuid": "^11.1.0",              // Unique identifier generation
+    "zod": "^4.5.4"                 // Schema validation
+  }
 }
 ```
 
-### Preservation Summary Table:
+**Finding:** V3 already possesses all required low-level libraries for Excel, CSV, SQLite VACUUM, and file manipulation. **No new npm packages are required for Phase 7 implementation.**
 
-| Asset Category | Location | Action During Uninstall | Status Upon Reinstall |
-|---|---|---|---|
-| Application Binaries | `C:\Program Files\DiamondERP` | **DELETED** | Freshly Reinstalled |
-| Desktop / Start Menu Shortcuts | Desktop & Start Menu `.lnk` | **DELETED** | Freshly Recreated |
-| Registry Uninstaller Key | `HKLM\Software\...\Uninstall\DiamondERP` | **DELETED** | Freshly Registered |
-| SQLite Databases (`*.db`, `*-wal`) | `%LOCALAPPDATA%\DiamondERP\databases` | **STRICTLY PRESERVED** | Immediately Recognized |
-| Certificate Uploads | `%LOCALAPPDATA%\DiamondERP\uploads\certs` | **STRICTLY PRESERVED** | Immediately Available |
-| Historical Backups | `%LOCALAPPDATA%\DiamondERP\backups` | **STRICTLY PRESERVED** | Retained for Recovery |
-| System Configuration | `%LOCALAPPDATA%\DiamondERP\config` | **STRICTLY PRESERVED** | Settings Maintained |
-| Application Logs | `%LOCALAPPDATA%\DiamondERP\logs` | **STRICTLY PRESERVED** | Diagnostic Trail Preserved |
+---
+
+## 5. Actual Database Export Requirements (Prisma Schema Analysis)
+
+When Phase 7 implements full database export and backup, the system must account for the following schema structures from [`schema.prisma`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/apps/api/prisma/schema.prisma):
+
+1. **Tables to Export:**
+   - Operational: `Stock`, `Ledger`, `Party`, `DiamondItem`, `Transaction`, `TransactionItem`, `ItemEvent`, `Certification`, `Repair`, `Location`, `InventoryMovement`, `FinancialEntry`, `ItemTransformation`, `TransformationProvenance`.
+   - Governance: `DocumentDraft`, `DraftRevision`, `RecordVersion`, `VersionChange`, `AuditEvent`.
+   - Configuration: `Setting`, `Sequence`.
+2. **Relational Constraints & Foreign Keys:**
+   - Multi-level parent-child relations: `Transaction` $\to$ `TransactionItem` $\to$ `DiamondItem`.
+   - Self-referencing hierarchies: `RecordVersion.parentVersionId` $\to$ `RecordVersion.id`.
+   - Sequential IDs: `Sequence` table counter must be preserved across export/import.
+3. **Sensitive Fields to Sanitize / Exclude:**
+   - `User.passwordHash` and `User.pinHash` **MUST NEVER** be exported into unencrypted CSV or Excel files.
+   - `Session.tokenHash` must be purged upon export.
+4. **Timestamps & UUIDs:**
+   - Every table uses ISO 8601 UTC `DateTime` and UUIDv4 strings. Export routines must preserve exact nanosecond/millisecond timestamps to maintain the immutable audit trail.
+
+---
+
+## 6. Uninstall Integration Points for Future Backup & Recovery
+
+In [`installer/Installer.cs:1888-1893`](file:///c:/Projects/ERP%20-%20Copy/Test/TestV3.0/installer/Installer.cs#L1888-L1893), between user confirmation and shortcut deletion:
+
+```csharp
+// Source: installer/Installer.cs, PerformUninstall()
+if (confirm != DialogResult.Yes)
+{
+    return;
+}
+
+EnsureAppNotRunning(!silent, installDir);
+
+// ── FUTURE INSERTION POINT FOR PHASE 7 PRE-UNINSTALL BACKUP ─────────────
+// Trigger backend API or execute SQLite VACUUM INTO against all databases in:
+// Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiamondERP", "databases")
+// Write backup archive to:
+// Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiamondERP", "backups")
+// Or prompt user for external destination (e.g. USB / Desktop).
+// ────────────────────────────────────────────────────────────────────────
+
+try
+{
+    // 1. Remove Desktop shortcut
+    ...
+```

@@ -30,6 +30,7 @@
     "test:e2e:prod": "node scripts/run-production-e2e.js",
     "test:e2e:prod:staged": "node scripts/run-production-e2e.js --staged",
     "test:release": "node scripts/test-phase5-release-readiness.js",
+    "test:phase1:audit": "node scripts/test-phase1-first-run-audit.js",
     "test:phase7": "node scripts/test-phase7-launcher.js",
     "test:phase8": "node scripts/test-phase8-webview2.js",
     "test:phase9": "node scripts/test-phase9-installer.js",
