@@ -117,6 +117,27 @@ export function getConfigDir(): string {
 }
 
 /**
+ * Path to the authoritative Control / System database.
+ * Owns installation identity, device associations, database registry, and core user metadata.
+ */
+export function getControlDbPath(): string {
+  if (process.env.DIAMOND_SYSTEM_DB) {
+    return path.resolve(process.env.DIAMOND_SYSTEM_DB);
+  }
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
+    return path.resolve(process.env.DATABASE_URL.slice(5));
+  }
+  if (checkIsProduction() || process.env.DIAMOND_DATA_DIR) {
+    return path.join(getDataDir(), 'system.db');
+  }
+  const devSystemDb = path.resolve(__dirname, '../../system.db');
+  if (fs.existsSync(devSystemDb)) {
+    return devSystemDb;
+  }
+  return path.resolve(__dirname, '../../Stavan.db');
+}
+
+/**
  * Path to the pre-migrated schema template database.
  * Used to provision brand new databases offline without needing prisma CLI.
  */

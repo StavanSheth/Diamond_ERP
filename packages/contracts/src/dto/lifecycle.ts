@@ -21,6 +21,7 @@ export type DeviceStatus = 'ACTIVE' | 'REVOKED' | 'PENDING';
 export type DatabaseStatus =
   | 'ACTIVE'
   | 'INACTIVE'
+  | 'MISSING'
   | 'ORPHANED'
   | 'UNAVAILABLE'
   | 'INVALID'
@@ -41,17 +42,20 @@ export interface InstallationDto {
 
 export interface DeviceDto {
   id: string;
+  deviceId: string;
   installationId: string;
   deviceName: string;
   platform: string;
   osVersion?: string | null;
   status: DeviceStatus;
+  revokedAt?: string | null;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface RegisterDeviceRequest {
+  deviceId?: string;
   deviceName: string;
   platform?: string;
   osVersion?: string;
@@ -78,4 +82,39 @@ export interface DatabaseMetadataDto {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DatabaseRegistryDto {
+  id: string;
+  databaseId: string;
+  displayName: string;
+  canonicalPath: string;
+  schemaVersion: number;
+  status: DatabaseStatus;
+  databaseType: string;
+  profileId?: string | null;
+  installationId: string;
+  lastValidatedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DatabaseValidationResultDto {
+  status: DatabaseStatus;
+  canonicalPath: string;
+  isValid: boolean;
+  tableCount: number;
+  schemaVersion: number;
+  integrityCheck: string;
+  tablesFound: string[];
+  missingRequiredTables: string[];
+  details?: string;
+  error?: string;
+}
+
+export interface InstallationUserDto {
+  id: string;
+  installationId: string;
+  userId: string;
+  createdAt: string;
 }

@@ -13,5 +13,8 @@ router.post('/activate', authorize('system.activate'), activationController.acti
 router.get('/installation', authorize('settings.read'), lifecycleController.getInstallation);
 router.post('/lifecycle-state', authorize('settings.update'), lifecycleController.updateLifecycleState);
 router.post('/device', authorize('settings.update'), lifecycleController.registerDevice);
+router.post('/database/validate', authorize('settings.read'), lifecycleController.validateDatabase);
+router.post('/database/register', authorize('settings.update'), lifecycleController.registerDatabase);
+router.get('/database/list', authorize('settings.read'), lifecycleController.listDatabases);
 
 export default router;

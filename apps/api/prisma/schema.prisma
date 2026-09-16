@@ -21,7 +21,9 @@ model Installation {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  devices         Device[]
+  devices             Device[]
+  installationUsers   InstallationUser[]
+  databaseRegistries  DatabaseRegistry[]
 
   @@index([status])
   @@index([lifecycleState])
@@ -29,11 +31,13 @@ model Installation {
 
 model Device {
   id              String       @id @default(uuid())
+  deviceId        String       @unique // Stable local device UUID
   installationId  String
   deviceName      String
   platform        String       @default("WINDOWS")
   osVersion       String?
   status          String       @default("ACTIVE") // ACTIVE, REVOKED, PENDING
+  revokedAt       DateTime?
   lastSeenAt      DateTime     @default(now())
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -41,6 +45,42 @@ model Device {
   installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
 
   @@index([installationId])
+  @@index([deviceId])
+  @@index([status])
+}
+
+model InstallationUser {
+  id              String       @id @default(uuid())
+  installationId  String
+  userId          String
+  createdAt       DateTime     @default(now())
+
+  installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([installationId, userId])
+  @@index([installationId])
+  @@index([userId])
+}
+
+model DatabaseRegistry {
+  id              String       @id @default(uuid())
+  databaseId      String       @unique // Stable logical database identifier
+  displayName     String
+  canonicalPath   String       @unique // Normalized canonical filesystem path
+  schemaVersion   Int          @default(1)
+  status          String       @default("ACTIVE") // ACTIVE, INACTIVE, MISSING, INVALID, CORRUPTED, UNSUPPORTED, UNAVAILABLE
+  databaseType    String       @default("LOCAL_PROFILE") // LOCAL_PROFILE, EXTERNAL, BACKUP
+  profileId       String?
+  installationId  String
+  lastValidatedAt DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId])
+  @@index([databaseId])
   @@index([status])
 }
 
@@ -61,8 +101,9 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  userProfiles UserProfile[]
-  sessions     Session[]
+  userProfiles      UserProfile[]
+  installationUsers InstallationUser[]
+  sessions          Session[]
 
   @@index([role])
 }

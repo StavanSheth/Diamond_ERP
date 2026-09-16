@@ -10,6 +10,7 @@ import type {
   InstallationDto,
   DeviceDto,
   LifecycleStatusResponse,
+  InstallationUserDto,
 } from '@diamond-erp/contracts';
 
 // Ordered lifecycle progression states
@@ -26,15 +27,22 @@ export const LIFECYCLE_STAGES: LifecycleState[] = [
 ];
 
 export class InstallationService {
-  private getInstallationIdFilePath(): string {
+  public getInstallationIdFilePath(): string {
     return path.join(getConfigDir(), '.installation-id');
+  }
+
+  public getDeviceIdFilePath(): string {
+    return path.join(getConfigDir(), '.device-id');
   }
 
   /**
    * Resolves or generates the permanent installation ID.
    * Backed by %LOCALAPPDATA%\DiamondERP\config\.installation-id for recovery.
+   *
+   * Safety invariant: If persistent storage fails, it throws rather than
+   * silently generating an unstable ephemeral ID.
    */
-  private getOrGenerateInstallationId(): string {
+  public getOrGenerateInstallationId(): string {
     const filePath = this.getInstallationIdFilePath();
     try {
       if (fs.existsSync(filePath)) {
@@ -52,8 +60,35 @@ export class InstallationService {
       logger.info(`Generated and persisted new installation ID: ${newId}`);
       return newId;
     } catch (err) {
-      logger.warn(`Could not persist .installation-id to disk: ${(err as Error).message}`);
-      return crypto.randomUUID();
+      logger.error(`Failed to persist installation ID to ${filePath}: ${(err as Error).message}`);
+      throw new Error(`Installation identity failure: Could not safely persist installation ID: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Resolves or generates the stable local device ID.
+   * Backed by %LOCALAPPDATA%\DiamondERP\config\.device-id.
+   */
+  public getOrGenerateDeviceId(): string {
+    const filePath = this.getDeviceIdFilePath();
+    try {
+      if (fs.existsSync(filePath)) {
+        const stored = fs.readFileSync(filePath, 'utf-8').trim();
+        if (stored && stored.length >= 16) {
+          return stored;
+        }
+      }
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const newId = crypto.randomUUID();
+      fs.writeFileSync(filePath, newId, { encoding: 'utf-8', mode: 0o600 });
+      logger.info(`Generated and persisted local device ID: ${newId}`);
+      return newId;
+    } catch (err) {
+      logger.error(`Failed to persist device ID to ${filePath}: ${(err as Error).message}`);
+      throw new Error(`Device identity failure: Could not safely persist device ID: ${(err as Error).message}`);
     }
   }
 
@@ -101,26 +136,34 @@ export class InstallationService {
   }
 
   /**
+   * Check if a state transition is permitted.
+   */
+  canTransition(current: LifecycleState, target: LifecycleState, options?: { isReset?: boolean }): boolean {
+    if (!LIFECYCLE_STAGES.includes(target)) return false;
+    if (current === target) return true;
+    if (target === 'NOT_INITIALIZED') return true; // Reset always allowed
+    if (options?.isReset && target === 'DATABASE_DISCOVERY') return true; // Controlled recovery allowed
+
+    const currentIndex = LIFECYCLE_STAGES.indexOf(current);
+    const targetIndex = LIFECYCLE_STAGES.indexOf(target);
+
+    // Strictly progressive forward transition by exactly 1 step
+    return targetIndex === currentIndex + 1;
+  }
+
+  /**
    * Controlled state transition for the onboarding/lifecycle state machine.
    */
-  async updateLifecycleState(targetState: LifecycleState): Promise<InstallationDto> {
+  async updateLifecycleState(targetState: LifecycleState, options?: { isReset?: boolean }): Promise<InstallationDto> {
     if (!LIFECYCLE_STAGES.includes(targetState)) {
       throw new ValidationError(`Invalid lifecycle state: "${targetState}". Allowed: ${LIFECYCLE_STAGES.join(', ')}`);
     }
 
     const current = await this.getOrCreateInstallation();
-    const currentIndex = LIFECYCLE_STAGES.indexOf(current.lifecycleState);
-    const targetIndex = LIFECYCLE_STAGES.indexOf(targetState);
 
-    // Transition validation: Allow progressive step, reset to NOT_INITIALIZED, or staying in same state
-    const isReset = targetState === 'NOT_INITIALIZED';
-    const isStepForward = targetIndex === currentIndex + 1;
-    const isSameState = targetIndex === currentIndex;
-    const isJumpToReady = targetState === 'READY'; // Allowed when fast-forwarding completed setups
-
-    if (!isReset && !isStepForward && !isSameState && !isJumpToReady && targetIndex < currentIndex) {
+    if (!this.canTransition(current.lifecycleState, targetState, options)) {
       throw new ConflictError(
-        `Illegal lifecycle transition: Cannot move backward from ${current.lifecycleState} to ${targetState} without resetting.`
+        `Illegal lifecycle transition: Cannot move from ${current.lifecycleState} to ${targetState}. Step progression must be followed.`
       );
     }
 
@@ -128,7 +171,10 @@ export class InstallationService {
       lifecycleState: targetState,
     };
 
-    if (targetState === 'READY' && !current.initializedAt) {
+    if (targetState === 'READY') {
+      if (current.lifecycleState !== 'DATABASE_SETUP') {
+        throw new ConflictError(`Cannot reach READY from ${current.lifecycleState}. DATABASE_SETUP must be completed first.`);
+      }
       updateData.initializedAt = new Date();
     } else if (targetState === 'NOT_INITIALIZED') {
       updateData.initializedAt = null;
@@ -161,19 +207,30 @@ export class InstallationService {
 
   /**
    * Register or update the local desktop Device linked to this installation.
+   *
+   * Invariant: Idempotent by persistent deviceId. Changing display name updates
+   * the existing device record without creating duplicate devices.
    */
-  async registerDevice(deviceName: string, platform = 'WINDOWS', osVersion?: string): Promise<DeviceDto> {
-    if (!deviceName || deviceName.trim().length === 0) {
+  async registerDevice(options: {
+    deviceName: string;
+    deviceId?: string;
+    platform?: string;
+    osVersion?: string;
+  }): Promise<DeviceDto> {
+    const deviceName = options.deviceName?.trim();
+    if (!deviceName) {
       throw new ValidationError('Device name is required');
     }
 
     const install = await this.getOrCreateInstallation();
+    const effectiveDeviceId = options.deviceId?.trim() || this.getOrGenerateDeviceId();
+    const platform = options.platform || 'WINDOWS';
 
-    // Look for existing device with same name on this installation
+    // Look up existing device by stable deviceId on this installation
     const existing = await systemPrisma.device.findFirst({
       where: {
         installationId: install.id,
-        deviceName: deviceName.trim(),
+        deviceId: effectiveDeviceId,
       },
     });
 
@@ -182,8 +239,9 @@ export class InstallationService {
       deviceRecord = await systemPrisma.device.update({
         where: { id: existing.id },
         data: {
+          deviceName, // Display name update
           platform,
-          osVersion: osVersion || existing.osVersion,
+          osVersion: options.osVersion !== undefined ? options.osVersion : existing.osVersion,
           lastSeenAt: new Date(),
           status: 'ACTIVE',
         },
@@ -192,27 +250,53 @@ export class InstallationService {
       deviceRecord = await systemPrisma.device.create({
         data: {
           installationId: install.id,
-          deviceName: deviceName.trim(),
+          deviceId: effectiveDeviceId,
+          deviceName,
           platform,
-          osVersion,
+          osVersion: options.osVersion,
           status: 'ACTIVE',
           lastSeenAt: new Date(),
         },
       });
     }
 
-    logger.info(`Device registered: ${deviceRecord.deviceName} (${deviceRecord.id}) under installation ${install.installationId}`);
+    logger.info(`Device registered: ${deviceRecord.deviceName} [${deviceRecord.deviceId}] under installation ${install.installationId}`);
 
     return {
       id: deviceRecord.id,
+      deviceId: deviceRecord.deviceId,
       installationId: deviceRecord.installationId,
       deviceName: deviceRecord.deviceName,
       platform: deviceRecord.platform,
       osVersion: deviceRecord.osVersion,
       status: deviceRecord.status as any,
+      revokedAt: deviceRecord.revokedAt?.toISOString() || null,
       lastSeenAt: deviceRecord.lastSeenAt.toISOString(),
       createdAt: deviceRecord.createdAt.toISOString(),
       updatedAt: deviceRecord.updatedAt.toISOString(),
+    };
+  }
+
+  /**
+   * Associate an ERP business user with this local installation.
+   */
+  async associateUser(installationId: string, userId: string): Promise<InstallationUserDto> {
+    const record = await systemPrisma.installationUser.upsert({
+      where: {
+        installationId_userId: { installationId, userId },
+      },
+      update: {},
+      create: {
+        installationId,
+        userId,
+      },
+    });
+
+    return {
+      id: record.id,
+      installationId: record.installationId,
+      userId: record.userId,
+      createdAt: record.createdAt.toISOString(),
     };
   }
 

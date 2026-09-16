@@ -16,6 +16,7 @@ build/
 .app-activation.json
 .app-profile/
 .installation-id
+.device-id
 
 # IDE
 .vscode/

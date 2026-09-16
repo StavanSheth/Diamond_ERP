@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
 import fs from 'fs';
-import { getDatabasesDir, getConfigDir, getDatabaseTemplatePath } from '../paths';
+import { getDatabasesDir, getConfigDir, getDatabaseTemplatePath, getControlDbPath } from '../paths';
 
 // ── Profile Context ─────────────────────────────────────────────────────
 export interface ProfileContext {
@@ -246,15 +246,11 @@ function createPrismaClient(dbUrl: string): PrismaClient {
   return client;
 }
 
-// ── System Client ───────────────────────────────────────────────────────
-// Dedicated client for system/tenant metadata, user auth, and sessions
-const defaultDbPath = path.resolve(DB_DIR, `${defaultProfile}.db`);
-ensureProfileDbFile(defaultDbPath);
-if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
-  const customFile = process.env.DATABASE_URL.slice(5);
-  ensureProfileDbFile(path.resolve(customFile));
-}
-const systemDbUrl = process.env.DATABASE_URL || `file:${defaultDbPath}`;
+// ── System / Control Database Client ─────────────────────────────────────
+// Dedicated client for system/tenant metadata, installation lifecycle, and user auth
+const controlDbPath = getControlDbPath();
+ensureProfileDbFile(controlDbPath);
+const systemDbUrl = process.env.DATABASE_URL || `file:${controlDbPath}`;
 export const systemPrisma = createPrismaClient(systemDbUrl);
 configureSqlitePragmas(systemPrisma).catch(() => {});
 

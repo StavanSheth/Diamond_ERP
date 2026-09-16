@@ -25,9 +25,9 @@ sequenceDiagram
 
     Note over Launcher,SQLite: 1. APPLICATION INITIALIZATION & ENVIRONMENT SETUP
     Launcher->>Node: Spawn child process with DIAMOND_DATA_DIR=%LOCALAPPDATA%\DiamondERP
-    Node->>Paths: getDataDir() & getDatabasesDir()
-    Paths-->>Node: Returns %LOCALAPPDATA%\DiamondERP\databases
-    Node->>PrismaProxy: Initialize systemPrisma (file:%LOCALAPPDATA%\DiamondERP\databases\Stavan.db)
+    Node->>Paths: getDataDir(), getDatabasesDir(), and getControlDbPath()
+    Paths-->>Node: Returns %LOCALAPPDATA%\DiamondERP\databases and system.db
+    Node->>PrismaProxy: Initialize systemPrisma (Control DB: %LOCALAPPDATA%\DiamondERP\system.db or dev fallback)
     PrismaProxy->>SQLite: PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;
 
     Note over Launcher,SQLite: 2. INCOMING HTTP REQUEST & TENANCY RESOLUTION

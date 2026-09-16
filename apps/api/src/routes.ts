@@ -52,6 +52,10 @@ export function createRoutes(
   router.use('/health', createHealthRouter(healthController));
   router.use('/api/auth', createAuthRouter());
   router.get('/api/system/lifecycle', lifecycleController.getLifecycleStatus);
+  // Bootstrap lifecycle endpoints (controller enforces bootstrap boundary: READY requires auth)
+  router.post('/api/system/lifecycle-state', lifecycleController.updateLifecycleState);
+  router.post('/api/system/device', lifecycleController.registerDevice);
+  router.post('/api/system/database/validate', lifecycleController.validateDatabase);
 
   // ── Protected routes requiring explicit profile context ───────────────
   const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];

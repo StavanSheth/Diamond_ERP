@@ -70,7 +70,61 @@ async function main() {
     console.log('✔ Added lastValidatedAt column to Profile');
   }
 
-  // 5. Run WAL checkpoint to ensure all changes are written into the main .db file
+  // 5. Enhance Device with deviceId and revokedAt
+  const devCols = await prisma.$queryRawUnsafe('PRAGMA table_info("Device")');
+  if (!devCols.some((c) => c.name === 'deviceId')) {
+    await prisma.$executeRawUnsafe('ALTER TABLE "Device" ADD COLUMN "deviceId" TEXT;');
+    await prisma.$executeRawUnsafe('UPDATE "Device" SET "deviceId" = "id" WHERE "deviceId" IS NULL;');
+    await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "Device_deviceId_key" ON "Device"("deviceId");');
+    console.log('✔ Added deviceId to Device');
+  }
+  if (!devCols.some((c) => c.name === 'revokedAt')) {
+    await prisma.$executeRawUnsafe('ALTER TABLE "Device" ADD COLUMN "revokedAt" DATETIME;');
+    console.log('✔ Added revokedAt to Device');
+  }
+
+  // 6. Create InstallationUser table
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "InstallationUser" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "installationId" TEXT NOT NULL,
+      "userId" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "InstallationUser_installationId_fkey" FOREIGN KEY ("installationId") REFERENCES "Installation" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT "InstallationUser_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+  `);
+  await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "InstallationUser_installationId_userId_key" ON "InstallationUser"("installationId", "userId");`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "InstallationUser_installationId_idx" ON "InstallationUser"("installationId");`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "InstallationUser_userId_idx" ON "InstallationUser"("userId");`);
+  console.log('✔ InstallationUser table & indexes verified');
+
+  // 7. Create DatabaseRegistry table
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "DatabaseRegistry" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "databaseId" TEXT NOT NULL,
+      "displayName" TEXT NOT NULL,
+      "canonicalPath" TEXT NOT NULL,
+      "schemaVersion" INTEGER NOT NULL DEFAULT 1,
+      "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+      "databaseType" TEXT NOT NULL DEFAULT 'LOCAL_PROFILE',
+      "profileId" TEXT,
+      "installationId" TEXT NOT NULL,
+      "lastValidatedAt" DATETIME,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "DatabaseRegistry_installationId_fkey" FOREIGN KEY ("installationId") REFERENCES "Installation" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+  `);
+  await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "DatabaseRegistry_databaseId_key" ON "DatabaseRegistry"("databaseId");`);
+  await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "DatabaseRegistry_canonicalPath_key" ON "DatabaseRegistry"("canonicalPath");`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "DatabaseRegistry_installationId_idx" ON "DatabaseRegistry"("installationId");`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "DatabaseRegistry_databaseId_idx" ON "DatabaseRegistry"("databaseId");`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "DatabaseRegistry_status_idx" ON "DatabaseRegistry"("status");`);
+  console.log('✔ DatabaseRegistry table & indexes verified');
+
+  // 8. Run WAL checkpoint to ensure all changes are written into the main .db file
   await prisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
   console.log('✔ WAL checkpoint complete on Stavan.db');
 
