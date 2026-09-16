@@ -26,7 +26,8 @@ export type DatabaseStatus =
   | 'UNAVAILABLE'
   | 'INVALID'
   | 'CORRUPTED'
-  | 'UNSUPPORTED';
+  | 'UNSUPPORTED'
+  | 'PENDING';
 
 export interface InstallationDto {
   id: string;

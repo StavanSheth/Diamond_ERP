@@ -198,7 +198,7 @@ export class DatabaseValidationService {
           integrityCheck: 'ok',
           tablesFound,
           missingRequiredTables,
-          detectedType: isBackupPath ? 'BACKUP' : 'UNKNOWN_SQLITE',
+          detectedType: isBackupPath ? 'UNSUPPORTED_BACKUP' : 'UNKNOWN_SQLITE',
           details: `Missing required Diamond ERP tables: ${missingRequiredTables.join(', ')}`,
           error: 'Unsupported schema',
         };

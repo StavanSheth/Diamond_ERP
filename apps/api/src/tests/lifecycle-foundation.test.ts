@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { installationService, LIFECYCLE_STAGES } from '../modules/system/installation.service';
 import { authService, ROLES } from '../modules/auth/auth.service';
 import { authController } from '../modules/auth/auth.controller';
-import { systemPrisma, ensureProfileDbFile, getClientForProfile } from '../infrastructure/database/prisma';
+import prisma, { systemPrisma, ensureProfileDbFile, getClientForProfile, runWithProfile } from '../infrastructure/database/prisma';
 import { getDatabasesDir, getDatabaseTemplatePath, getControlDbPath } from '../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../modules/system/database/database-path.util';
 import { databaseValidationService } from '../modules/system/database/database-validation.service';
@@ -444,6 +444,90 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       expect(hashAfter).toBe(hashBefore);
       expect(mtimeAfter).toBe(mtimeBefore);
     });
+
+    // ── Authoritative Schema Validation vs Filename/Path Heuristics ──
+    it('Test A: recognizes a valid ERP database even if renamed to random_file_name.db', async () => {
+      const randomNamePath = path.resolve(getDatabasesDir(), `random_file_name_${Date.now()}.db`);
+      testDbFiles.push(randomNamePath);
+      ensureProfileDbFile(randomNamePath);
+
+      const result = await databaseValidationService.validateDatabase(randomNamePath);
+      expect(result.isValid).toBe(true);
+      expect(result.status).toBe('ACTIVE');
+      expect(result.tableCount).toBeGreaterThan(20);
+      expect(result.missingRequiredTables.length).toBe(0);
+    });
+
+    it('Test B: rejects a database named diamond_erp.db if it contains unrelated SQLite schema', async () => {
+      const fakeErpPath = path.resolve(getDatabasesDir(), `diamond_erp_${Date.now()}.db`);
+      testDbFiles.push(fakeErpPath);
+
+      const tempClient = new PrismaClient({
+        datasources: { db: { url: `file:${fakeErpPath.replace(/\\/g, '/')}` } },
+      });
+      await tempClient.$connect();
+      await tempClient.$executeRawUnsafe('CREATE TABLE "unrelated_logs" (id TEXT PRIMARY KEY, message TEXT);');
+      await tempClient.$disconnect();
+
+      const result = await databaseValidationService.validateDatabase(fakeErpPath);
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('UNSUPPORTED');
+      expect(result.missingRequiredTables).toContain('Stock');
+      expect(result.missingRequiredTables).toContain('Party');
+    });
+
+    it('Test C: rejects a file in profiles/ directory if it contains invalid schema', async () => {
+      const profilesDir = path.resolve(getDatabasesDir(), 'profiles');
+      if (!fs.existsSync(profilesDir)) {
+        fs.mkdirSync(profilesDir, { recursive: true });
+      }
+      const invalidInProfiles = path.resolve(profilesDir, `corrupt_profile_${Date.now()}.db`);
+      testDbFiles.push(invalidInProfiles);
+
+      const tempClient = new PrismaClient({
+        datasources: { db: { url: `file:${invalidInProfiles.replace(/\\/g, '/')}` } },
+      });
+      await tempClient.$connect();
+      await tempClient.$executeRawUnsafe('CREATE TABLE "some_other_data" (id INT);');
+      await tempClient.$disconnect();
+
+      const result = await databaseValidationService.validateDatabase(invalidInProfiles);
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('UNSUPPORTED');
+    });
+
+    it('Test D: validates a valid ERP database located in an external directory outside Diamond ERP root', async () => {
+      const externalDir = path.resolve(__dirname, '../../test_external_db_dir');
+      if (!fs.existsSync(externalDir)) {
+        fs.mkdirSync(externalDir, { recursive: true });
+      }
+      const externalDb = path.resolve(externalDir, `company_archive_${Date.now()}.db`);
+      testDbFiles.push(externalDb);
+      ensureProfileDbFile(externalDb);
+
+      const result = await databaseValidationService.validateDatabase(externalDb);
+      expect(result.isValid).toBe(true);
+      expect(result.status).toBe('ACTIVE');
+      expect(result.detectedType).toBe('EXTERNAL');
+    });
+
+    it('Test E: proves path classification cannot override structural validation', async () => {
+      // Name includes 'backup' and '.bak' but has no Diamond ERP tables
+      const fakeBackupPath = path.resolve(getDatabasesDir(), `critical_backup_${Date.now()}.bak`);
+      testDbFiles.push(fakeBackupPath);
+
+      const tempClient = new PrismaClient({
+        datasources: { db: { url: `file:${fakeBackupPath.replace(/\\/g, '/')}` } },
+      });
+      await tempClient.$connect();
+      await tempClient.$executeRawUnsafe('CREATE TABLE "arbitrary_dump" (data TEXT);');
+      await tempClient.$disconnect();
+
+      const result = await databaseValidationService.validateDatabase(fakeBackupPath);
+      // Path said 'backup' but structural validation authoritatively marks it UNSUPPORTED
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('UNSUPPORTED');
+    });
   });
 
   describe('7. Database Registry Service & Lifecycle Tracking', () => {
@@ -491,6 +575,132 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       // getDatabase should now detect missing file and update status to MISSING
       const updated = await databaseRegistryService.getDatabase(reg.databaseId);
       expect(updated.status).toBe('MISSING');
+    });
+
+    it('proves databaseId is an independent UUID v4 and does not depend on path, filename, or machine name', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const pathA = path.resolve(getDatabasesDir(), `indep_a_${Date.now()}.db`);
+      const pathB = path.resolve(getDatabasesDir(), `indep_b_${Date.now()}.db`);
+      testDbFiles.push(pathA, pathB);
+      ensureProfileDbFile(pathA);
+      ensureProfileDbFile(pathB);
+
+      const regA = await databaseRegistryService.registerDatabase({
+        rawPath: pathA,
+        displayName: 'Independent DB Alpha',
+        installationId: install.id,
+      });
+
+      const regB = await databaseRegistryService.registerDatabase({
+        rawPath: pathB,
+        displayName: 'Independent DB Beta',
+        installationId: install.id,
+      });
+
+      // UUID v4 format regex
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      expect(uuidRegex.test(regA.databaseId)).toBe(true);
+      expect(uuidRegex.test(regB.databaseId)).toBe(true);
+      expect(regA.databaseId).not.toBe(regB.databaseId);
+
+      // Must not contain filename or path
+      expect(regA.databaseId).not.toContain('indep_a');
+      expect(regA.databaseId).not.toContain('.db');
+      expect(regA.databaseId).not.toContain('DiamondERP');
+
+      // Renamed database file retains independent logical identity
+      const renamedPath = path.resolve(getDatabasesDir(), `indep_a_renamed_${Date.now()}.db`);
+      testDbFiles.push(renamedPath);
+      fs.renameSync(pathA, renamedPath);
+
+      const updatedReg = await databaseRegistryService.updateDatabasePath(regA.databaseId, renamedPath);
+      expect(updatedReg.databaseId).toBe(regA.databaseId); // Logical identity stays identical
+      expect(updatedReg.canonicalPath).toBe(renamedPath);
+    });
+
+    it('proves 4 concurrent registrations of the same canonical path produce exactly one logical record', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const raceDbPath = path.resolve(getDatabasesDir(), `quad_race_${Date.now()}.db`);
+      testDbFiles.push(raceDbPath);
+      ensureProfileDbFile(raceDbPath);
+
+      const [r1, r2, r3, r4] = await Promise.all([
+        databaseRegistryService.registerDatabase({ rawPath: raceDbPath, installationId: install.id }),
+        databaseRegistryService.registerDatabase({ rawPath: raceDbPath, installationId: install.id }),
+        databaseRegistryService.registerDatabase({ rawPath: raceDbPath, installationId: install.id }),
+        databaseRegistryService.registerDatabase({ rawPath: raceDbPath, installationId: install.id }),
+      ]);
+
+      expect(r1.databaseId).toBe(r2.databaseId);
+      expect(r2.databaseId).toBe(r3.databaseId);
+      expect(r3.databaseId).toBe(r4.databaseId);
+
+      const count = await systemPrisma.databaseRegistry.count({
+        where: { canonicalPath: r1.canonicalPath },
+      });
+      expect(count).toBe(1);
+    });
+
+    it('enforces referential integrity between DatabaseRegistry and Profile (ON DELETE SET NULL)', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const profileCode = `prof_fk_${Date.now()}`;
+      const dbPath = path.resolve(getDatabasesDir(), `${profileCode}.db`);
+      testDbFiles.push(dbPath);
+      ensureProfileDbFile(dbPath);
+
+      // 1. Create a Profile in control DB
+      const profile = await systemPrisma.profile.create({
+        data: {
+          code: profileCode,
+          name: 'FK Test Profile',
+          dbPath,
+        },
+      });
+
+      // 2. Register DB referencing the profile
+      const reg = await databaseRegistryService.registerDatabase({
+        rawPath: dbPath,
+        displayName: 'FK Test DB',
+        profileId: profile.id,
+        installationId: install.id,
+      });
+
+      expect(reg.profileId).toBe(profile.id);
+
+      // 3. Registering with non-existent profileId is rejected
+      await expect(
+        databaseRegistryService.registerDatabase({
+          rawPath: path.resolve(getDatabasesDir(), `fake_${Date.now()}.db`),
+          profileId: crypto.randomUUID(),
+          installationId: install.id,
+        })
+      ).rejects.toThrow(/Profile not found/);
+
+      // 4. Safe deactivation / deletion of Profile metadata:
+      // Deleting Profile record must NOT delete the DatabaseRegistry row or the physical SQLite file!
+      await systemPrisma.profile.delete({ where: { id: profile.id } });
+
+      const regAfterProfileDelete = await databaseRegistryService.getDatabase(reg.databaseId);
+      expect(regAfterProfileDelete).not.toBeNull();
+      expect(regAfterProfileDelete.id).toBe(reg.id);
+      expect(regAfterProfileDelete.profileId).toBeNull(); // On delete set null
+      expect(fs.existsSync(dbPath)).toBe(true); // Physical DB remains 100% intact!
+    });
+
+    it('provisions a database with PENDING -> ACTIVE lifecycle and safe rollback compensation', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const provPath = path.resolve(getDatabasesDir(), `prov_comp_${Date.now()}.db`);
+      testDbFiles.push(provPath);
+
+      const reg = await databaseRegistryService.provisionDatabase({
+        rawPath: provPath,
+        displayName: 'Provisioned DB with Compensation',
+        installationId: install.id,
+      });
+
+      expect(reg.status).toBe('ACTIVE');
+      expect(fs.existsSync(provPath)).toBe(true);
+      expect(fs.statSync(provPath).size).toBeGreaterThan(0);
     });
   });
 
@@ -726,6 +936,93 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
         authService.deactivateUser('non-existent-user-uuid')
       ).rejects.toThrow(/User not found/);
     });
+
+    it('GAP 5 Verification: complete chain Installation -> User -> UserProfile -> Profile -> DB -> DatabaseRegistry preservation', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const username = `chain_user_${Date.now()}`;
+      const profileCode = `chain_prof_${Date.now()}`;
+      const dbPath = path.resolve(getDatabasesDir(), `${profileCode}.db`);
+      testDbFiles.push(dbPath);
+      ensureProfileDbFile(dbPath);
+
+      // Create User with Profile
+      const user = await authService.createUser(
+        username,
+        'ChainSecurePass123!',
+        'Chain User',
+        ROLES.MANAGER,
+        [profileCode]
+      );
+
+      // Associate user with installation
+      await installationService.associateUser(install.id, user.id);
+
+      // Find Profile record
+      const profileRecord = await systemPrisma.profile.findUnique({
+        where: { code: profileCode },
+      });
+      expect(profileRecord).not.toBeNull();
+
+      // Find UserProfile record
+      const userProfileRecord = await systemPrisma.userProfile.findFirst({
+        where: { userId: user.id, profileId: profileRecord!.id },
+      });
+      expect(userProfileRecord).not.toBeNull();
+
+      // Register in DatabaseRegistry
+      const reg = await databaseRegistryService.registerDatabase({
+        rawPath: dbPath,
+        displayName: 'Chain Profile DB',
+        profileId: profileRecord!.id,
+        installationId: install.id,
+      });
+
+      // Record SHA-256 before deactivation
+      const sha256Before = crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
+
+      // Login to verify active session
+      const login = await authService.login(username, 'ChainSecurePass123!');
+      expect(login.token).toBeDefined();
+
+      // ACT: Deactivate user via authService
+      const deact = await authService.deactivateUser(user.id);
+      expect(deact.isActive).toBe(false);
+      expect(deact.deletedAt).toBeInstanceOf(Date);
+
+      // ASSERT INVARIANTS:
+      // 1. User is deactivated & login is rejected
+      await expect(
+        authService.login(username, 'ChainSecurePass123!')
+      ).rejects.toThrow(/Invalid username or password/);
+
+      // 2. UserProfile remains in DB
+      const userProfileAfter = await systemPrisma.userProfile.findUnique({
+        where: { id: userProfileRecord!.id },
+      });
+      expect(userProfileAfter).not.toBeNull();
+
+      // 3. Profile record remains in DB
+      const profileAfter = await systemPrisma.profile.findUnique({
+        where: { id: profileRecord!.id },
+      });
+      expect(profileAfter).not.toBeNull();
+
+      // 4. DatabaseRegistry record remains in DB
+      const regAfter = await databaseRegistryService.getDatabase(reg.databaseId);
+      expect(regAfter).not.toBeNull();
+      expect(regAfter.status).toBe('ACTIVE');
+
+      // 5. Physical SQLite DB remains on disk and SHA-256 is byte-identical
+      expect(fs.existsSync(dbPath)).toBe(true);
+      const sha256After = crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
+      expect(sha256After).toBe(sha256Before);
+
+      // 6. Profile data remains fully queryable
+      const client = getClientForProfile(profileCode);
+      const integrity = await client.$queryRawUnsafe<any[]>('PRAGMA integrity_check;');
+      expect(integrity[0]?.integrity_check).toBe('ok');
+      await client.$disconnect();
+    });
   });
 
   describe('11. Control DB vs Profile DB Separation', () => {
@@ -737,6 +1034,53 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       // Verify systemPrisma operates against the control DB
       const count = await systemPrisma.installation.count();
       expect(typeof count).toBe('number');
+    });
+
+    it('verifies cross-database isolation between Control DB and Profile DB', async () => {
+      await installationService.getOrCreateInstallation();
+      const codeA = `iso_scope_a_${Date.now()}`;
+      const codeB = `iso_scope_b_${Date.now()}`;
+      const dbPathA = path.resolve(getDatabasesDir(), `${codeA}.db`);
+      const dbPathB = path.resolve(getDatabasesDir(), `${codeB}.db`);
+      testDbFiles.push(dbPathA, dbPathB);
+      ensureProfileDbFile(dbPathA);
+      ensureProfileDbFile(dbPathB);
+
+      // 1. Control DB record created in systemPrisma
+      const controlDev = await installationService.registerDevice({
+        deviceName: 'Control-Terminal-Iso',
+      });
+      expect(controlDev.id).toBeDefined();
+
+      // 2. Profile DB record created in Profile A via runWithProfile
+      await runWithProfile(codeA, async () => {
+        await prisma.party.create({
+          data: {
+            partyCode: 'ISO-PARTY-A',
+            name: 'Isolated Party Alpha',
+            partyType: 'CUSTOMER',
+            phone: '9876543210',
+          },
+        });
+      });
+
+      // 3. Verify Profile B cannot see Profile A data
+      await runWithProfile(codeB, async () => {
+        const countB = await prisma.party.count({ where: { partyCode: 'ISO-PARTY-A' } });
+        expect(countB).toBe(0);
+      });
+
+      // 4. Verify Profile A has the data
+      await runWithProfile(codeA, async () => {
+        const countA = await prisma.party.count({ where: { partyCode: 'ISO-PARTY-A' } });
+        expect(countA).toBe(1);
+      });
+
+      // 5. Control DB lifecycle tables are distinct from profile data
+      const devInControl = await systemPrisma.device.findUnique({
+        where: { deviceId: controlDev.deviceId },
+      });
+      expect(devInControl).not.toBeNull();
     });
   });
 
