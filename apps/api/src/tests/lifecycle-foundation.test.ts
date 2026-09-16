@@ -2,14 +2,17 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
 import { installationService, LIFECYCLE_STAGES } from '../modules/system/installation.service';
 import { authService, ROLES } from '../modules/auth/auth.service';
+import { authController } from '../modules/auth/auth.controller';
 import { systemPrisma, ensureProfileDbFile, getClientForProfile } from '../infrastructure/database/prisma';
 import { getDatabasesDir, getDatabaseTemplatePath, getControlDbPath } from '../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../modules/system/database/database-path.util';
 import { databaseValidationService } from '../modules/system/database/database-validation.service';
 import { databaseRegistryService } from '../modules/system/database/database-registry.service';
 import { lifecycleController } from '../modules/system/lifecycle.controller';
+import { createRoutes } from '../routes';
 
 describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Security Verification', () => {
   const testDbFiles: string[] = [];
@@ -105,34 +108,98 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       expect(updatedInstall.deviceCount).toBe(1);
     });
 
-    it('is strictly idempotent when re-registered with same deviceId even if display name changes', async () => {
+    it('is strictly idempotent when re-registered with same authoritative deviceId even if display name changes', async () => {
       const install = await installationService.getOrCreateInstallation();
-      const customDeviceId = crypto.randomUUID();
 
       const dev1 = await installationService.registerDevice({
-        deviceId: customDeviceId,
         deviceName: 'Workshop-OldName',
         platform: 'WINDOWS',
       });
 
       await new Promise((r) => setTimeout(r, 10));
 
-      // Same deviceId, updated display name
+      // Same authoritative deviceId, updated display name
       const dev2 = await installationService.registerDevice({
-        deviceId: customDeviceId,
+        deviceId: dev1.deviceId,
         deviceName: 'Workshop-Renamed',
         platform: 'WINDOWS',
         osVersion: '11.0.22631',
       });
 
       expect(dev2.id).toBe(dev1.id);
-      expect(dev2.deviceId).toBe(customDeviceId);
+      expect(dev2.deviceId).toBe(dev1.deviceId);
       expect(dev2.deviceName).toBe('Workshop-Renamed'); // Display name updated
       expect(dev2.osVersion).toBe('11.0.22631');
 
       // Device count remains exactly 1 (no duplicate device created)
       const count = await systemPrisma.device.count({ where: { installationId: install.id } });
       expect(count).toBe(1);
+    });
+
+    it('rejects arbitrary client-invented deviceId spoofing', async () => {
+      await installationService.getOrCreateInstallation();
+      const fakeDeviceId = crypto.randomUUID();
+
+      await expect(
+        installationService.registerDevice({
+          deviceId: fakeDeviceId,
+          deviceName: 'Spoofed-Device',
+        })
+      ).rejects.toThrow(/Arbitrary deviceId cannot be bound/);
+    });
+
+    it('handles device revocation and reactivation rules', async () => {
+      const dev = await installationService.registerDevice({
+        deviceName: 'Revocable-Device',
+      });
+      expect(dev.status).toBe('ACTIVE');
+
+      // Revoke device
+      const revoked = await installationService.revokeDevice(dev.deviceId);
+      expect(revoked.status).toBe('REVOKED');
+      expect(revoked.revokedAt).not.toBeNull();
+
+      // Subsequent registration while revoked throws ConflictError
+      await expect(
+        installationService.registerDevice({
+          deviceName: 'Revoked-Attempt',
+        })
+      ).rejects.toThrow(/Device has been revoked/);
+
+      // Reactivate device
+      const reactivated = await installationService.reactivateDevice(dev.deviceId);
+      expect(reactivated.status).toBe('ACTIVE');
+      expect(reactivated.revokedAt).toBeNull();
+    });
+
+    it('prevents cross-installation deviceId collision and maintains installation isolation', async () => {
+      await installationService.getOrCreateInstallation();
+      const dev1 = await installationService.registerDevice({
+        deviceName: 'Isolated-Terminal-1',
+      });
+
+      // Create a second isolated installation in DB
+      const install2 = await systemPrisma.installation.create({
+        data: {
+          installationId: crypto.randomUUID(),
+          appVersion: '3.0.0',
+          lifecycleState: 'NOT_INITIALIZED',
+        },
+      });
+
+      // Attempting to register the same deviceId under install2 must violate uniqueness constraint
+      await expect(
+        systemPrisma.device.create({
+          data: {
+            deviceId: dev1.deviceId,
+            installationId: install2.id,
+            deviceName: 'Rogue-Duplicate-Terminal',
+          },
+        })
+      ).rejects.toThrow();
+
+      // Clean up second installation
+      await systemPrisma.installation.delete({ where: { id: install2.id } });
     });
   });
 
@@ -200,7 +267,7 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
   describe('4. Pre-Auth / Bootstrap Security Boundary', () => {
     it('allows unauthenticated lifecycle mutations during onboarding but blocks when READY', async () => {
       // 1. In NOT_INITIALIZED: unauthenticated mutation is permitted for setup
-      const mockReq: any = { body: { lifecycleState: 'APP_SETUP' } };
+      const mockReq: any = { body: { lifecycleState: 'APP_SETUP' }, headers: {} };
       let jsonSent: any = null;
       const mockRes: any = {
         status: () => mockRes,
@@ -221,7 +288,7 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       await installationService.updateLifecycleState('READY');
 
       // 2. When READY: unauthenticated mutation MUST return 403 Forbidden
-      const unauthReq: any = { body: { lifecycleState: 'NOT_INITIALIZED' } }; // unauthenticated (no req.user)
+      const unauthReq: any = { body: { lifecycleState: 'NOT_INITIALIZED' }, headers: {} }; // unauthenticated (no req.user)
       let forbiddenStatus: number | null = null;
       let forbiddenJson: any = null;
       const mockForbiddenRes: any = {
@@ -295,6 +362,69 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       expect(result.isValid).toBe(false);
       expect(result.status).toBe('INVALID');
       expect(result.error).toBe('Not a SQLite database');
+    });
+
+    it('identifies undersized/empty file as INVALID', async () => {
+      const emptyPath = path.resolve(getDatabasesDir(), `empty_${Date.now()}.db`);
+      testDbFiles.push(emptyPath);
+      fs.writeFileSync(emptyPath, Buffer.alloc(100)); // 100 bytes (< 512 bytes)
+
+      const result = await databaseValidationService.validateDatabase(emptyPath);
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('INVALID');
+      expect(result.integrityCheck).toBe('invalid_file_size');
+    });
+
+    it('identifies corrupted SQLite database file as CORRUPTED or INVALID', async () => {
+      const corruptPath = path.resolve(getDatabasesDir(), `corrupt_${Date.now()}.db`);
+      testDbFiles.push(corruptPath);
+      const corruptBuf = Buffer.concat([
+        Buffer.from('SQLite format 3\0'),
+        crypto.randomBytes(1024),
+      ]);
+      fs.writeFileSync(corruptPath, corruptBuf);
+
+      const result = await databaseValidationService.validateDatabase(corruptPath);
+      expect(result.isValid).toBe(false);
+      expect(['CORRUPTED', 'INVALID']).toContain(result.status);
+    });
+
+    it('identifies SQLite database missing required tables as UNSUPPORTED', async () => {
+      const missingTablePath = path.resolve(getDatabasesDir(), `missing_tbl_${Date.now()}.db`);
+      testDbFiles.push(missingTablePath);
+      ensureProfileDbFile(missingTablePath);
+
+      const alterClient = new PrismaClient({
+        datasources: { db: { url: `file:${missingTablePath.replace(/\\/g, '/')}` } },
+      });
+      await alterClient.$connect();
+      await alterClient.$executeRawUnsafe('DROP TABLE "Stock";');
+      await alterClient.$disconnect();
+
+      const result = await databaseValidationService.validateDatabase(missingTablePath);
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('UNSUPPORTED');
+      expect(result.missingRequiredTables).toContain('Stock');
+    });
+
+    it('identifies SQLite database missing required columns as UNSUPPORTED', async () => {
+      const missingColPath = path.resolve(getDatabasesDir(), `missing_col_${Date.now()}.db`);
+      testDbFiles.push(missingColPath);
+      ensureProfileDbFile(missingColPath);
+
+      const alterClient = new PrismaClient({
+        datasources: { db: { url: `file:${missingColPath.replace(/\\/g, '/')}` } },
+      });
+      await alterClient.$connect();
+      await alterClient.$executeRawUnsafe('DROP TABLE "Party";');
+      await alterClient.$executeRawUnsafe('CREATE TABLE "Party" (id TEXT PRIMARY KEY, name TEXT, partyType TEXT);');
+      await alterClient.$disconnect();
+
+      const result = await databaseValidationService.validateDatabase(missingColPath);
+      expect(result.isValid).toBe(false);
+      expect(result.status).toBe('UNSUPPORTED');
+      expect(result.detectedType).toBe('UNSUPPORTED_VERSION');
+      expect(result.missingRequiredColumns?.['Party']).toContain('partyCode');
     });
 
     it('proves database validation is strictly read-only and never alters the file', async () => {
@@ -387,6 +517,50 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
         where: { installationId: install.id, userId: user.id },
       });
       expect(stored).not.toBeNull();
+    });
+
+    it('is strictly idempotent when associating the same user twice', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const username = `dup_user_${Date.now()}`;
+      const user = await authService.createUser(username, 'Password123!', 'Dup User', ROLES.VIEWER, ['Stavan']);
+
+      const link1 = await installationService.associateUser(install.id, user.id);
+      const link2 = await installationService.associateUser(install.id, user.id);
+
+      expect(link2.id).toBe(link1.id);
+      const count = await systemPrisma.installationUser.count({
+        where: { installationId: install.id, userId: user.id },
+      });
+      expect(count).toBe(1);
+    });
+
+    it('rejects association for non-existent installation or user', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      await expect(
+        installationService.associateUser('fake-install-id', 'fake-user-id')
+      ).rejects.toThrow(/Installation not found/);
+
+      await expect(
+        installationService.associateUser(install.id, 'fake-user-id')
+      ).rejects.toThrow(/User not found/);
+    });
+
+    it('supports disassociating user without deleting the user account or profile database', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const username = `disassoc_user_${Date.now()}`;
+      const user = await authService.createUser(username, 'Password123!', 'Disassoc User', ROLES.VIEWER, ['Stavan']);
+
+      await installationService.associateUser(install.id, user.id);
+      let users = await installationService.getInstallationUsers(install.id);
+      expect(users.some((u) => u.userId === user.id)).toBe(true);
+
+      await installationService.disassociateUser(install.id, user.id);
+      users = await installationService.getInstallationUsers(install.id);
+      expect(users.some((u) => u.userId === user.id)).toBe(false);
+
+      // User row still exists in database
+      const userStillExists = await systemPrisma.user.findUnique({ where: { id: user.id } });
+      expect(userStillExists).not.toBeNull();
     });
   });
 
@@ -495,6 +669,63 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       const relogin = await authService.login(username, 'SecurePassword123!');
       expect(relogin.token).toBeDefined();
     });
+
+    it('enforces self-deactivation protection and controller endpoint authorization', async () => {
+      const admin = await authService.createUser(
+        `admin_actor_${Date.now()}`,
+        'AdminPass123!',
+        'Admin Actor',
+        ROLES.SUPER_ADMIN,
+        ['Stavan']
+      );
+
+      const target = await authService.createUser(
+        `target_deact_${Date.now()}`,
+        'TargetPass123!',
+        'Target Subject',
+        ROLES.VIEWER,
+        ['Stavan']
+      );
+
+      // 1. Self-deactivation is rejected with 400 Bad Request
+      let statusResult: number | null = null;
+      let jsonResult: any = null;
+      const mockRes: any = {
+        status: (s: number) => { statusResult = s; return mockRes; },
+        json: (j: any) => { jsonResult = j; return mockRes; },
+      };
+
+      const selfReq: any = {
+        params: { userId: admin.id },
+        user: { id: admin.id, role: ROLES.SUPER_ADMIN },
+      };
+
+      await authController.deactivateUser(selfReq, mockRes, () => {});
+      expect(statusResult).toBe(400);
+      expect(jsonResult?.error).toMatch(/Cannot deactivate your own.*user account/);
+
+      // 2. Deactivating target user succeeds
+      statusResult = 200;
+      jsonResult = null;
+      const deactReq: any = {
+        params: { userId: target.id },
+        user: { id: admin.id, role: ROLES.SUPER_ADMIN },
+      };
+
+      await authController.deactivateUser(deactReq, mockRes, () => {});
+      expect(statusResult).toBe(200);
+      expect(jsonResult?.success).toBe(true);
+      expect(jsonResult?.data?.isActive).toBe(false);
+
+      // 3. Deactivate already inactive user (idempotent)
+      const deactAgain = await authService.deactivateUser(target.id);
+      expect(deactAgain.isActive).toBe(false);
+
+      // 4. Deactivate non-existent user throws NotFoundError
+      await expect(
+        authService.deactivateUser('non-existent-user-uuid')
+      ).rejects.toThrow(/User not found/);
+    });
   });
 
   describe('11. Control DB vs Profile DB Separation', () => {
@@ -506,6 +737,86 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       // Verify systemPrisma operates against the control DB
       const count = await systemPrisma.installation.count();
       expect(typeof count).toBe('number');
+    });
+  });
+
+  describe('12. Concurrency & Transactional Safety', () => {
+    it('handles concurrent device registration without duplicate records', async () => {
+      await installationService.getOrCreateInstallation();
+
+      const [d1, d2] = await Promise.all([
+        installationService.registerDevice({ deviceName: 'Concurrent-Terminal-1' }),
+        installationService.registerDevice({ deviceName: 'Concurrent-Terminal-2' }),
+      ]);
+
+      expect(d1.deviceId).toBe(d2.deviceId);
+      const count = await systemPrisma.device.count();
+      expect(count).toBe(1);
+    });
+
+    it('handles concurrent database registration for same canonical path cleanly', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const dbPath = path.resolve(getDatabasesDir(), `concurrent_db_${Date.now()}.db`);
+      testDbFiles.push(dbPath);
+      ensureProfileDbFile(dbPath);
+
+      const [r1, r2] = await Promise.all([
+        databaseRegistryService.registerDatabase({ rawPath: dbPath, installationId: install.id }),
+        databaseRegistryService.registerDatabase({ rawPath: dbPath, installationId: install.id }),
+      ]);
+
+      expect(r1.databaseId).toBe(r2.databaseId);
+      expect(r1.id).toBe(r2.id);
+    });
+
+    it('handles concurrent user association to same installation idempotently', async () => {
+      const install = await installationService.getOrCreateInstallation();
+      const user = await authService.createUser(
+        `race_user_${Date.now()}`,
+        'Password123!',
+        'Race User',
+        ROLES.VIEWER,
+        ['Stavan']
+      );
+
+      const [a1, a2] = await Promise.all([
+        installationService.associateUser(install.id, user.id),
+        installationService.associateUser(install.id, user.id),
+      ]);
+
+      expect(a1.id).toBe(a2.id);
+      const count = await systemPrisma.installationUser.count({
+        where: { installationId: install.id, userId: user.id },
+      });
+      expect(count).toBe(1);
+    });
+  });
+
+  describe('13. Unified Routing & System Boundary Verification', () => {
+    it('ensures zero duplicate system route registrations on the root router', () => {
+      const mockController = new Proxy({}, { get: () => () => {} }) as any;
+      const appRouter = createRoutes(
+        mockController,
+        mockController,
+        mockController,
+        mockController,
+        mockController,
+        mockController,
+        mockController,
+        mockController
+      );
+
+      // Verify that top-level router does NOT register duplicate /api/system/* routes
+      const topLevelSystemRoutes = appRouter.stack.filter(
+        (layer: any) => layer.route && layer.route.path.startsWith('/api/system')
+      );
+      expect(topLevelSystemRoutes.length).toBe(0);
+
+      // Verify exactly one sub-router handles /api/system
+      const systemMounts = appRouter.stack.filter(
+        (layer: any) => layer.regexp && layer.regexp.test('/api/system')
+      );
+      expect(systemMounts.length).toBe(1);
     });
   });
 });

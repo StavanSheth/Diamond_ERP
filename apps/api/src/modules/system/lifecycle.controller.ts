@@ -4,6 +4,8 @@ import { databaseRegistryService } from './database/database-registry.service';
 import { databaseValidationService } from './database/database-validation.service';
 import { z } from 'zod';
 
+import { authService } from '../auth/auth.service';
+
 const updateStateSchema = z.object({
   lifecycleState: z.enum([
     'NOT_INITIALIZED',
@@ -37,6 +39,11 @@ const registerDatabaseSchema = z.object({
   profileId: z.string().optional(),
 });
 
+const associateUserSchema = z.object({
+  userId: z.string().min(1),
+  installationId: z.string().optional(),
+});
+
 export class LifecycleController {
   /**
    * Helper: Enforce bootstrap security boundary.
@@ -44,9 +51,16 @@ export class LifecycleController {
    */
   private async checkBootstrapAccess(req: Request, res: Response): Promise<boolean> {
     const install = await installationService.getOrCreateInstallation();
-    const isAuthenticated = !!(req as any).user;
+    let user = (req as any).user;
+    if (!user && req.headers?.authorization?.startsWith('Bearer ')) {
+      const token = req.headers.authorization.substring(7);
+      const payload = authService.verifyToken(token);
+      if (payload) {
+        user = payload;
+      }
+    }
 
-    if (install.lifecycleState === 'READY' && !isAuthenticated) {
+    if (install.lifecycleState === 'READY' && (!user || user.id === 'default-admin')) {
       res.status(403).json({
         success: false,
         error: 'Forbidden',
@@ -198,6 +212,93 @@ export class LifecycleController {
       const install = await installationService.getOrCreateInstallation();
       const list = await databaseRegistryService.listDatabases(install.id);
       res.json({ success: true, data: list });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/system/device/:deviceId/revoke
+   */
+  revokeDevice = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rawDeviceId = req.params.deviceId;
+      const deviceId = Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId;
+      const device = await installationService.revokeDevice(deviceId);
+      res.json({ success: true, data: device });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/system/device/:deviceId/reactivate
+   */
+  reactivateDevice = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rawDeviceId = req.params.deviceId;
+      const deviceId = Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId;
+      const device = await installationService.reactivateDevice(deviceId);
+      res.json({ success: true, data: device });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/system/users/associate
+   */
+  associateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = associateUserSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+      const install = await installationService.getOrCreateInstallation();
+      const installationId = parsed.data.installationId || install.id;
+      const result = await installationService.associateUser(installationId, parsed.data.userId);
+      res.status(201).json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/system/users/disassociate
+   */
+  disassociateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = associateUserSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+      const install = await installationService.getOrCreateInstallation();
+      const installationId = parsed.data.installationId || install.id;
+      await installationService.disassociateUser(installationId, parsed.data.userId);
+      res.json({ success: true, message: 'User disassociated from installation' });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * GET /api/system/users
+   */
+  getInstallationUsers = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const install = await installationService.getOrCreateInstallation();
+      const users = await installationService.getInstallationUsers(install.id);
+      res.json({ success: true, data: users });
     } catch (error) {
       next(error);
     }

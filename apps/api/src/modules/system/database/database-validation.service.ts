@@ -17,6 +17,17 @@ const REQUIRED_ERP_TABLES = [
   'Profile',
 ];
 
+// Critical columns required per table to guarantee application query compatibility
+const REQUIRED_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  Stock: ['id', 'stockCode', 'name'],
+  Ledger: ['id', 'stockId', 'ledgerType', 'name'],
+  Party: ['id', 'partyCode', 'name', 'partyType'],
+  DiamondItem: ['id', 'itemCode', 'stockId', 'carat'],
+  Transaction: ['id', 'transactionNo', 'transactionType', 'status'],
+  User: ['id', 'username', 'passwordHash'],
+  Profile: ['id', 'code', 'name'],
+};
+
 export class DatabaseValidationService {
   /**
    * Validate a candidate SQLite database in a strictly READ-ONLY manner.
@@ -36,6 +47,7 @@ export class DatabaseValidationService {
         integrityCheck: 'failed',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'INVALID',
         details: pathResult.error,
         error: pathResult.error,
       };
@@ -54,6 +66,7 @@ export class DatabaseValidationService {
         integrityCheck: 'file_not_found',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'MISSING',
         details: 'Physical database file does not exist on disk',
         error: 'File not found',
       };
@@ -71,6 +84,7 @@ export class DatabaseValidationService {
           integrityCheck: 'invalid_file_size',
           tablesFound: [],
           missingRequiredTables: REQUIRED_ERP_TABLES,
+          detectedType: 'INVALID',
           details: 'File is not a valid regular file or size is below minimum SQLite page size (512 bytes)',
           error: 'Invalid file format',
         };
@@ -87,6 +101,7 @@ export class DatabaseValidationService {
         integrityCheck: 'access_denied',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'UNAVAILABLE',
         details: `Permission denied reading file: ${(err as Error).message}`,
         error: 'File unavailable',
       };
@@ -109,6 +124,7 @@ export class DatabaseValidationService {
           integrityCheck: 'not_sqlite',
           tablesFound: [],
           missingRequiredTables: REQUIRED_ERP_TABLES,
+          detectedType: 'INVALID',
           details: 'File header does not match SQLite 3 signature',
           error: 'Not a SQLite database',
         };
@@ -123,6 +139,7 @@ export class DatabaseValidationService {
         integrityCheck: 'read_error',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'INVALID',
         details: `Failed reading database header: ${(err as Error).message}`,
         error: 'Read error',
       };
@@ -138,6 +155,8 @@ export class DatabaseValidationService {
         },
       },
     });
+
+    const isBackupPath = canonicalPath.toLowerCase().includes('backup') || canonicalPath.toLowerCase().endsWith('.bak');
 
     try {
       await readOnlyClient.$connect();
@@ -156,6 +175,7 @@ export class DatabaseValidationService {
           integrityCheck: checkMessage,
           tablesFound: [],
           missingRequiredTables: REQUIRED_ERP_TABLES,
+          detectedType: 'CORRUPTED',
           details: `SQLite integrity_check returned: ${checkMessage}`,
           error: 'Database corrupted',
         };
@@ -178,8 +198,43 @@ export class DatabaseValidationService {
           integrityCheck: 'ok',
           tablesFound,
           missingRequiredTables,
+          detectedType: isBackupPath ? 'BACKUP' : 'UNKNOWN_SQLITE',
           details: `Missing required Diamond ERP tables: ${missingRequiredTables.join(', ')}`,
           error: 'Unsupported schema',
+        };
+      }
+
+      // Check required columns per required table
+      const missingRequiredColumns: Record<string, string[]> = {};
+      let hasColumnDeficiencies = false;
+
+      for (const table of REQUIRED_ERP_TABLES) {
+        const tableColumns = await readOnlyClient.$queryRawUnsafe<{ name: string }[]>(
+          `PRAGMA table_info("${table}");`
+        );
+        const colNames = new Set(tableColumns.map((c) => c.name));
+        const expectedCols = REQUIRED_COLUMNS_BY_TABLE[table] || [];
+        const missingCols = expectedCols.filter((col) => !colNames.has(col));
+        if (missingCols.length > 0) {
+          missingRequiredColumns[table] = missingCols;
+          hasColumnDeficiencies = true;
+        }
+      }
+
+      if (hasColumnDeficiencies) {
+        return {
+          status: 'UNSUPPORTED',
+          canonicalPath,
+          isValid: false,
+          tableCount: tablesFound.length,
+          schemaVersion: 0,
+          integrityCheck: 'ok',
+          tablesFound,
+          missingRequiredTables: [],
+          missingRequiredColumns,
+          detectedType: 'UNSUPPORTED_VERSION',
+          details: `Required tables are missing critical columns: ${JSON.stringify(missingRequiredColumns)}`,
+          error: 'Schema columns incompatible',
         };
       }
 
@@ -194,6 +249,12 @@ export class DatabaseValidationService {
         // Default to version 1
       }
 
+      const detectedType = isBackupPath
+        ? 'BACKUP'
+        : canonicalPath.toLowerCase().includes('profiles')
+        ? 'DIAMOND_ERP_PROFILE'
+        : 'EXTERNAL';
+
       return {
         status: 'ACTIVE',
         canonicalPath,
@@ -203,6 +264,8 @@ export class DatabaseValidationService {
         integrityCheck: 'ok',
         tablesFound,
         missingRequiredTables: [],
+        missingRequiredColumns: {},
+        detectedType,
         details: 'Valid Diamond ERP production database',
       };
     } catch (err) {
@@ -216,6 +279,7 @@ export class DatabaseValidationService {
         integrityCheck: 'connection_failed',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'INVALID',
         details: (err as Error).message,
         error: 'Failed to inspect database',
       };

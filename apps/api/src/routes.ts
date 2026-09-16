@@ -19,7 +19,6 @@ import { createAuthRouter } from './modules/auth/auth.routes';
 import diamondRouter from './modules/diamonds/diamond.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import systemRoutes from './modules/system/system.routes';
-import { lifecycleController } from './modules/system/lifecycle.controller';
 import { authenticate } from './middleware/auth';
 import { profileMiddleware, optionalProfileMiddleware } from './middleware/profile';
 import { idempotencyMiddleware } from './middleware/idempotency';
@@ -28,7 +27,7 @@ import { idempotencyMiddleware } from './middleware/idempotency';
  * Route aggregator — registers all application routes.
  * 
  * Security architecture:
- *   - /health, /api/auth, and /api/system/lifecycle (probe) are PUBLIC
+ *   - /health, /api/auth, and /api/system (bootstrap/public probes) are handled at route level
  *   - All other /api/* routes run through `protectedStack` [authenticate, profileMiddleware, idempotencyMiddleware]:
  *       1. Authenticate user via JWT & session check
  *       2. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
@@ -51,11 +50,9 @@ export function createRoutes(
   // ── Public routes (no authentication) ────────────────────────────────
   router.use('/health', createHealthRouter(healthController));
   router.use('/api/auth', createAuthRouter());
-  router.get('/api/system/lifecycle', lifecycleController.getLifecycleStatus);
-  // Bootstrap lifecycle endpoints (controller enforces bootstrap boundary: READY requires auth)
-  router.post('/api/system/lifecycle-state', lifecycleController.updateLifecycleState);
-  router.post('/api/system/device', lifecycleController.registerDevice);
-  router.post('/api/system/database/validate', lifecycleController.validateDatabase);
+
+  // ── System & Lifecycle routes (handles public bootstrap and protected admin internally) ──
+  router.use('/api/system', systemRoutes);
 
   // ── Protected routes requiring explicit profile context ───────────────
   const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];
@@ -70,12 +67,10 @@ export function createRoutes(
   router.use('/api/reports', protectedStack, reportsRoutes);
 
   // ── Protected routes with optional profile context ──────────────────
-  // Settings includes profile listing/switching; system includes admin operations.
-  // These endpoints handle profile context internally when needed.
+  // Settings includes profile listing/switching; handles profile context internally when needed.
   const adminStack = [authenticate, optionalProfileMiddleware, idempotencyMiddleware];
 
   router.use('/api/settings', adminStack, createSettingsRouter(settingsController));
-  router.use('/api/system', adminStack, systemRoutes);
 
   return router;
 }

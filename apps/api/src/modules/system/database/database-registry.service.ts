@@ -57,22 +57,34 @@ export class DatabaseRegistryService {
     const databaseId = crypto.randomUUID();
     const displayName = input.displayName || canonicalPath.split(/[\\/]/).pop()?.replace(/\.db$/, '') || 'Database';
 
-    const created = await systemPrisma.databaseRegistry.create({
-      data: {
-        databaseId,
-        displayName,
-        canonicalPath,
-        schemaVersion: validation.schemaVersion || 1,
-        status: validation.status,
-        databaseType: input.databaseType || (pathResult.isExternal ? 'EXTERNAL' : 'LOCAL_PROFILE'),
-        profileId: input.profileId || null,
-        installationId: input.installationId,
-        lastValidatedAt: new Date(),
-      },
-    });
+    try {
+      const created = await systemPrisma.databaseRegistry.create({
+        data: {
+          databaseId,
+          displayName,
+          canonicalPath,
+          schemaVersion: validation.schemaVersion || 1,
+          status: validation.status,
+          databaseType: input.databaseType || (pathResult.isExternal ? 'EXTERNAL' : 'LOCAL_PROFILE'),
+          profileId: input.profileId || null,
+          installationId: input.installationId,
+          lastValidatedAt: new Date(),
+        },
+      });
 
-    logger.info(`Registered database in control registry: ${created.displayName} [${created.databaseId}] -> ${canonicalPath}`);
-    return this.mapToDto(created);
+      logger.info(`Registered database in control registry: ${created.displayName} [${created.databaseId}] -> ${canonicalPath}`);
+      return this.mapToDto(created);
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        const raceExisting = await systemPrisma.databaseRegistry.findUnique({
+          where: { canonicalPath },
+        });
+        if (raceExisting) {
+          return this.mapToDto(raceExisting);
+        }
+      }
+      throw err;
+    }
   }
 
   /**

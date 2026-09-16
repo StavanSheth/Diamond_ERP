@@ -33,8 +33,11 @@ export function createAuthRouter(): Router {
   router.post('/change-password', authenticate, authController.changePassword);
   router.post('/logout', authenticate, authController.logout);
 
-  // Admin-only routes
+  // Admin-only user lifecycle routes
   router.post('/users', authenticate, authorize('user.create'), authController.createUser);
+  router.post('/users/:userId/deactivate', authenticate, authorize('user.delete'), authController.deactivateUser);
+  router.delete('/users/:userId', authenticate, authorize('user.delete'), authController.deactivateUser);
+  router.post('/users/:userId/reactivate', authenticate, authorize('user.update'), authController.reactivateUser);
 
   return router;
 }

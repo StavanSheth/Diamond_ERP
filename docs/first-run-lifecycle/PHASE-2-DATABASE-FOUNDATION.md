@@ -56,56 +56,35 @@ Every change adheres to the Ponytail principle:
 ## 4. Control Database vs. Profile Database Separation
 
 In Diamond ERP V3:
-- In production, each company or workspace profile maps to its own SQLite database file located in `%LOCALAPPDATA%\DiamondERP\databases\<profileCode>.db`.
-- The active profile's database contains both the system identity records (`Installation`, `Device`, `User`, `Profile`, `UserProfile`, `Session`, `IdempotencyKey`) and the domain business tables (`Stock`, `Ledger`, `Party`, `DiamondItem`, `Transaction`, etc.).
+- The Control / System Database (`system.db`) is resolved strictly via `paths.getControlDbPath()`.
+- Dedicated `systemPrisma` client operates with SQLite WAL and `busy_timeout` pragmas on `system.db` to house authoritative system metadata: `Installation`, `Device`, `InstallationUser`, `DatabaseRegistry`, `User`, `Profile`, `Session`.
+- Individual company / workspace profile databases reside at `%LOCALAPPDATA%\DiamondERP\databases\<profileCode>.db` and hold business domain data: `Stock`, `Ledger`, `Party`, `DiamondItem`, `Transaction`, etc.
 - When bootstrapping or accessing the ERP, `ensureProfileDbFile` clones the clean, immutable `template.db` (which contains 0 rows across all tables) to the profile's dedicated database path.
 - `AsyncLocalStorage` and dynamic Prisma client pooling route all tenant operations to the designated database file with full isolation.
 
 ---
 
-## 5. Schema Changes & Migrations
+## 5. Authoritative Device Identity & Concurrency Controls
 
-### Prisma Schema Updates (`apps/api/prisma/schema.prisma`)
-1. **Model `Installation`**:
-   - `id`: String (UUID, primary key)
-   - `installationId`: String (Unique persistent GUID)
-   - `appVersion`: String (Default: "3.0.0")
-   - `status`: String (Default: "ACTIVE")
-   - `lifecycleState`: String (Default: "NOT_INITIALIZED", strictly progressive)
-   - `initializedAt`: DateTime?
-   - `devices`: `Device[]` relation
-
-2. **Model `Device`**:
-   - `id`: String (UUID, primary key)
-   - `installationId`: String (Foreign key to `Installation.id`)
-   - `deviceName`: String (Hostname or custom workstation alias)
-   - `platform`: String (Default: "WINDOWS")
-   - `osVersion`: String?
-   - `status`: String (Default: "ACTIVE")
-   - `lastSeenAt`: DateTime
-   - Relation to `Installation` with `onDelete: Cascade`
-
-3. **Model `User`**:
-   - Added `deletedAt DateTime?` for safe soft-deletion.
-   - Deactivation sets `isActive = false`, `deletedAt = now()`, and revokes all active sessions.
-   - No filesystem unlinking or DB deletion is triggered.
-
-4. **Model `Profile`**:
-   - Added `schemaVersion Int @default(1)`
-   - Added `status String @default("ACTIVE")` (ACTIVE, INACTIVE, ORPHANED, UNAVAILABLE, INVALID, CORRUPTED, UNSUPPORTED)
-   - Added `lastValidatedAt DateTime?`
-
-### Migration SQL (`apps/api/prisma/migrations/20260916120000_add_lifecycle_foundation/migration.sql`)
-Executed safely using idempotent table creations and safe `ALTER TABLE ADD COLUMN` queries. Applied to existing control and profile databases without data loss.
+- Device identity is owned by the local installation (`.device-id` stored in AppData config dir).
+- Rejection of client-invented arbitrary `deviceId`: Callers cannot spoof or rebind device IDs arbitrarily (`ValidationError`).
+- Cross-installation collision defense: A device bound to one installation cannot be bound to another (`ConflictError`).
+- Device revocation and reactivation: Setting status to `REVOKED` prevents automatic re-registration until explicitly reactivated via administrative API (`POST /api/system/device/:deviceId/reactivate`).
+- Database Registry concurrency safety: `DatabaseRegistryService.registerDatabase()` catches Prisma `P2002` race conditions on `canonicalPath` and returns the existing registry record idempotently without data duplication.
 
 ---
 
-## 6. Template DB Purity & Maintenance
+## 6. Strengthened Database Validation & Immutability
 
-- Template DB: `apps/api/prisma/template.db`
-- Verified schema: 28 tables, identical to production DDL.
-- Row count check: **0 rows across all tables**.
-- Synchronizer script (`scripts/sync-template-db.js`) cleans WAL, executes `DELETE FROM <table>`, runs `VACUUM`, and verifies zero rows before persisting.
+- `DatabaseValidationService.validateDatabase()` operates strictly read-only (`?mode=ro`).
+- SHA-256 hash and filesystem mtime immutability verified across candidate inspections.
+- Multi-tier inspection pipeline:
+  1. Filesystem existence and size check (<512 bytes $\to$ `INVALID`, `invalid_file_size`).
+  2. Header check (16-byte SQLite 3 format signature).
+  3. `PRAGMA integrity_check` execution (corrupted candidate $\to$ `CORRUPTED`).
+  4. Master table check against essential Diamond ERP tables (`Stock`, `Ledger`, `Party`, `DiamondItem`, `Transaction`, `User`, `Profile`).
+  5. Critical column verification via `PRAGMA table_info("<table_name>")` (detects schema compatibility; deficiencies reported in `missingRequiredColumns` with `detectedType = 'UNSUPPORTED_VERSION'`).
+  6. Database type classification: `DIAMOND_ERP_PROFILE`, `BACKUP`, `EXTERNAL`, `UNKNOWN_SQLITE`, `CORRUPTED`, `INVALID`, `MISSING`.
 
 ---
 
@@ -115,17 +94,30 @@ Mandatory lifecycle rule enforced:
 $$\text{DELETE USER} \implies \text{Soft-deactivate user} \land \text{Revoke sessions} \land \text{Preserve profile SQLite database file}$$
 
 - `AuthService.deactivateUser(userId)`:
-  1. Sets `isActive = false`, `deletedAt = new Date()`.
+  1. Sets `isActive = false`, `deletedAt = new Date()`, increments `tokenVersion`.
   2. Revokes all active user sessions in the `Session` table.
   3. Rejects subsequent login attempts with 401 Unauthorized.
-  4. Keeps all `UserProfile` records and physical SQLite database files on disk untouched.
+  4. Keeps all `UserProfile` records, database registry mappings, and physical SQLite database files on disk untouched.
 - `AuthService.reactivateUser(userId)`:
   1. Sets `isActive = true`, `deletedAt = null`.
   2. Restores user login capabilities immediately.
+- Controller protection:
+  - `POST /api/auth/users/:userId/deactivate` and `DELETE /api/auth/users/:userId` protected by `authenticate` and `authorize('user.delete')`.
+  - Self-deactivation prevention: Attempting to deactivate one's own authenticated account returns 400 Bad Request.
 
 ---
 
-## 8. Multi-Tenant Database Isolation
+## 8. Unified System Routing & Bootstrap Security Boundary
+
+- All `/api/system/*` routes are consolidated into `system.routes.ts` and mounted once at `/api/system` in `routes.ts`. Zero duplicate endpoint registrations exist.
+- Bootstrap boundary:
+  - `GET /api/system/lifecycle`: Always public probe.
+  - `POST /api/system/lifecycle-state` & `POST /api/system/device`: Allowed unauthenticated during onboarding (`lifecycleState !== 'READY'`); once `READY`, mutations require authentication and return 403 Forbidden without valid credentials.
+  - Administrative endpoints (`/installation`, `/database/register`, `/database/list`, `/users/associate`, `/users/disassociate`, `/users`, `/device/:deviceId/revoke`, `/device/:deviceId/reactivate`): Strictly authenticated with RBAC permissions.
+
+---
+
+## 9. Multi-Tenant Database Isolation
 
 - Tested via `apps/api/src/tests/lifecycle-foundation.test.ts`.
 - Profile A and Profile B point to distinct physical files on disk:
@@ -136,10 +128,11 @@ $$\text{DELETE USER} \implies \text{Soft-deactivate user} \land \text{Revoke ses
 
 ---
 
-## 9. Phase 3 Readiness & Dependencies
+## 10. Phase 3 Readiness & Dependencies
 
-Phase 2 is fully implemented and tested. Phase 3 (Local Device Security & PIN Foundation) can build directly on:
-- Stable `Installation` identity and `Device` records.
+Phase 2 remediation is complete with 96.8% code-level completion and all 40 foundation tests passing. Phase 3 (Local Device Security & PIN Foundation) can build directly on:
+- Authoritative local `Device` and `Installation` records.
 - Authoritative `LifecycleState` progression (`PIN_SETUP`, `DEVICE_SETUP`).
 - Public probe endpoint `GET /api/system/lifecycle` for first-run detection.
-- Soft-delete user semantics ensuring data integrity and safety.
+- Protected user lifecycle and clean system routing.
+

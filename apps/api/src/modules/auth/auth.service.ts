@@ -6,7 +6,7 @@ import path from 'path';
 import { systemPrisma, defaultProfile, getAllProfiles } from '../../infrastructure/database/prisma';
 import { logger } from '../../infrastructure/logging';
 import { getConfigDir } from '../../infrastructure/paths';
-import { AuthenticationError, AuthorizationError, ConflictError, ValidationError } from '../../errors';
+import { AuthenticationError, AuthorizationError, ConflictError, ValidationError, NotFoundError } from '../../errors';
 
 // ── Configuration ───────────────────────────────────────────────────────
 export const AUTH_CONFIG = {
@@ -448,7 +448,22 @@ export class AuthService {
   async deactivateUser(userId: string): Promise<{ id: string; username: string; isActive: boolean; deletedAt: Date | null }> {
     const user = await systemPrisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new AuthenticationError('User not found');
+      throw new NotFoundError(`User not found: ${userId}`);
+    }
+
+    // Idempotent: if already inactive, ensure sessions remain revoked and return current state
+    if (!user.isActive) {
+      await systemPrisma.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      logger.info(`User ${user.username} (${user.id}) was already deactivated. Re-confirmed session revocation.`);
+      return {
+        id: user.id,
+        username: user.username,
+        isActive: false,
+        deletedAt: user.deletedAt,
+      };
     }
 
     const now = new Date();
@@ -485,7 +500,15 @@ export class AuthService {
   async reactivateUser(userId: string): Promise<{ id: string; username: string; isActive: boolean }> {
     const user = await systemPrisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new AuthenticationError('User not found');
+      throw new NotFoundError(`User not found: ${userId}`);
+    }
+
+    if (user.isActive) {
+      return {
+        id: user.id,
+        username: user.username,
+        isActive: true,
+      };
     }
 
     await systemPrisma.user.update({

@@ -131,10 +131,7 @@ export function getControlDbPath(): string {
     return path.join(getDataDir(), 'system.db');
   }
   const devSystemDb = path.resolve(__dirname, '../../system.db');
-  if (fs.existsSync(devSystemDb)) {
-    return devSystemDb;
-  }
-  return path.resolve(__dirname, '../../Stavan.db');
+  return devSystemDb;
 }
 
 /**

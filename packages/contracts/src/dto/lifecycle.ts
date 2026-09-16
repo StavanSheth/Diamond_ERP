@@ -108,6 +108,8 @@ export interface DatabaseValidationResultDto {
   integrityCheck: string;
   tablesFound: string[];
   missingRequiredTables: string[];
+  missingRequiredColumns?: Record<string, string[]>;
+  detectedType?: string;
   details?: string;
   error?: string;
 }

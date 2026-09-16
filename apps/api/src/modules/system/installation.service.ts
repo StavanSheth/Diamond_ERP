@@ -4,7 +4,7 @@ import path from 'path';
 import { systemPrisma, defaultProfile } from '../../infrastructure/database/prisma';
 import { getConfigDir } from '../../infrastructure/paths';
 import { logger } from '../../infrastructure/logging';
-import { ValidationError, ConflictError } from '../../errors';
+import { ValidationError, ConflictError, NotFoundError } from '../../errors';
 import type {
   LifecycleState,
   InstallationDto,
@@ -206,62 +206,9 @@ export class InstallationService {
   }
 
   /**
-   * Register or update the local desktop Device linked to this installation.
-   *
-   * Invariant: Idempotent by persistent deviceId. Changing display name updates
-   * the existing device record without creating duplicate devices.
+   * Helper: Map Prisma Device record to DeviceDto
    */
-  async registerDevice(options: {
-    deviceName: string;
-    deviceId?: string;
-    platform?: string;
-    osVersion?: string;
-  }): Promise<DeviceDto> {
-    const deviceName = options.deviceName?.trim();
-    if (!deviceName) {
-      throw new ValidationError('Device name is required');
-    }
-
-    const install = await this.getOrCreateInstallation();
-    const effectiveDeviceId = options.deviceId?.trim() || this.getOrGenerateDeviceId();
-    const platform = options.platform || 'WINDOWS';
-
-    // Look up existing device by stable deviceId on this installation
-    const existing = await systemPrisma.device.findFirst({
-      where: {
-        installationId: install.id,
-        deviceId: effectiveDeviceId,
-      },
-    });
-
-    let deviceRecord;
-    if (existing) {
-      deviceRecord = await systemPrisma.device.update({
-        where: { id: existing.id },
-        data: {
-          deviceName, // Display name update
-          platform,
-          osVersion: options.osVersion !== undefined ? options.osVersion : existing.osVersion,
-          lastSeenAt: new Date(),
-          status: 'ACTIVE',
-        },
-      });
-    } else {
-      deviceRecord = await systemPrisma.device.create({
-        data: {
-          installationId: install.id,
-          deviceId: effectiveDeviceId,
-          deviceName,
-          platform,
-          osVersion: options.osVersion,
-          status: 'ACTIVE',
-          lastSeenAt: new Date(),
-        },
-      });
-    }
-
-    logger.info(`Device registered: ${deviceRecord.deviceName} [${deviceRecord.deviceId}] under installation ${install.installationId}`);
-
+  private mapDeviceToDto(deviceRecord: any): DeviceDto {
     return {
       id: deviceRecord.id,
       deviceId: deviceRecord.deviceId,
@@ -278,9 +225,157 @@ export class InstallationService {
   }
 
   /**
+   * Register or update the local desktop Device linked to this installation.
+   *
+   * Invariant: Idempotent by persistent deviceId. Changing display name updates
+   * the existing device record without creating duplicate devices.
+   *
+   * Authority: Installation owns device identity. If caller supplies an arbitrary
+   * deviceId that does not match local authoritative identity, it is rejected.
+   */
+  async registerDevice(options: {
+    deviceName: string;
+    deviceId?: string;
+    platform?: string;
+    osVersion?: string;
+  }): Promise<DeviceDto> {
+    const deviceName = options.deviceName?.trim();
+    if (!deviceName) {
+      throw new ValidationError('Device name is required');
+    }
+
+    const install = await this.getOrCreateInstallation();
+    const localAuthoritativeDeviceId = this.getOrGenerateDeviceId();
+
+    // Rejection of arbitrary spoofed/injected deviceId
+    if (options.deviceId && options.deviceId.trim() !== localAuthoritativeDeviceId) {
+      throw new ValidationError('Invalid device identity: Arbitrary deviceId cannot be bound to this installation.');
+    }
+
+    const effectiveDeviceId = localAuthoritativeDeviceId;
+    const platform = options.platform || 'WINDOWS';
+
+    // Cross-installation collision guard
+    const crossInstall = await systemPrisma.device.findFirst({
+      where: {
+        deviceId: effectiveDeviceId,
+        installationId: { not: install.id },
+      },
+    });
+    if (crossInstall) {
+      throw new ConflictError('Device is already registered under another installation.');
+    }
+
+    // Look up existing device by stable deviceId on this installation
+    const existing = await systemPrisma.device.findFirst({
+      where: {
+        installationId: install.id,
+        deviceId: effectiveDeviceId,
+      },
+    });
+
+    if (existing && existing.status === 'REVOKED') {
+      throw new ConflictError('Device has been revoked and cannot be automatically re-registered without administrative reactivation.');
+    }
+
+    let deviceRecord;
+    if (existing) {
+      deviceRecord = await systemPrisma.device.update({
+        where: { id: existing.id },
+        data: {
+          deviceName, // Display name update
+          platform,
+          osVersion: options.osVersion !== undefined ? options.osVersion : existing.osVersion,
+          lastSeenAt: new Date(),
+          status: 'ACTIVE',
+        },
+      });
+    } else {
+      try {
+        deviceRecord = await systemPrisma.device.create({
+          data: {
+            installationId: install.id,
+            deviceId: effectiveDeviceId,
+            deviceName,
+            platform,
+            osVersion: options.osVersion,
+            status: 'ACTIVE',
+            lastSeenAt: new Date(),
+          },
+        });
+      } catch (err: any) {
+        // Handle concurrent registration race safely
+        if (err.code === 'P2002') {
+          const raceWinner = await systemPrisma.device.findUnique({
+            where: { deviceId: effectiveDeviceId },
+          });
+          if (raceWinner) {
+            deviceRecord = raceWinner;
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    logger.info(`Device registered: ${deviceRecord.deviceName} [${deviceRecord.deviceId}] under installation ${install.installationId}`);
+    return this.mapDeviceToDto(deviceRecord);
+  }
+
+  /**
+   * Revoke a device administratively.
+   */
+  async revokeDevice(deviceId: string): Promise<DeviceDto> {
+    const existing = await systemPrisma.device.findUnique({ where: { deviceId } });
+    if (!existing) {
+      throw new NotFoundError(`Device not found for ID: ${deviceId}`);
+    }
+    const updated = await systemPrisma.device.update({
+      where: { id: existing.id },
+      data: {
+        status: 'REVOKED',
+        revokedAt: new Date(),
+      },
+    });
+    logger.warn(`Device revoked: ${updated.deviceName} [${updated.deviceId}]`);
+    return this.mapDeviceToDto(updated);
+  }
+
+  /**
+   * Reactivate a previously revoked device.
+   */
+  async reactivateDevice(deviceId: string): Promise<DeviceDto> {
+    const existing = await systemPrisma.device.findUnique({ where: { deviceId } });
+    if (!existing) {
+      throw new NotFoundError(`Device not found for ID: ${deviceId}`);
+    }
+    const updated = await systemPrisma.device.update({
+      where: { id: existing.id },
+      data: {
+        status: 'ACTIVE',
+        revokedAt: null,
+        lastSeenAt: new Date(),
+      },
+    });
+    logger.info(`Device reactivated: ${updated.deviceName} [${updated.deviceId}]`);
+    return this.mapDeviceToDto(updated);
+  }
+
+  /**
    * Associate an ERP business user with this local installation.
    */
   async associateUser(installationId: string, userId: string): Promise<InstallationUserDto> {
+    const install = await systemPrisma.installation.findUnique({ where: { id: installationId } });
+    if (!install) {
+      throw new NotFoundError(`Installation not found: ${installationId}`);
+    }
+    const user = await systemPrisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError(`User not found: ${userId}`);
+    }
+
     const record = await systemPrisma.installationUser.upsert({
       where: {
         installationId_userId: { installationId, userId },
@@ -298,6 +393,45 @@ export class InstallationService {
       userId: record.userId,
       createdAt: record.createdAt.toISOString(),
     };
+  }
+
+  /**
+   * Disassociate an ERP business user from this local installation without deleting user or DB.
+   */
+  async disassociateUser(installationId: string, userId: string): Promise<void> {
+    await systemPrisma.installationUser.deleteMany({
+      where: { installationId, userId },
+    });
+  }
+
+  /**
+   * List all business users associated with this local installation.
+   */
+  async getInstallationUsers(installationId: string): Promise<any[]> {
+    const records = await systemPrisma.installationUser.findMany({
+      where: { installationId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            role: true,
+            isActive: true,
+            deletedAt: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    return records.map((r) => ({
+      id: r.id,
+      installationId: r.installationId,
+      userId: r.userId,
+      createdAt: r.createdAt.toISOString(),
+      user: r.user,
+    }));
   }
 
   /**

@@ -306,6 +306,56 @@ export class AuthController {
       next(error);
     }
   };
+
+  /**
+   * POST /api/auth/users/:userId/deactivate or DELETE /api/auth/users/:userId
+   * Safe user soft-deactivation (Admin only).
+   */
+  deactivateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rawUserId = req.params.userId;
+      const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
+      if (!userId) {
+        res.status(400).json({ success: false, error: 'User ID is required' });
+        return;
+      }
+
+      const currentUser = (req as AuthenticatedRequest).user;
+      if (currentUser && currentUser.id === userId) {
+        res.status(400).json({
+          success: false,
+          error: 'Cannot deactivate your own active user account.',
+          message: 'Cannot deactivate your own active user account.',
+        });
+        return;
+      }
+
+      const result = await authService.deactivateUser(userId);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/auth/users/:userId/reactivate
+   * Reactivate previously deactivated user (Admin only).
+   */
+  reactivateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rawUserId = req.params.userId;
+      const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
+      if (!userId) {
+        res.status(400).json({ success: false, error: 'User ID is required' });
+        return;
+      }
+
+      const result = await authService.reactivateUser(userId);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 export const authController = new AuthController();
