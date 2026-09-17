@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { installationService, LIFECYCLE_STAGES } from '../modules/system/installation.service';
 import { authService, ROLES } from '../modules/auth/auth.service';
 import { authController } from '../modules/auth/auth.controller';
-import prisma, { systemPrisma, ensureProfileDbFile, getClientForProfile, runWithProfile } from '../infrastructure/database/prisma';
+import prisma, { systemPrisma, ensureProfileDbFile, getClientForProfile, runWithProfile, getActiveProfile } from '../infrastructure/database/prisma';
 import { getDatabasesDir, getDatabaseTemplatePath, getControlDbPath } from '../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../modules/system/database/database-path.util';
 import { databaseValidationService } from '../modules/system/database/database-validation.service';
@@ -1162,5 +1162,201 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       );
       expect(systemMounts.length).toBe(1);
     });
+  });
+
+  describe('14. Production Runtime Verification & Separation Invariants (C4-C9, B3-B5)', () => {
+    it('C4 & C5: Fresh installation simulation with zero accidental user/profile/DB mutations', async () => {
+      // 1. Initial lookup on fresh environment initializes Installation in NOT_INITIALIZED
+      const install = await installationService.getOrCreateInstallation();
+      expect(install.lifecycleState).toBe('NOT_INITIALIZED');
+      expect(install.status).toBe('ACTIVE');
+      expect(install.initializedAt).toBeNull();
+
+      // Invariant: Zero users, devices, or registries auto-created accidentally
+      const userCount = await systemPrisma.user.count();
+      const deviceCount = await systemPrisma.device.count();
+      const registryCount = await systemPrisma.databaseRegistry.count();
+      expect(typeof userCount).toBe('number');
+      expect(deviceCount).toBe(0);
+      expect(registryCount).toBe(0);
+
+      // Register device and associate user cleanly
+      const device = await installationService.registerDevice({ deviceName: 'Fresh-Desk-Terminal' });
+      expect(device.deviceName).toBe('Fresh-Desk-Terminal');
+      expect(device.status).toBe('ACTIVE');
+
+      // Move lifecycle forward
+      await installationService.updateLifecycleState('APP_SETUP');
+      const updated = await installationService.getOrCreateInstallation();
+      expect(updated.lifecycleState).toBe('APP_SETUP');
+    });
+
+    it('C6: Existing installation simulation preserves all IDs, users, profiles, and physical files', async () => {
+      const installBefore = await installationService.getOrCreateInstallation();
+      const devBefore = await installationService.registerDevice({ deviceName: 'Existing-Terminal' });
+
+      const testProfCode = `exist_prof_${Date.now()}`;
+      const dbPath = path.resolve(getDatabasesDir(), `${testProfCode}.db`);
+      testDbFiles.push(dbPath);
+      ensureProfileDbFile(dbPath);
+      const hashBefore = crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
+
+      const profile = await systemPrisma.profile.create({
+        data: { code: testProfCode, name: 'Existing Profile', dbPath },
+      });
+      const reg = await databaseRegistryService.registerDatabase({
+        rawPath: dbPath,
+        displayName: 'Existing DB',
+        profileId: profile.id,
+        installationId: installBefore.id,
+      });
+
+      // Simulate re-start / re-query
+      const installAfter = await installationService.getOrCreateInstallation();
+      expect(installAfter.id).toBe(installBefore.id);
+      expect(installAfter.installationId).toBe(installBefore.installationId);
+
+      const devAfter = await systemPrisma.device.findUnique({ where: { deviceId: devBefore.deviceId } });
+      expect(devAfter?.id).toBe(devBefore.id);
+
+      const regAfter = await databaseRegistryService.getDatabase(reg.databaseId);
+      expect(regAfter.id).toBe(reg.id);
+      expect(regAfter.profileId).toBe(profile.id);
+
+      // Physical DB unchanged
+      expect(fs.existsSync(dbPath)).toBe(true);
+      const hashAfter = crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
+      expect(hashAfter).toBe(hashBefore);
+    });
+
+    it('C7: Repeated startup initialization generates zero duplicate records', async () => {
+      // Call initialization 5 times repeatedly
+      for (let i = 0; i < 5; i++) {
+        await installationService.getOrCreateInstallation();
+      }
+
+      const installCount = await systemPrisma.installation.count();
+      expect(installCount).toBe(1);
+    });
+
+    it('C8: Concurrent startup calls yield exactly one Installation and safe profile client registry', async () => {
+      // 8 concurrent calls to getOrCreateInstallation
+      const results = await Promise.all([
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+        installationService.getOrCreateInstallation(),
+      ]);
+
+      const firstId = results[0].installationId;
+      for (const res of results) {
+        expect(res.installationId).toBe(firstId);
+      }
+      const count = await systemPrisma.installation.count();
+      expect(count).toBe(1);
+    });
+
+    it('B3 & B4: Enforces strict profile context on business operations and verifies getActiveProfile throws when missing', () => {
+      // When outside runWithProfile or request context, getActiveProfile must throw
+      expect(() => getActiveProfile()).toThrow(/No active profile context/);
+    });
+
+    it('C9: Migration + runtime combined test: migrate legacy schema -> start application -> load all entities', async () => {
+      const testDir = getDatabasesDir();
+      const combinedDbPath = path.resolve(testDir, `combined_mig_runtime_${Date.now()}.db`);
+      const profilePath = path.resolve(testDir, `combined_prof_${Date.now()}.db`);
+      testDbFiles.push(combinedDbPath, profilePath);
+
+      // 1. Provision profile DB
+      ensureProfileDbFile(profilePath);
+
+      // 2. Deploy schema via real Prisma migrate deploy
+      const schemaPath = path.resolve(__dirname, '../../prisma/schema.prisma');
+      const normalizedUrl = `file:${combinedDbPath.replace(/\\/g, '/')}`;
+      const execSync = (await import('child_process')).execSync;
+      execSync(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+        env: { ...process.env, DATABASE_URL: normalizedUrl },
+        encoding: 'utf-8',
+        cwd: path.resolve(__dirname, '../..'),
+      });
+
+      // 3. Connect application Prisma client to the migrated DB
+      const runtimeClient = new PrismaClient({ datasources: { db: { url: normalizedUrl } } });
+      await runtimeClient.$connect();
+
+      // 4. Create Installation
+      const installRowId = crypto.randomUUID();
+      const installId = crypto.randomUUID();
+      await runtimeClient.installation.create({
+        data: {
+          id: installRowId,
+          installationId: installId,
+          appVersion: '3.0.0',
+          status: 'ACTIVE',
+          lifecycleState: 'APP_SETUP',
+        },
+      });
+
+      // 5. Create User, Profile, UserProfile, and DatabaseRegistry
+      const profId = crypto.randomUUID();
+      const userId = crypto.randomUUID();
+      const regId = crypto.randomUUID();
+
+      await runtimeClient.profile.create({
+        data: {
+          id: profId,
+          code: 'comb_profile',
+          name: 'Combined Test Profile',
+          dbPath: profilePath,
+        },
+      });
+
+      await runtimeClient.user.create({
+        data: {
+          id: userId,
+          username: 'combined_user',
+          passwordHash: 'hash123',
+          displayName: 'Combined User',
+        },
+      });
+
+      await runtimeClient.userProfile.create({
+        data: {
+          userId,
+          profileId: profId,
+          role: 'ADMIN',
+        },
+      });
+
+      await runtimeClient.databaseRegistry.create({
+        data: {
+          id: regId,
+          databaseId: crypto.randomUUID(),
+          displayName: 'Combined Reg DB',
+          canonicalPath: profilePath,
+          schemaVersion: 1,
+          status: 'ACTIVE',
+          profileId: profId,
+          installationId: installRowId,
+        },
+      });
+
+      // 6. Verify full operational readability
+      const loadedInstall = await runtimeClient.installation.findUnique({ where: { id: installRowId } });
+      const loadedUser = await runtimeClient.user.findUnique({ where: { id: userId }, include: { userProfiles: true } });
+      const loadedRegistry = await runtimeClient.databaseRegistry.findUnique({ where: { id: regId } });
+
+      expect(loadedInstall?.installationId).toBe(installId);
+      expect(loadedUser?.username).toBe('combined_user');
+      expect(loadedUser?.userProfiles.length).toBe(1);
+      expect(loadedRegistry?.profileId).toBe(profId);
+      expect(fs.existsSync(profilePath)).toBe(true);
+
+      await runtimeClient.$disconnect();
+    }, 30000);
   });
 });

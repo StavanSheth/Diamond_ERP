@@ -106,20 +106,39 @@ export class InstallationService {
 
     if (!install) {
       const installationId = this.getOrGenerateInstallationId();
-      install = await systemPrisma.installation.create({
-        data: {
-          installationId,
-          appVersion: '3.0.0',
-          status: 'ACTIVE',
-          lifecycleState: 'NOT_INITIALIZED',
-        },
-        include: {
-          _count: {
-            select: { devices: true },
+      try {
+        install = await systemPrisma.installation.create({
+          data: {
+            installationId,
+            appVersion: '3.0.0',
+            status: 'ACTIVE',
+            lifecycleState: 'NOT_INITIALIZED',
           },
-        },
-      });
-      logger.info(`Initialized local Installation record: ${installationId} [State: NOT_INITIALIZED]`);
+          include: {
+            _count: {
+              select: { devices: true },
+            },
+          },
+        });
+        logger.info(`Initialized local Installation record: ${installationId} [State: NOT_INITIALIZED]`);
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          const raceWinner = await systemPrisma.installation.findFirst({
+            include: {
+              _count: {
+                select: { devices: true },
+              },
+            },
+          });
+          if (raceWinner) {
+            install = raceWinner;
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
     }
 
     return {

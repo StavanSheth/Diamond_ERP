@@ -241,4 +241,155 @@ describe('Phase 2 Migration & V3 Data Compatibility Verification', () => {
 
     await client.$disconnect();
   });
+
+  it('executes real prisma migrate deploy mechanism from scratch and verifies idempotency on isolated database', async () => {
+    const testDir = getDatabasesDir();
+    const isolatedDbPath = path.resolve(testDir, `prisma_deploy_test_${Date.now()}.db`);
+    tempFiles.push(isolatedDbPath);
+
+    const schemaPath = path.resolve(__dirname, '../../prisma/schema.prisma');
+    const normalizedUrl = `file:${isolatedDbPath.replace(/\\/g, '/')}`;
+
+    // 1. Run actual Prisma migration deployment command via child_process
+    const execSync = (await import('child_process')).execSync;
+    const deployOutput1 = execSync(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+      env: { ...process.env, DATABASE_URL: normalizedUrl },
+      encoding: 'utf-8',
+      cwd: path.resolve(__dirname, '../..'),
+    });
+
+    expect(deployOutput1).toContain('migrations found in prisma/migrations');
+    expect(deployOutput1).toContain('All migrations have been successfully applied');
+
+    // 2. Test migration idempotency: running migrate deploy a second time must succeed with 0 changes
+    const deployOutput2 = execSync(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+      env: { ...process.env, DATABASE_URL: normalizedUrl },
+      encoding: 'utf-8',
+      cwd: path.resolve(__dirname, '../..'),
+    });
+
+    expect(deployOutput2).toContain('No pending migrations to apply');
+
+    // 3. Connect PrismaClient to the deployed database and verify tables and schema integrity
+    const client = new PrismaClient({
+      datasources: { db: { url: normalizedUrl } },
+    });
+    await client.$connect();
+
+    // Verify all Phase 2 and core ERP tables exist
+    const tables = await client.$queryRawUnsafe<{ name: string }[]>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+    );
+    const tableNames = tables.map((t) => t.name);
+
+    expect(tableNames).toContain('Installation');
+    expect(tableNames).toContain('Device');
+    expect(tableNames).toContain('DatabaseRegistry');
+    expect(tableNames).toContain('InstallationUser');
+    expect(tableNames).toContain('User');
+    expect(tableNames).toContain('Profile');
+    expect(tableNames).toContain('UserProfile');
+    expect(tableNames).toContain('_prisma_migrations');
+
+    // Verify _prisma_migrations record count is exactly 6
+    const migrationsCount = await client.$queryRawUnsafe<any[]>(
+      'SELECT count(*) as count FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL;'
+    );
+    expect(Number(migrationsCount[0].count)).toBe(6);
+
+    await client.$disconnect();
+  }, 30000);
+
+  it('enforces SQLite engine-level foreign key and ON DELETE SET NULL on DatabaseRegistry.profileId', async () => {
+    const testDir = getDatabasesDir();
+    const isolatedDbPath = path.resolve(testDir, `engine_fk_test_${Date.now()}.db`);
+    const profileDbFile = path.resolve(testDir, `profile_file_${Date.now()}.db`);
+    tempFiles.push(isolatedDbPath, profileDbFile);
+
+    // Deploy schema using actual prisma migrations
+    const schemaPath = path.resolve(__dirname, '../../prisma/schema.prisma');
+    const normalizedUrl = `file:${isolatedDbPath.replace(/\\/g, '/')}`;
+    const execSync = (await import('child_process')).execSync;
+    execSync(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+      env: { ...process.env, DATABASE_URL: normalizedUrl },
+      encoding: 'utf-8',
+      cwd: path.resolve(__dirname, '../..'),
+    });
+
+    // Create physical profile file
+    fs.writeFileSync(profileDbFile, 'SQLite format 3\0 dummy file');
+
+    const client = new PrismaClient({
+      datasources: { db: { url: normalizedUrl } },
+    });
+    await client.$connect();
+
+    // Enable SQLite foreign keys explicitly to test engine-level enforcement
+    await client.$executeRawUnsafe('PRAGMA foreign_keys = ON;');
+    const fkStatus = await client.$queryRawUnsafe<any[]>('PRAGMA foreign_keys;');
+    expect(Number(Object.values(fkStatus[0])[0])).toBe(1);
+
+    // 1. Create Installation
+    const installRowId = crypto.randomUUID();
+    await client.$executeRawUnsafe(`
+      INSERT INTO "Installation" ("id", "installationId", "appVersion", "status", "lifecycleState", "updatedAt")
+      VALUES ('${installRowId}', '${crypto.randomUUID()}', '3.0.0', 'ACTIVE', 'NOT_INITIALIZED', CURRENT_TIMESTAMP);
+    `);
+
+    // 2. Create Profile
+    const profId = crypto.randomUUID();
+    await client.$executeRawUnsafe(`
+      INSERT INTO "Profile" ("id", "code", "name", "dbPath", "updatedAt")
+      VALUES ('${profId}', 'test_fk_prof', 'FK Test Profile', '${profileDbFile.replace(/'/g, "''")}', CURRENT_TIMESTAMP);
+    `);
+
+    // 3. Test Invalid Reference rejection at SQLite engine level
+    const fakeProfId = crypto.randomUUID();
+    const invalidRegId = crypto.randomUUID();
+    await expect(
+      client.$executeRawUnsafe(`
+        INSERT INTO "DatabaseRegistry" (
+          "id", "databaseId", "displayName", "canonicalPath", "schemaVersion",
+          "status", "databaseType", "profileId", "installationId", "updatedAt"
+        ) VALUES (
+          '${invalidRegId}', '${crypto.randomUUID()}', 'Invalid DB', '${profileDbFile.replace(/'/g, "''")}',
+          1, 'ACTIVE', 'LOCAL_PROFILE', '${fakeProfId}', '${installRowId}', CURRENT_TIMESTAMP
+        );
+      `)
+    ).rejects.toThrow(/FOREIGN KEY constraint failed/);
+
+    // 4. Test Valid Reference insertion
+    const validRegId = crypto.randomUUID();
+    const logicalDbId = crypto.randomUUID();
+    await client.$executeRawUnsafe(`
+      INSERT INTO "DatabaseRegistry" (
+        "id", "databaseId", "displayName", "canonicalPath", "schemaVersion",
+        "status", "databaseType", "profileId", "installationId", "updatedAt"
+      ) VALUES (
+        '${validRegId}', '${logicalDbId}', 'Valid DB', '${profileDbFile.replace(/'/g, "''")}',
+        1, 'ACTIVE', 'LOCAL_PROFILE', '${profId}', '${installRowId}', CURRENT_TIMESTAMP
+      );
+    `);
+
+    const regBefore = await client.$queryRawUnsafe<any[]>(
+      `SELECT * FROM "DatabaseRegistry" WHERE "id" = '${validRegId}';`
+    );
+    expect(regBefore.length).toBe(1);
+    expect(regBefore[0].profileId).toBe(profId);
+
+    // 5. Test Engine-level ON DELETE SET NULL
+    // Deleting Profile row must automatically set profileId to NULL on DatabaseRegistry
+    await client.$executeRawUnsafe(`DELETE FROM "Profile" WHERE "id" = '${profId}';`);
+
+    const regAfter = await client.$queryRawUnsafe<any[]>(
+      `SELECT * FROM "DatabaseRegistry" WHERE "id" = '${validRegId}';`
+    );
+    expect(regAfter.length).toBe(1);
+    expect(regAfter[0].profileId).toBeNull(); // Set to NULL by SQLite foreign key ON DELETE SET NULL
+    expect(regAfter[0].databaseId).toBe(logicalDbId); // Logical identity preserved
+    expect(regAfter[0].canonicalPath).toBe(profileDbFile); // Path preserved
+    expect(fs.existsSync(profileDbFile)).toBe(true); // Physical file on disk preserved!
+
+    await client.$disconnect();
+  });
 });

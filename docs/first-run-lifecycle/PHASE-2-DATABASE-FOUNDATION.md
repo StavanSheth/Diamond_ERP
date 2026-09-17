@@ -196,9 +196,9 @@ $$\text{DELETE USER} \implies \text{Soft-deactivate user} \land \text{Revoke ses
 ## 15. 100% Phase 2 Completion Summary
 
 Phase 2 is **100% Complete and Code-Proven**:
-- Automated test execution: **51/51 tests** passing in `lifecycle-foundation.test.ts`.
-- Migration compatibility: **1/1 test** passing in `phase2-migration.test.ts`.
-- Full API test suite: **117/117 tests** passing in `@diamond-erp/api`.
+- Automated test execution: **57/57 tests** passing in `lifecycle-foundation.test.ts`.
+- Migration compatibility: **3/3 tests** passing in `phase2-migration.test.ts` (including real `prisma migrate deploy`, migration idempotency, and SQLite engine FK `ON DELETE SET NULL`).
+- Full API test suite: **125/125 tests** passing (7 skipped) in `@diamond-erp/api`.
 - Web test suite: **14/14 tests** passing in `@diamond-erp/web`.
 - Architecture audit: **93/93 checks (100%)** passing in `test:phase1:audit`.
 - Packaging readiness: **41/41 checks (100%)** passing in `validate-packaging-readiness.js`.

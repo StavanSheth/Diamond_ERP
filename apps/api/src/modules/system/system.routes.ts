@@ -3,7 +3,6 @@ import { activationController } from './activation.controller';
 import { lifecycleController } from './lifecycle.controller';
 import { authenticate } from '../../middleware/auth';
 import { authorize } from '../../middleware/authorize';
-import { optionalProfileMiddleware } from '../../middleware/profile';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
 
 const router = Router();
@@ -18,7 +17,9 @@ router.post('/device', lifecycleController.registerDevice);
 router.post('/database/validate', lifecycleController.validateDatabase);
 
 // ── Protected administrative system routes ─────────────────────────────
-const protectedAdminStack = [authenticate, optionalProfileMiddleware, idempotencyMiddleware];
+// System routes manage Control DB resources (Installation, Device, DatabaseRegistry)
+// and must NOT use profileMiddleware to prevent accidental profile DB auto-provisioning.
+const protectedAdminStack = [authenticate, idempotencyMiddleware];
 
 // Activation & software lock
 router.get('/activation-status', protectedAdminStack, authorize('system.activate'), activationController.getActivationStatus);
