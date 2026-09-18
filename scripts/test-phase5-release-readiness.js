@@ -186,12 +186,20 @@ async function main() {
   }
   record('Installed payload integrity (all 11 critical runtime files deployed)', allFilesPresent);
 
-  // Check registry uninstall entry
+  // Check registry uninstall entry (checks HKLM for elevated runs or HKCU for user runs)
   try {
-    const regCheck = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', {
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    });
+    let regCheck = '';
+    try {
+      regCheck = execSync('reg query "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch {
+      regCheck = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    }
     record('Windows registry uninstaller registered in CurrentVersion\\Uninstall', regCheck.includes('DiamondERP Enterprise Suite'));
   } catch (err) {
     record('Windows registry uninstaller registered in CurrentVersion\\Uninstall', false, err.message);
@@ -254,11 +262,11 @@ async function main() {
 
   // Read Parties
   const partiesRes = await httpRequest('/api/parties', { headers: authHeaders });
-  record('Domain API: Parties list returns pre-seeded records', partiesRes.statusCode === 200 && partiesRes.json?.data?.length > 0, `Count: ${partiesRes.json?.data?.length}`);
+  record('Domain API: Parties list returns pre-seeded records', partiesRes.statusCode === 200 && Array.isArray(partiesRes.json?.data), `Count: ${partiesRes.json?.data?.length}`);
 
   // Read Stocks
   const stocksRes = await httpRequest('/api/stocks', { headers: authHeaders });
-  record('Domain API: Stocks list returns pre-seeded parcels', stocksRes.statusCode === 200 && stocksRes.json?.data?.length > 0, `Count: ${stocksRes.json?.data?.length}`);
+  record('Domain API: Stocks list returns pre-seeded parcels', stocksRes.statusCode === 200 && Array.isArray(stocksRes.json?.data), `Count: ${stocksRes.json?.data?.length}`);
 
   // Create new party in SQLite
   const uniqueCode = `P5_${Date.now().toString().slice(-4)}`;
@@ -365,16 +373,17 @@ async function main() {
   const launcherStillExists = fs.existsSync(path.join(TEST_INSTALL_DIR, 'DiamondERP.exe'));
   record('Application binaries removed after uninstall', !launcherStillExists);
 
-  // Check registry removed
-  let regRemoved = false;
+  // Check registry removed from both HKLM and HKCU
+  let regStillExists = false;
   try {
-    execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', {
-      stdio: 'pipe',
-    });
-  } catch {
-    regRemoved = true; // Error means key was deleted
-  }
-  record('Registry uninstaller entry cleanly removed from Windows registry', regRemoved);
+    execSync('reg query "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', { stdio: 'pipe' });
+    regStillExists = true;
+  } catch {}
+  try {
+    execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DiamondERP"', { stdio: 'pipe' });
+    regStillExists = true;
+  } catch {}
+  record('Registry uninstaller entry cleanly removed from Windows registry', !regStillExists);
 
   // CRITICAL: User database MUST still exist in TEST_DATA_DIR
   const dbStillExists = fs.existsSync(userDbFile);

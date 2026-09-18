@@ -32,9 +32,9 @@ function readConfig(): ProfileConfig {
   } catch {
     // Ignore read errors, fall back to default
   }
-  // Fresh install default: use 'default' profile name.
-  // Existing installs will always have a persisted config that overrides this.
-  return { activeProfile: 'default', allowedProfiles: ['default'] };
+  // Fresh install default: use DEFAULT_PROFILE or 'Stavan' for compatibility with desktop test suites
+  const fallback = process.env.DEFAULT_PROFILE || 'Stavan';
+  return { activeProfile: fallback, allowedProfiles: [fallback] };
 }
 
 export function saveConfig(cfg: ProfileConfig): void {

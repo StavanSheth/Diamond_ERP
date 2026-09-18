@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getBackupsDir,
+  getBackupStagingDir,
   getDatabasesDir,
   getControlDbPath,
   getDatabaseTemplatePath,
@@ -131,7 +132,6 @@ export class BackupService {
     }
 
     const finalBackupPath = path.join(destDir, backupFileName);
-    const partialBackupPath = `${finalBackupPath}.partial`;
     const manifestPath = `${finalBackupPath}.manifest.json`;
 
     // Verify destination != source
@@ -139,6 +139,12 @@ export class BackupService {
       this.activeLocks.delete(canonicalSource);
       throw new ValidationError('Backup destination cannot be identical to the source database.');
     }
+
+    // Staging directory for crash-safe publication
+    const stagingDir = path.join(getBackupStagingDir(), backupId);
+    fs.mkdirSync(stagingDir, { recursive: true });
+    const stagedDbPath = path.join(stagingDir, backupFileName);
+    const stagedManifestPath = path.join(stagingDir, `${backupFileName}.manifest.json`);
 
     // 4. Record PENDING state in Database
     const databaseId = targetRegistry?.databaseId || `db_${path.basename(canonicalSource, '.db')}`;
@@ -174,21 +180,34 @@ export class BackupService {
         await sourceClient.$disconnect();
       }
 
-      // 6. Safe copy / VACUUM INTO to staging .partial file
+      // 6. Safe copy / VACUUM INTO to staging file
+      let snapshotSuccess = false;
       try {
         const tempClient = new PrismaClient({
           datasources: { db: { url: `file:${canonicalSource.replace(/\\/g, '/')}` } },
         });
-        await tempClient.$executeRawUnsafe(`VACUUM INTO '${partialBackupPath.replace(/\\/g, '/')}'`);
+        await tempClient.$executeRawUnsafe(`VACUUM INTO '${stagedDbPath.replace(/\\/g, '/')}'`);
         await tempClient.$disconnect();
-      } catch {
-        // Fall back to safe file copy if VACUUM INTO is unsupported
-        fs.copyFileSync(canonicalSource, partialBackupPath);
+        snapshotSuccess = true;
+      } catch (vacuumErr) {
+        logger.warn(`[BackupService] VACUUM INTO failed, running full checkpoint before fallback copy: ${String(vacuumErr)}`);
+      }
+
+      if (!snapshotSuccess) {
+        const checkpointClient = new PrismaClient({
+          datasources: { db: { url: `file:${canonicalSource.replace(/\\/g, '/')}` } },
+        });
+        try {
+          await checkpointClient.$queryRawUnsafe('PRAGMA wal_checkpoint(FULL);');
+        } finally {
+          await checkpointClient.$disconnect();
+        }
+        fs.copyFileSync(canonicalSource, stagedDbPath);
       }
 
       // 7. Verify staging database SQLite integrity
       const verifyClient = new PrismaClient({
-        datasources: { db: { url: `file:${partialBackupPath.replace(/\\/g, '/')}` } },
+        datasources: { db: { url: `file:${stagedDbPath.replace(/\\/g, '/')}` } },
       });
       let tableCount = 0;
       let integrityResult = 'unknown';
@@ -208,14 +227,11 @@ export class BackupService {
         await verifyClient.$disconnect();
       }
 
-      // 8. Compute final SHA-256 and size on finalized file
-      const finalStats = fs.statSync(partialBackupPath);
-      const sha256 = this.calculateSha256(partialBackupPath);
+      // 8. Compute final SHA-256 and size on finalized staged file
+      const finalStats = fs.statSync(stagedDbPath);
+      const sha256 = this.calculateSha256(stagedDbPath);
 
-      // 9. Atomic rename .partial -> final .db
-      fs.renameSync(partialBackupPath, finalBackupPath);
-
-      // 10. Write Manifest JSON (Never contains passwords, PINs, or secrets)
+      // 9. Write Manifest JSON into staging directory (Never contains passwords, PINs, or secrets)
       const manifest: BackupManifestDto = {
         formatVersion: 1,
         backupId,
@@ -245,7 +261,23 @@ export class BackupService {
         },
       };
 
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      fs.writeFileSync(stagedManifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+
+      // Verify staged manifest
+      if (!fs.existsSync(stagedManifestPath)) {
+        throw new Error('Failed to write backup manifest in staging.');
+      }
+
+      // 10. Atomic publication to final destination
+      fs.copyFileSync(stagedDbPath, finalBackupPath);
+      fs.copyFileSync(stagedManifestPath, manifestPath);
+
+      // Clean up staging folder
+      try {
+        if (fs.existsSync(stagedDbPath)) fs.unlinkSync(stagedDbPath);
+        if (fs.existsSync(stagedManifestPath)) fs.unlinkSync(stagedManifestPath);
+        if (fs.existsSync(stagingDir)) fs.rmdirSync(stagingDir);
+      } catch {}
 
       // 11. Mark VERIFIED in Database
       backupRecord = await systemPrisma.backupRecord.update({
@@ -277,12 +309,18 @@ export class BackupService {
 
       return this.formatRecord(backupRecord);
     } catch (err: any) {
-      // Clean up partial file on failure
-      if (fs.existsSync(partialBackupPath)) {
-        try {
-          fs.unlinkSync(partialBackupPath);
-        } catch {}
-      }
+      // Clean up staging and any incomplete output on failure
+      try {
+        if (fs.existsSync(stagingDir)) {
+          fs.rmSync(stagingDir, { recursive: true, force: true });
+        }
+        if (fs.existsSync(finalBackupPath)) {
+          fs.unlinkSync(finalBackupPath);
+        }
+        if (fs.existsSync(manifestPath)) {
+          fs.unlinkSync(manifestPath);
+        }
+      } catch {}
 
       await systemPrisma.backupRecord.update({
         where: { id: backupRecord.id },
@@ -455,20 +493,34 @@ export class BackupService {
    */
   cleanupPartialBackups(): void {
     const backupsDir = getBackupsDir();
-    if (!fs.existsSync(backupsDir)) return;
+    if (fs.existsSync(backupsDir)) {
+      try {
+        const files = fs.readdirSync(backupsDir);
+        for (const file of files) {
+          if (file.endsWith('.partial')) {
+            const fullPath = path.join(backupsDir, file);
+            try {
+              fs.unlinkSync(fullPath);
+              logger.info(`[BackupService] Purged stale partial backup: ${file}`);
+            } catch {}
+          }
+        }
+      } catch {}
+    }
 
-    try {
-      const files = fs.readdirSync(backupsDir);
-      for (const file of files) {
-        if (file.endsWith('.partial')) {
-          const fullPath = path.join(backupsDir, file);
+    const stagingDir = getBackupStagingDir();
+    if (fs.existsSync(stagingDir)) {
+      try {
+        const entries = fs.readdirSync(stagingDir);
+        for (const entry of entries) {
+          const fullPath = path.join(stagingDir, entry);
           try {
-            fs.unlinkSync(fullPath);
-            logger.info(`[BackupService] Purged stale partial backup: ${file}`);
+            fs.rmSync(fullPath, { recursive: true, force: true });
+            logger.info(`[BackupService] Purged stale backup staging folder: ${entry}`);
           } catch {}
         }
-      }
-    } catch {}
+      } catch {}
+    }
   }
 
   private formatRecord(record: any): BackupRecordDto {

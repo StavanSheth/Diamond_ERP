@@ -18,6 +18,9 @@ export interface UninstallPreflightDto {
   totalBackupsCount: number;
   latestVerifiedBackupAt?: string | null;
   warningMessage?: string | null;
+  applicationVersion?: string;
+  installationId?: string;
+  pendingOperationsCount?: number;
 }
 
 export interface UninstallExportRequest {

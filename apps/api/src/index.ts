@@ -25,6 +25,7 @@ import { corsMiddleware } from './middleware/cors';
 import { enforceContentType } from './middleware/content-type';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
 import prisma, { systemPrisma, disconnectAllClients } from './infrastructure/database/prisma';
+import { recoveryService } from './modules/system/recovery/recovery.service';
 
 /**
  * Bootstrap and start the application.
@@ -152,6 +153,9 @@ async function bootstrap(): Promise<void> {
   // Mutable directories setup — ensures databases, uploads, backups, logs, config exist
   ensureAllDataDirs();
   fileStorageService.ensureUploadsDir();
+  await recoveryService.reconcileInterruptedRestores().catch((err) => {
+    logger.error('[Startup] Failed to reconcile interrupted operations:', err);
+  });
 
   // 7. Swagger UI (only in development)
   if (process.env.NODE_ENV !== 'production') {

@@ -96,7 +96,9 @@ export class InstallationService {
    * Retrieve or automatically initialize the local Installation record in system DB.
    */
   async getOrCreateInstallation(): Promise<InstallationDto> {
-    let install = await systemPrisma.installation.findFirst({
+    const currentInstallationId = this.getOrGenerateInstallationId();
+    let install = await systemPrisma.installation.findUnique({
+      where: { installationId: currentInstallationId },
       include: {
         _count: {
           select: { devices: true },
@@ -105,7 +107,19 @@ export class InstallationService {
     });
 
     if (!install) {
-      const installationId = this.getOrGenerateInstallationId();
+      install = await systemPrisma.installation.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          _count: {
+            select: { devices: true },
+          },
+        },
+      });
+    }
+
+    if (!install) {
+      const installationId = currentInstallationId;
       try {
         install = await systemPrisma.installation.create({
           data: {

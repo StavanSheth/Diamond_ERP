@@ -21,6 +21,16 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
     const templateDb = getDatabaseTemplatePath() || path.resolve('apps/api/Stavan.db');
     fs.copyFileSync(templateDb, testDbPath);
 
+    // Clean up any stale active registry records whose files no longer exist on disk
+    const staleRegistries = await systemPrisma.databaseRegistry.findMany({
+      where: { status: 'ACTIVE' },
+    });
+    for (const r of staleRegistries) {
+      if (!fs.existsSync(r.canonicalPath)) {
+        await systemPrisma.databaseRegistry.delete({ where: { id: r.id } });
+      }
+    }
+
     const install = await installationService.getOrCreateInstallation();
     await systemPrisma.databaseRegistry.upsert({
       where: { databaseId: 'db_test_export' },
@@ -136,5 +146,32 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
     const manifest = JSON.parse(fs.readFileSync(res.manifestPath, 'utf-8'));
     expect(manifest.status).toBe('VERIFIED');
     expect(manifest.dataDirectoryPreserved).toBeDefined();
+  });
+
+  it('fails pre-uninstall backup if any registered database is missing on disk', async () => {
+    const install = await installationService.getOrCreateInstallation();
+    const bogusDbId = `db_missing_${Date.now()}`;
+    await systemPrisma.databaseRegistry.create({
+      data: {
+        databaseId: bogusDbId,
+        installationId: install.id,
+        displayName: 'Missing Database',
+        canonicalPath: path.resolve('apps/api/test-scratch-export/missing_ghost.db'),
+        status: 'ACTIVE',
+        schemaVersion: 1,
+      },
+    });
+
+    try {
+      await expect(
+        uninstallPreflightService.createUninstallBackup({
+          confirmPreUninstallBackup: true,
+        })
+      ).rejects.toThrow();
+    } finally {
+      await systemPrisma.databaseRegistry.deleteMany({
+        where: { databaseId: bogusDbId },
+      });
+    }
   });
 });

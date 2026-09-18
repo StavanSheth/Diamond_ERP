@@ -59,4 +59,12 @@ export const recoveryApi = {
     });
     return res.data;
   },
+
+  async continueExistingInstall(installationId?: string): Promise<any> {
+    const res = await request<{ success: boolean; data: any }>('/api/system/recovery/continue', {
+      method: 'POST',
+      body: JSON.stringify({ installationId }),
+    });
+    return res.data;
+  },
 };

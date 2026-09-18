@@ -25,7 +25,7 @@ describe('Phase 5 — Recovery & Staged Restore Engine', () => {
     fs.copyFileSync(templateDb, targetDbPath);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     if (fs.existsSync(testDir)) {
       try {
         fs.rmSync(testDir, { recursive: true, force: true });
@@ -36,6 +36,11 @@ describe('Phase 5 — Recovery & Staged Restore Engine', () => {
         fs.unlinkSync(targetDbPath);
       } catch {}
     }
+    try {
+      await systemPrisma.databaseRegistry.deleteMany({
+        where: { databaseId: 'db_test_target_restore' },
+      });
+    } catch {}
   });
 
   it('discovers candidates bounded to backups and databases without scanning arbitrary drives', async () => {
@@ -57,7 +62,8 @@ describe('Phase 5 — Recovery & Staged Restore Engine', () => {
     const inspection = await recoveryService.inspectCandidate(candidateDbPath);
     expect(inspection.canonicalPath).toBe(path.resolve(candidateDbPath));
     expect(inspection.status).toBe('ACTIVE');
-    expect(inspection.suitability).toBe('VALID');
+    expect(inspection.ownershipStatus).toBe('EXTERNAL_SOURCE');
+    expect(inspection.suitability).toBe('REQUIRES_CONFIRMATION');
     expect(inspection.sqliteIntegrity).toBe('ok');
     expect(inspection.tableCount).toBeGreaterThanOrEqual(0);
   });

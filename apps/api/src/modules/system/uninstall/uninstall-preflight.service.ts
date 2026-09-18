@@ -93,8 +93,17 @@ export class UninstallPreflightService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const pendingRestores = await systemPrisma.restoreRecord.count({
+      where: { status: { in: ['PENDING', 'STAGING', 'ROLLBACK_READY', 'ACTIVATING'] } },
+    });
+    const pendingBackups = await systemPrisma.backupRecord.count({
+      where: { status: { in: ['PENDING', 'CREATING', 'VERIFYING'] } },
+    });
+    const pendingOperationsCount = pendingRestores + pendingBackups;
+    const canSafelyUninstall = pendingOperationsCount === 0;
+
     return {
-      canSafelyUninstall: true,
+      canSafelyUninstall,
       userAppDataDir,
       userAppDataPreservedByDefault: true,
       activeDatabasesCount: databases.length,
@@ -103,8 +112,12 @@ export class UninstallPreflightService {
       latestVerifiedBackupAt: latestVerified?.verifiedAt
         ? latestVerified.verifiedAt.toISOString()
         : null,
-      warningMessage:
-        'Diamond ERP preserves all customer databases and configurations in AppData by default during uninstall. Application binaries in Program Files are removed without touching your ERP data.',
+      applicationVersion: install.appVersion,
+      installationId: install.installationId,
+      pendingOperationsCount,
+      warningMessage: !canSafelyUninstall
+        ? `There are ${pendingOperationsCount} active/pending operations in progress. Finish or cancel them before uninstalling.`
+        : 'Diamond ERP preserves all customer databases and configurations in AppData by default during uninstall. Application binaries in Program Files are removed without touching your ERP data.',
     };
   }
 
@@ -139,11 +152,33 @@ export class UninstallPreflightService {
     });
 
     const preflight = await this.getPreflightStatus();
+    if (!preflight.canSafelyUninstall) {
+      throw new ConflictError(
+        `Cannot create pre-uninstall backup: Unsafe state detected (${preflight.warningMessage})`
+      );
+    }
+
+    // Invariant: Enforce all active registered databases exist on disk
+    const activeRegistries = await systemPrisma.databaseRegistry.findMany({
+      where: { installationId: install.id, status: 'ACTIVE' },
+    });
+    for (const reg of activeRegistries) {
+      if (!fs.existsSync(reg.canonicalPath)) {
+        throw new ConflictError(
+          `Pre-uninstall backup failed: Required registered database "${reg.displayName}" at ${reg.canonicalPath} does not exist on disk. All-or-nothing backup aborted.`
+        );
+      }
+    }
+
     let totalBytes = 0;
     let databasesBackedUp = 0;
 
     for (const db of preflight.databases) {
-      if (!fs.existsSync(db.canonicalPath)) continue;
+      if (!fs.existsSync(db.canonicalPath)) {
+        throw new ConflictError(
+          `Pre-uninstall backup failed: Required database "${db.displayName}" at ${db.canonicalPath} does not exist on disk. All-or-nothing backup aborted.`
+        );
+      }
 
       try {
         const backupResult = await backupService.createBackup(
@@ -164,6 +199,12 @@ export class UninstallPreflightService {
           `Pre-uninstall backup failed for database ${db.displayName}: ${err?.message}. Destructive action aborted.`
         );
       }
+    }
+
+    if (databasesBackedUp !== preflight.databases.length) {
+      throw new ConflictError(
+        `Pre-uninstall backup incomplete: Only ${databasesBackedUp} of ${preflight.databases.length} databases backed up. All-or-nothing backup aborted.`
+      );
     }
 
     // Write top-level uninstall bundle manifest

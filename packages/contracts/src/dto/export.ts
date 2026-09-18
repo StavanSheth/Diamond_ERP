@@ -27,6 +27,7 @@ export interface ExportManifestDto {
     profileCode: string;
   };
   exportFormat: 'XLSX' | 'CSV' | 'SQLITE';
+  format?: 'XLSX' | 'CSV' | 'SQLITE';
   tables: Array<{
     tableName: string;
     rowCount: number;
@@ -35,6 +36,9 @@ export interface ExportManifestDto {
   }>;
   totalRows: number;
   totalSizeBytes: number;
+  tableCount: number;
+  exportedTableCount: number;
+  failedTableCount: number;
 }
 
 export interface ExportVerificationDto {
@@ -42,6 +46,8 @@ export interface ExportVerificationDto {
   isValid: boolean;
   manifestMatches: boolean;
   fileCount: number;
+  tableCount?: number;
+  tablesVerified?: boolean;
   verifiedAt: string;
   error?: string | null;
 }

@@ -46,10 +46,12 @@ export interface RecoveryInspectionPreviewDto {
   sizeBytes: number;
   tableCount: number;
   schemaVersion: number;
+  supportedSchemaVersion?: number;
   profileCode?: string | null;
   profileName?: string | null;
   status: DatabaseStatus;
   suitability: DatabaseSuitability;
+  ownershipStatus?: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
   hasManifest: boolean;
   manifest?: any;
   sqliteIntegrity: string;
@@ -79,6 +81,7 @@ export interface RestorePreviewDto {
 export interface ConfirmRestoreRequest {
   restoreId: string;
   confirmDestructiveOverwrite: boolean;
+  confirmForeignInstallation?: boolean;
   targetProfileCode: string;
 }
 
@@ -91,8 +94,17 @@ export interface RestoreOperationResponseDto {
   rollbackBackupPath?: string | null;
 }
 
+export type ReinstallClassification =
+  | 'FIRST_INSTALL'
+  | 'CURRENT_INSTALLATION'
+  | 'PREVIOUS_INSTALLATION_DATA'
+  | 'ORPHANED_DATA'
+  | 'RECOVERY_CANDIDATE'
+  | 'NO_RECOVERABLE_DATA';
+
 export interface ReinstallDetectionDto {
   hasPreviousData: boolean;
+  classification?: ReinstallClassification;
   previousInstallationId?: string | null;
   previousAppVersion?: string | null;
   previousDatabasesCount: number;

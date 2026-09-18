@@ -9,6 +9,7 @@ import {
   getControlDbPath,
   getDatabaseTemplatePath,
   getRestoreStagingDir,
+  getConfigDir,
   ensureAllDataDirs,
 } from '../../../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
@@ -171,14 +172,66 @@ export class RecoveryService {
     }
 
     const validation = await databaseValidationService.validateDatabase(canonical);
-    const suitability = this.computeSuitability(validation);
+    let suitability = this.computeSuitability(validation);
+    const supportedSchemaVersion = 1;
+    const candidateSchemaVersion = manifest?.database?.schemaVersion ?? validation.schemaVersion ?? 1;
+    let conflictReason: string | null = null;
+
+    if (candidateSchemaVersion > supportedSchemaVersion) {
+      suitability = 'UNSUPPORTED';
+      conflictReason = 'UNSUPPORTED_SCHEMA_VERSION_NEWER';
+    } else if (candidateSchemaVersion < supportedSchemaVersion) {
+      conflictReason = 'MIGRATABLE_SCHEMA_VERSION_OLDER';
+    }
+
+    // Ownership classification
+    const currentInstall = await installationService.getOrCreateInstallation();
+    let ownershipStatus: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE' = 'UNKNOWN_SOURCE';
+
+    if (manifest?.installationId) {
+      if (manifest.installationId === currentInstall.installationId) {
+        ownershipStatus = 'CURRENT_INSTALLATION';
+      } else {
+        ownershipStatus = 'PREVIOUS_INSTALLATION';
+      }
+    } else {
+      const reg = await systemPrisma.databaseRegistry.findFirst({
+        where: { canonicalPath: canonical },
+      });
+      if (reg) {
+        if (reg.installationId === currentInstall.id) {
+          ownershipStatus = 'CURRENT_INSTALLATION';
+        } else {
+          ownershipStatus = 'PREVIOUS_INSTALLATION';
+        }
+      } else {
+        const databasesDir = getDatabasesDir().toLowerCase();
+        const backupsDir = getBackupsDir().toLowerCase();
+        const candidateDir = path.dirname(canonical).toLowerCase();
+        if (candidateDir === databasesDir || candidateDir === backupsDir) {
+          ownershipStatus = 'UNKNOWN_SOURCE';
+        } else {
+          ownershipStatus = 'EXTERNAL_SOURCE';
+        }
+      }
+    }
+
+    if (
+      (ownershipStatus === 'PREVIOUS_INSTALLATION' ||
+        ownershipStatus === 'EXTERNAL_SOURCE' ||
+        ownershipStatus === 'UNKNOWN_SOURCE') &&
+      suitability === 'VALID'
+    ) {
+      suitability = 'REQUIRES_CONFIRMATION';
+    }
 
     return {
       canonicalPath: canonical,
       displayName: manifest?.database?.displayName || path.basename(canonical),
       sizeBytes: stat.size,
       tableCount: validation.tableCount,
-      schemaVersion: validation.schemaVersion,
+      schemaVersion: candidateSchemaVersion,
+      supportedSchemaVersion,
       profileCode: manifest?.database?.profileCode || null,
       profileName: manifest?.database?.displayName || null,
       status: validation.status,
@@ -187,6 +240,8 @@ export class RecoveryService {
       manifest,
       sqliteIntegrity: validation.integrityCheck,
       details: validation.details,
+      ownershipStatus,
+      conflictReason,
     };
   }
 
@@ -212,6 +267,25 @@ export class RecoveryService {
     const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
     if (canonicalCandidate.toLowerCase() === controlDb || canonicalCandidate.toLowerCase() === templateDb) {
       throw new ValidationError('Cannot restore system or template database.');
+    }
+
+    // Validate candidate integrity and schema compatibility before staging
+    const manifestPath = `${canonicalCandidate}.manifest.json`;
+    let manifestSchemaVersion: number | null = null;
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        manifestSchemaVersion = m.database?.schemaVersion;
+      } catch {}
+    }
+
+    const validation = await databaseValidationService.validateDatabase(canonicalCandidate);
+    if (!validation.isValid && validation.status === 'CORRUPTED') {
+      throw new ValidationError(`Candidate database is corrupted and cannot be restored: ${validation.integrityCheck}`);
+    }
+    const candidateSchemaVersion = manifestSchemaVersion ?? validation.schemaVersion ?? 1;
+    if (candidateSchemaVersion > 1) {
+      throw new ValidationError(`Candidate schema version (${candidateSchemaVersion}) is newer than supported (1).`);
     }
 
     // Resolve target profile and target DB path
@@ -254,7 +328,7 @@ export class RecoveryService {
       await client.$disconnect();
     }
 
-    // 3. Create RestoreRecord with status STAGING -> VALIDATED
+    // 3. Create RestoreRecord with status VALIDATED
     const targetDbExists = fs.existsSync(targetDatabasePath);
     let targetSize = 0;
     if (targetDbExists) {
@@ -269,7 +343,7 @@ export class RecoveryService {
         targetProfileId: null,
         candidatePath: canonicalCandidate,
         status: 'VALIDATED',
-        schemaVersion: 1,
+        schemaVersion: candidateSchemaVersion,
         sha256: null,
       },
     });
@@ -282,7 +356,7 @@ export class RecoveryService {
       targetDatabasePath,
       targetDatabaseExists: targetDbExists,
       targetDatabaseSize: targetSize,
-      schemaVersion: 1,
+      schemaVersion: candidateSchemaVersion,
       tableCount,
       status: 'VALIDATED',
       requiresRollbackBackup: targetDbExists,
@@ -290,7 +364,7 @@ export class RecoveryService {
   }
 
   /**
-   * Confirms and executes a staged restore with mandatory rollback backup.
+   * Confirms and executes a staged restore with mandatory rollback backup and atomic activation.
    */
   async confirmRestore(
     req: ConfirmRestoreRequest,
@@ -335,26 +409,31 @@ export class RecoveryService {
 
     let rollbackBackupPath: string | null = null;
     let rollbackBackupCreated = false;
+    let swapOldPath: string | null = null;
 
     try {
       // 1. Mandatory Rollback Backup of current active database
       if (fs.existsSync(canonicalTarget)) {
         logger.info(`[RecoveryService] Creating mandatory rollback backup of ${canonicalTarget}...`);
-        const rollbackRecord = await backupService.createBackup(
-          {
-            databasePath: canonicalTarget,
-            backupType: 'PRE_RESTORE',
-            note: `Automatic rollback backup prior to restore ${req.restoreId}`,
-          },
-          performedBy
-        );
-
-        rollbackBackupPath = rollbackRecord.backupPath;
-        rollbackBackupCreated = true;
+        try {
+          const rollbackRecord = await backupService.createBackup(
+            {
+              databasePath: canonicalTarget,
+              backupType: 'PRE_RESTORE',
+              note: `Automatic rollback backup prior to restore ${req.restoreId}`,
+            },
+            performedBy
+          );
+          rollbackBackupPath = rollbackRecord.backupPath;
+          rollbackBackupCreated = true;
+        } catch (bkpErr: any) {
+          logger.error(`[RecoveryService] Pre-restore rollback backup creation failed!`, bkpErr);
+          throw new ConflictError(`Cannot proceed with restore: Mandatory rollback backup failed: ${bkpErr?.message}`);
+        }
 
         await systemPrisma.restoreRecord.update({
           where: { id: restoreRecord.id },
-          data: { rollbackBackupPath },
+          data: { rollbackBackupPath, status: 'ROLLBACK_READY' },
         });
       }
 
@@ -364,7 +443,13 @@ export class RecoveryService {
         data: { status: 'ACTIVATING' },
       });
 
-      // 3. Atomic file swap (copy staged candidate to live target DB)
+      // 3. Windows-safe atomic replacement strategy
+      if (fs.existsSync(canonicalTarget)) {
+        swapOldPath = `${canonicalTarget}.swap_old_${Date.now()}`;
+        fs.renameSync(canonicalTarget, swapOldPath);
+      }
+
+      // Copy staged candidate to live target DB
       fs.copyFileSync(stagedDbPath, canonicalTarget);
 
       // 4. Post-Restore Verification: verify new active database opens cleanly
@@ -382,7 +467,13 @@ export class RecoveryService {
       } catch (verifyErr: any) {
         // Post-restore check failed! AUTOMATIC ROLLBACK
         logger.error(`[RecoveryService] Post-restore check failed! Rolling back...`, verifyErr);
-        if (rollbackBackupPath && fs.existsSync(rollbackBackupPath)) {
+        if (swapOldPath && fs.existsSync(swapOldPath)) {
+          if (fs.existsSync(canonicalTarget)) {
+            try { fs.unlinkSync(canonicalTarget); } catch {}
+          }
+          fs.renameSync(swapOldPath, canonicalTarget);
+          swapOldPath = null;
+        } else if (rollbackBackupPath && fs.existsSync(rollbackBackupPath)) {
           fs.copyFileSync(rollbackBackupPath, canonicalTarget);
         }
 
@@ -399,6 +490,12 @@ export class RecoveryService {
         );
       } finally {
         await verifyClient.$disconnect();
+      }
+
+      // Unlink swapOldPath upon verified activation
+      if (swapOldPath && fs.existsSync(swapOldPath)) {
+        try { fs.unlinkSync(swapOldPath); } catch {}
+        swapOldPath = null;
       }
 
       // 5. Update or Register active database in DatabaseRegistry
@@ -462,14 +559,116 @@ export class RecoveryService {
         rollbackBackupPath,
       };
     } finally {
+      // Clean up swap file if somehow still existing on error
+      if (swapOldPath && fs.existsSync(swapOldPath)) {
+        try {
+          if (!fs.existsSync(canonicalTarget)) {
+            fs.renameSync(swapOldPath, canonicalTarget);
+          }
+        } catch {}
+      }
       this.activeRestoreLocks.delete(canonicalTarget);
     }
+  }
+
+  /**
+   * Startup reconciliation of interrupted restores or crashed replacement operations.
+   */
+  async reconcileInterruptedRestores(): Promise<{ reconciledCount: number; cleanedStagingCount: number }> {
+    ensureAllDataDirs();
+    let reconciledCount = 0;
+    let cleanedStagingCount = 0;
+
+    const databasesDir = getDatabasesDir();
+    if (fs.existsSync(databasesDir)) {
+      try {
+        const files = fs.readdirSync(databasesDir);
+        for (const file of files) {
+          if (file.includes('.swap_old_')) {
+            const swapFullPath = path.join(databasesDir, file);
+            const activeDbPath = swapFullPath.replace(/\.swap_old_\d+$/, '');
+            if (fs.existsSync(activeDbPath)) {
+              const validation = await databaseValidationService.validateDatabase(activeDbPath);
+              if (validation.isValid) {
+                fs.unlinkSync(swapFullPath);
+                logger.info(`[RecoveryService] Interrupted swap cleaned up for: ${activeDbPath}`);
+              } else {
+                fs.unlinkSync(activeDbPath);
+                fs.renameSync(swapFullPath, activeDbPath);
+                logger.warn(`[RecoveryService] Interrupted swap recovered to: ${activeDbPath}`);
+                reconciledCount++;
+              }
+            } else {
+              fs.renameSync(swapFullPath, activeDbPath);
+              logger.warn(`[RecoveryService] Interrupted swap restored missing DB: ${activeDbPath}`);
+              reconciledCount++;
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(`[RecoveryService] Error scanning for swap files: ${String(err)}`);
+      }
+    }
+
+    try {
+      const interruptedRecords = await systemPrisma.restoreRecord.findMany({
+        where: {
+          status: { in: ['PENDING', 'STAGING', 'ROLLBACK_READY', 'ACTIVATING'] },
+        },
+      });
+
+      for (const rec of interruptedRecords) {
+        const stagingDir = path.join(getRestoreStagingDir(), rec.restoreId);
+        if (rec.status === 'ACTIVATING') {
+          if (rec.rollbackBackupPath && fs.existsSync(rec.rollbackBackupPath)) {
+            await systemPrisma.restoreRecord.update({
+              where: { id: rec.id },
+              data: {
+                status: 'ROLLED_BACK',
+                errorMessage: 'Interrupted during activation; reconciled on startup.',
+              },
+            });
+          } else {
+            await systemPrisma.restoreRecord.update({
+              where: { id: rec.id },
+              data: {
+                status: 'FAILED',
+                errorMessage: 'Interrupted during activation; candidate discarded.',
+              },
+            });
+          }
+        } else {
+          await systemPrisma.restoreRecord.update({
+            where: { id: rec.id },
+            data: {
+              status: 'FAILED',
+              errorMessage: 'Interrupted prior to activation; staging discarded.',
+            },
+          });
+        }
+
+        if (fs.existsSync(stagingDir)) {
+          try {
+            fs.rmSync(stagingDir, { recursive: true, force: true });
+            cleanedStagingCount++;
+          } catch {}
+        }
+        reconciledCount++;
+      }
+    } catch (err) {
+      logger.error(`[RecoveryService] Error reconciling interrupted restore records: ${String(err)}`);
+    }
+
+    backupService.cleanupPartialBackups();
+
+    return { reconciledCount, cleanedStagingCount };
   }
 
   /**
    * Reinstall & previous installation data detection.
    */
   async detectReinstallState(): Promise<ReinstallDetectionDto> {
+    ensureAllDataDirs();
     const install = await installationService.getOrCreateInstallation();
     const databasesDir = getDatabasesDir();
     const backupsDir = getBackupsDir();
@@ -479,7 +678,7 @@ export class RecoveryService {
       try {
         const dbFiles = fs
           .readdirSync(databasesDir)
-          .filter((f) => (f.endsWith('.db') || f.endsWith('.sqlite')) && !f.endsWith('.partial'));
+          .filter((f) => (f.endsWith('.db') || f.endsWith('.sqlite')) && !f.endsWith('.partial') && !f.includes('.swap_old_'));
         previousDatabasesCount = dbFiles.length;
       } catch {}
     }
@@ -494,9 +693,10 @@ export class RecoveryService {
       } catch {}
     }
 
-    // Check if there are existing users or database registries in Control DB
+    // Check existing users and database registries in Control DB
     const existingUsersCount = await systemPrisma.user.count({ where: { deletedAt: null } });
     const existingRegistriesCount = await systemPrisma.databaseRegistry.count();
+    const totalInstallationsCount = await systemPrisma.installation.count();
 
     const hasPreviousData =
       previousDatabasesCount > 0 ||
@@ -504,27 +704,59 @@ export class RecoveryService {
       existingUsersCount > 0 ||
       existingRegistriesCount > 0;
 
+    let classification: any = 'FIRST_INSTALL';
+    if (!hasPreviousData) {
+      classification = 'FIRST_INSTALL';
+    } else if (install.lifecycleState === 'READY') {
+      classification = 'CURRENT_INSTALLATION';
+    } else if (totalInstallationsCount > 1 || (existingUsersCount > 0 && previousDatabasesCount > 0)) {
+      classification = 'PREVIOUS_INSTALLATION_DATA';
+    } else if (previousDatabasesCount > 0 && existingRegistriesCount === 0) {
+      classification = 'ORPHANED_DATA';
+    } else if (previousBackupsCount > 0) {
+      classification = 'RECOVERY_CANDIDATE';
+    } else {
+      classification = 'NO_RECOVERABLE_DATA';
+    }
+
     return {
       hasPreviousData,
       previousInstallationId: install.installationId,
       previousAppVersion: install.appVersion,
       previousDatabasesCount,
       previousBackupsCount,
-      canContinue: hasPreviousData,
+      canContinue: hasPreviousData && (existingUsersCount > 0 || existingRegistriesCount > 0 || previousDatabasesCount > 0),
       canRestore: previousBackupsCount > 0 || previousDatabasesCount > 0,
       canStartFresh: true,
+      classification,
       details: hasPreviousData
-        ? `Detected ${previousDatabasesCount} existing database(s), ${previousBackupsCount} backup(s), and ${existingUsersCount} registered user(s).`
+        ? `Detected ${previousDatabasesCount} existing database(s), ${previousBackupsCount} backup(s), and ${existingUsersCount} registered user(s). Classification: ${classification}.`
         : 'Clean first-time installation.',
     };
   }
 
   /**
    * Start fresh installation:
-   * Generates new installation identity; old database files remain 100% untouched on disk!
+   * Retires previous active installation(s); old database files, backups, and historical records remain 100% untouched on disk!
    */
   async startFreshInstallation(): Promise<any> {
+    ensureAllDataDirs();
+    // 1. Mark existing active installations as ARCHIVED
+    await systemPrisma.installation.updateMany({
+      where: { status: 'ACTIVE' },
+      data: { status: 'ARCHIVED' },
+    });
+
+    // 2. Generate brand new installation ID and persist to config
     const newInstallId = `inst_${crypto.randomUUID()}`;
+    const installFilePath = path.join(getConfigDir(), '.installation-id');
+    try {
+      fs.writeFileSync(installFilePath, newInstallId, { encoding: 'utf-8', mode: 0o600 });
+    } catch (e) {
+      logger.warn(`Could not update .installation-id file: ${String(e)}`);
+    }
+
+    // 3. Create fresh active installation
     const install = await systemPrisma.installation.create({
       data: {
         installationId: newInstallId,
@@ -547,6 +779,73 @@ export class RecoveryService {
     return install;
   }
 
+  /**
+   * Continue existing installation:
+   * Reconnects and verifies an existing installation state.
+   */
+  async continueExistingInstallation(targetInstallationId?: string): Promise<any> {
+    ensureAllDataDirs();
+    let targetInstall = null;
+    if (targetInstallationId) {
+      targetInstall = await systemPrisma.installation.findUnique({
+        where: { installationId: targetInstallationId },
+      });
+    } else {
+      // Find most recent installation with users or registries
+      targetInstall = await systemPrisma.installation.findFirst({
+        where: {
+          OR: [
+            { databaseRegistries: { some: {} } },
+            { installationUsers: { some: {} } },
+            { status: 'ACTIVE' },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    if (!targetInstall) {
+      throw new NotFoundError('No existing installation found to continue.');
+    }
+
+    // Archive any other active installations
+    await systemPrisma.installation.updateMany({
+      where: {
+        id: { not: targetInstall.id },
+        status: 'ACTIVE',
+      },
+      data: { status: 'ARCHIVED' },
+    });
+
+    // Reactivate target installation
+    const updated = await systemPrisma.installation.update({
+      where: { id: targetInstall.id },
+      data: { status: 'ACTIVE' },
+    });
+
+    // Persist to .installation-id file
+    const installFilePath = path.join(getConfigDir(), '.installation-id');
+    try {
+      fs.writeFileSync(installFilePath, updated.installationId, { encoding: 'utf-8', mode: 0o600 });
+    } catch {}
+
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'INSTALLATION',
+        entityId: updated.id,
+        eventType: 'REINSTALL_CONTINUED',
+        description: `Continued existing installation ${updated.installationId}.`,
+        performedBy: 'user',
+      },
+    });
+
+    return {
+      success: true,
+      installation: updated,
+      message: 'Existing installation continued successfully.',
+    };
+  }
+
   private computeSuitability(val: any): any {
     if (!val.isValid) {
       if (val.status === 'CORRUPTED') return 'CORRUPTED';
@@ -558,3 +857,4 @@ export class RecoveryService {
 }
 
 export const recoveryService = new RecoveryService();
+

@@ -92,6 +92,33 @@ export class RecoveryController {
       next(err);
     }
   };
+
+  continueExistingInstallation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const targetInstallationId = req.body?.installationId;
+      const result = await recoveryService.continueExistingInstallation(targetInstallationId);
+      res.json({
+        success: true,
+        message: result.message,
+        data: result.installation,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  reconcileInterruptedRestores = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await recoveryService.reconcileInterruptedRestores();
+      res.json({
+        success: true,
+        message: 'Interrupted operations reconciled successfully.',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 export const recoveryController = new RecoveryController();

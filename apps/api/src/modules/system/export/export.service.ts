@@ -3,16 +3,18 @@ import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { stringify } from 'csv-stringify/sync';
+import ExcelJS from 'exceljs';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getExportDir,
   getDatabasesDir,
+  getControlDbPath,
   getDatabaseTemplatePath,
   ensureAllDataDirs,
 } from '../../../infrastructure/paths';
+import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { installationService } from '../installation.service';
-import { NotFoundError } from '../../../errors';
-import { logger } from '../../../infrastructure/logging';
+import { NotFoundError, ValidationError, ConflictError } from '../../../errors';
 import type {
   ExportBusinessDataRequest,
   ExportManifestDto,
@@ -24,14 +26,15 @@ export class ExportService {
   /**
    * Sanitizes values against CSV/Excel spreadsheet formula injection.
    */
-  private sanitizeCellValue(val: any): any {
-    if (typeof val === 'string') {
-      // Strip or escape formula trigger characters: =, +, -, @, tab, CR
-      if (/^[=+\-@\t\r]/.test(val)) {
-        return `'${val}`;
+  private sanitizeCellValue(value: any): any {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (/^[=+\-@\t\r]/.test(trimmed)) {
+        return `'${value}`;
       }
     }
-    return val;
+    return value;
   }
 
   private calculateSha256(filePath: string): string {
@@ -40,8 +43,10 @@ export class ExportService {
   }
 
   /**
-   * Exports business ERP data to CSV files in a timestamped export bundle with manifest.
-   * STRICTLY excludes password hashes, PIN hashes, session tokens, and secrets.
+   * Authoritative Business Data Export across defined entities.
+   * Strictly excludes passwords, PINs, tokens, and internal security metadata.
+   * All-or-nothing: never silently skips failed tables.
+   * Strictly rejects template.db and system.db.
    */
   async exportBusinessData(
     req: ExportBusinessDataRequest,
@@ -60,16 +65,33 @@ export class ExportService {
     const bundlePath = path.join(destinationRoot, bundleDirName);
     fs.mkdirSync(bundlePath, { recursive: true });
 
+    const controlDb = getControlDbPath().toLowerCase();
+    const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
+
     // Connect to active profile database
     let activeDbPath = req.databasePath;
     let activeRegistry: any = null;
 
     if (activeDbPath) {
-      if (!fs.existsSync(activeDbPath)) {
-        throw new NotFoundError(`Specified database not found for export: ${activeDbPath}`);
+      const pathRes = canonicalizeDatabasePath(activeDbPath);
+      if (!pathRes.valid) {
+        throw new ValidationError(pathRes.error || 'Invalid database path for export.');
       }
+      const canonical = pathRes.canonicalPath;
+
+      if (!fs.existsSync(canonical)) {
+        throw new NotFoundError(`Specified database not found for export: ${canonical}`);
+      }
+      if (canonical.toLowerCase() === controlDb) {
+        throw new ValidationError('Cannot export the system control database as business data.');
+      }
+      if (canonical.toLowerCase() === templateDb) {
+        throw new ValidationError('Cannot export the template database as business data.');
+      }
+
+      activeDbPath = canonical;
       activeRegistry = await systemPrisma.databaseRegistry.findFirst({
-        where: { canonicalPath: path.resolve(activeDbPath) },
+        where: { canonicalPath: canonical },
         include: { profile: true },
       });
     } else {
@@ -77,24 +99,28 @@ export class ExportService {
         where: { installationId: install.id, status: 'ACTIVE' },
         include: { profile: true },
       });
-      activeRegistry = registries.find((r) => fs.existsSync(r.canonicalPath));
+      activeRegistry = registries.find(
+        (r) =>
+          fs.existsSync(r.canonicalPath) &&
+          r.canonicalPath.toLowerCase() !== controlDb &&
+          r.canonicalPath.toLowerCase() !== templateDb
+      );
       if (activeRegistry) {
         activeDbPath = activeRegistry.canonicalPath;
       } else {
         const defaultPath = path.join(getDatabasesDir(), 'Stavan.db');
         if (fs.existsSync(defaultPath)) {
           activeDbPath = defaultPath;
-        } else {
-          const templateDb = getDatabaseTemplatePath();
-          if (templateDb && fs.existsSync(templateDb)) {
-            activeDbPath = templateDb;
-          }
         }
       }
     }
 
     if (!activeDbPath || !fs.existsSync(activeDbPath)) {
-      throw new NotFoundError(`Active profile database not found for export.`);
+      throw new NotFoundError('No active business database found to export.');
+    }
+
+    if (activeDbPath.toLowerCase() === controlDb || activeDbPath.toLowerCase() === templateDb) {
+      throw new ValidationError('Cannot export control or template database as business data.');
     }
 
     const client = new PrismaClient({
@@ -124,63 +150,146 @@ export class ExportService {
       { name: 'Location', query: () => (client as any).location.findMany() },
     ];
 
+    const requiredEntities = req.tables && req.tables.length > 0
+      ? tableEntities.filter((e) => req.tables!.includes(e.name))
+      : tableEntities;
+
+    const requestedFormat = req.format || 'CSV';
+
     try {
       await systemPrisma.auditEvent.create({
         data: {
           entityType: 'EXPORT',
           entityId: exportId,
           eventType: 'EXPORT_STARTED',
-          description: `Business data export initiated: ${bundleDirName}`,
+          description: `Business data export initiated: ${bundleDirName} (${requestedFormat})`,
           performedBy,
         },
       });
 
-      for (const entity of tableEntities) {
-        if (req.tables && req.tables.length > 0 && !req.tables.includes(entity.name)) {
-          continue;
-        }
+      // Handle XLSX format
+      if (requestedFormat === 'XLSX') {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Diamond ERP V3';
+        workbook.created = new Date();
 
-        let rows: any[] = [];
-        try {
-          rows = await entity.query();
-        } catch (queryErr) {
-          logger.warn(`[ExportService] Could not query ${entity.name}: ${String(queryErr)}`);
-          continue;
-        }
-
-        // Sanitize rows and strip secret fields
-        const sanitizedRows = rows.map((row) => {
-          const clean: Record<string, any> = {};
-          for (const [k, v] of Object.entries(row)) {
-            // Strip any accidental secret fields
-            if (/password|pin|hash|secret|token/i.test(k)) continue;
-            clean[k] = this.sanitizeCellValue(v);
+        for (const entity of requiredEntities) {
+          let rows: any[] = [];
+          try {
+            rows = await entity.query();
+          } catch {
+            throw new ConflictError(
+              `Export failed: unable to query table "${entity.name}". All-or-nothing export aborted.`
+            );
           }
-          return clean;
-        });
 
-        const fileName = `${entity.name}.csv`;
-        const filePath = path.join(bundlePath, fileName);
+          const sanitizedRows = rows.map((row) => {
+            const clean: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+              if (/password|pin|hash|secret|token/i.test(k)) continue;
+              clean[k] = this.sanitizeCellValue(v);
+            }
+            return clean;
+          });
 
-        if (sanitizedRows.length > 0) {
-          const csvOutput = stringify(sanitizedRows, { header: true });
-          fs.writeFileSync(filePath, csvOutput, 'utf-8');
-        } else {
-          fs.writeFileSync(filePath, '', 'utf-8');
+          const sheet = workbook.addWorksheet(entity.name);
+          if (sanitizedRows.length > 0) {
+            const columns = Object.keys(sanitizedRows[0]).map((key) => ({
+              header: key,
+              key,
+              width: Math.max(key.length + 4, 12),
+            }));
+            sheet.columns = columns;
+            sheet.addRows(sanitizedRows);
+          }
+
+          totalRows += sanitizedRows.length;
         }
 
-        const stats = fs.statSync(filePath);
-        const sha256 = this.calculateSha256(filePath);
+        const xlsxFileName = 'business_data.xlsx';
+        const xlsxPath = path.join(bundlePath, xlsxFileName);
+        await workbook.xlsx.writeFile(xlsxPath);
+
+        const stats = fs.statSync(xlsxPath);
+        totalSizeBytes = stats.size;
+        const sha256 = this.calculateSha256(xlsxPath);
 
         exportedTables.push({
-          tableName: entity.name,
-          rowCount: sanitizedRows.length,
-          fileName,
+          tableName: 'AllEntities',
+          rowCount: totalRows,
+          fileName: xlsxFileName,
           sha256,
         });
+      } else if (requestedFormat === 'SQLITE') {
+        // Handle SQLITE format: clean snapshot of business tables
+        const sqliteFileName = 'business_data.db';
+        const sqlitePath = path.join(bundlePath, sqliteFileName);
 
-        totalRows += sanitizedRows.length;
-        totalSizeBytes += stats.size;
+        // Checkpoint before copy
+        try {
+          await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
+        } catch {}
+
+        try {
+          await client.$executeRawUnsafe(`VACUUM INTO '${sqlitePath.replace(/\\/g, '/')}'`);
+        } catch {
+          fs.copyFileSync(activeDbPath, sqlitePath);
+        }
+
+        const stats = fs.statSync(sqlitePath);
+        totalSizeBytes = stats.size;
+        const sha256 = this.calculateSha256(sqlitePath);
+
+        exportedTables.push({
+          tableName: 'DatabaseSnapshot',
+          rowCount: 0,
+          fileName: sqliteFileName,
+          sha256,
+        });
+      } else {
+        // Handle CSV format (default)
+        for (const entity of requiredEntities) {
+          let rows: any[] = [];
+          try {
+            rows = await entity.query();
+          } catch {
+            throw new ConflictError(
+              `Export failed: unable to query table "${entity.name}". All-or-nothing export aborted.`
+            );
+          }
+
+          const sanitizedRows = rows.map((row) => {
+            const clean: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+              if (/password|pin|hash|secret|token/i.test(k)) continue;
+              clean[k] = this.sanitizeCellValue(v);
+            }
+            return clean;
+          });
+
+          const fileName = `${entity.name}.csv`;
+          const filePath = path.join(bundlePath, fileName);
+
+          if (sanitizedRows.length > 0) {
+            const csvOutput = stringify(sanitizedRows, { header: true });
+            fs.writeFileSync(filePath, csvOutput, 'utf-8');
+          } else {
+            fs.writeFileSync(filePath, '', 'utf-8');
+          }
+
+          const stats = fs.statSync(filePath);
+          const sha256 = this.calculateSha256(filePath);
+
+          exportedTables.push({
+            tableName: entity.name,
+            rowCount: sanitizedRows.length,
+            fileName,
+            sha256,
+          });
+
+          totalRows += sanitizedRows.length;
+          totalSizeBytes += stats.size;
+        }
       }
 
       // Write Manifest JSON
@@ -200,10 +309,14 @@ export class ExportService {
           schemaVersion: activeRegistry?.schemaVersion || 1,
           profileCode: activeRegistry?.profile?.code || 'Stavan',
         },
-        exportFormat: req.format || 'CSV',
+        exportFormat: requestedFormat,
+        format: requestedFormat,
         tables: exportedTables,
         totalRows,
         totalSizeBytes,
+        tableCount: requiredEntities.length,
+        exportedTableCount: exportedTables.length,
+        failedTableCount: 0,
       };
 
       const manifestPath = path.join(bundlePath, 'export-manifest.json');
@@ -229,12 +342,19 @@ export class ExportService {
         success: true,
         exportId,
         filePath: bundlePath,
-        format: req.format || 'CSV',
+        format: requestedFormat,
         totalRows,
         sizeBytes: totalSizeBytes,
         manifest,
       };
     } catch (err: any) {
+      // Clean up incomplete bundle directory on error
+      if (fs.existsSync(bundlePath)) {
+        try {
+          fs.rmSync(bundlePath, { recursive: true, force: true });
+        } catch {}
+      }
+
       await systemPrisma.auditEvent.create({
         data: {
           entityType: 'EXPORT',
@@ -281,6 +401,10 @@ export class ExportService {
     let matches = true;
     let fileCount = 0;
 
+    if (manifest.failedTableCount && manifest.failedTableCount > 0) {
+      matches = false;
+    }
+
     for (const table of manifest.tables) {
       const filePath = path.join(targetPath, table.fileName);
       if (!fs.existsSync(filePath)) {
@@ -300,6 +424,8 @@ export class ExportService {
       isValid: matches,
       manifestMatches: matches,
       fileCount,
+      tableCount: manifest.tableCount,
+      tablesVerified: matches && (!manifest.failedTableCount || manifest.failedTableCount === 0),
       verifiedAt: new Date().toISOString(),
       error: !matches ? 'One or more exported files are missing or have mismatched checksums.' : null,
     };

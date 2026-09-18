@@ -130,6 +130,7 @@ export class OnboardingService {
   async initializeApplication(): Promise<OnboardingStatusDto> {
     ensureAllDataDirs();
     backupService.cleanupPartialBackups();
+    await recoveryService.reconcileInterruptedRestores();
     const install = await installationService.getOrCreateInstallation();
 
     if (install.lifecycleState === 'NOT_INITIALIZED') {

@@ -29,7 +29,11 @@ router.post('/validate', bootstrapOrAdmin('VALIDATE_RECOVERY_CANDIDATE'), recove
 router.post('/prepare', bootstrapOrAdmin('PREPARE_RESTORE'), recoveryController.prepareRestore);
 router.post('/restore', bootstrapOrAdmin('CONFIRM_RESTORE'), recoveryController.confirmRestore);
 
-// Fresh installation initialization
+// Fresh installation initialization & continue existing installation
 router.post('/fresh-install', bootstrapOrAdmin('INITIALIZE_APPLICATION'), recoveryController.startFreshInstallation);
+router.post('/continue', bootstrapOrAdmin('INITIALIZE_APPLICATION'), recoveryController.continueExistingInstallation);
+
+// Interrupted operation reconciliation
+router.post('/reconcile', bootstrapOrAdmin('INITIALIZE_APPLICATION'), recoveryController.reconcileInterruptedRestores);
 
 export default router;

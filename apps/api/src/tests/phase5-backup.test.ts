@@ -181,4 +181,22 @@ describe('Phase 5 — Data Preservation & Backup Engine', () => {
     expect(check?.status).toBe('DELETED');
     expect(fs.existsSync(sampleDbPath)).toBe(true);
   });
+
+  it('prevents concurrent backups of the same database from corrupting metadata or artifacts', async () => {
+    const backupPromises = [
+      backupService.createBackup({ databasePath: sampleDbPath, profileCode: 'p5concurrent1' }),
+      backupService.createBackup({ databasePath: sampleDbPath, profileCode: 'p5concurrent2' }),
+    ];
+
+    const results = await Promise.allSettled(backupPromises);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    if (rejected.length > 0) {
+      const err = (rejected[0] as PromiseRejectedResult).reason;
+      expect(err.message).toContain('in progress');
+    }
+    expect(fs.existsSync(sampleDbPath)).toBe(true);
+  });
 });

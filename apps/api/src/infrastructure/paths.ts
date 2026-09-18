@@ -123,6 +123,17 @@ export function getRestoreStagingDir(): string {
 }
 
 /**
+ * Directory for staged atomic backup creation.
+ */
+export function getBackupStagingDir(): string {
+  if (process.env.DIAMOND_BACKUP_STAGING_DIR) {
+    return path.resolve(process.env.DIAMOND_BACKUP_STAGING_DIR);
+  }
+
+  return path.join(getBackupsDir(), 'backup-staging');
+}
+
+/**
  * Directory for runtime application logs.
  */
 export function getLogsDir(): string {
@@ -239,6 +250,7 @@ export function ensureAllDataDirs(): void {
     getRecoveryDir(),
     getExportDir(),
     getRestoreStagingDir(),
+    getBackupStagingDir(),
     getLogsDir(),
     getConfigDir(),
   ];

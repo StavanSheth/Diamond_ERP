@@ -48,4 +48,35 @@ describe('Phase 5 — Reinstall Detection & Multi-Choice Preservation Engine', (
     expect(audit).toBeDefined();
     expect(audit?.description).toContain('prior databases preserved on disk');
   });
+
+  it('continues existing installation preserving database and installation state', async () => {
+    const install = await systemPrisma.installation.findFirst({ where: { status: 'ACTIVE' } });
+    expect(install).toBeDefined();
+
+    const continued = await recoveryService.continueExistingInstallation(install!.installationId);
+    expect(continued.success).toBe(true);
+    expect(continued.installation.status).toBe('ACTIVE');
+
+    const audit = await systemPrisma.auditEvent.findFirst({
+      where: {
+        entityType: 'INSTALLATION',
+        eventType: 'REINSTALL_CONTINUED',
+      },
+      orderBy: { performedAt: 'desc' },
+    });
+    expect(audit).toBeDefined();
+  });
+
+  it('classifies reinstall state correctly', async () => {
+    const state = await recoveryService.detectReinstallState();
+    expect(state.classification).toBeDefined();
+    expect([
+      'FIRST_INSTALL',
+      'CURRENT_INSTALLATION',
+      'PREVIOUS_INSTALLATION_DATA',
+      'ORPHANED_DATA',
+      'RECOVERY_CANDIDATE',
+      'NO_RECOVERABLE_DATA',
+    ]).toContain(state.classification);
+  });
 });
