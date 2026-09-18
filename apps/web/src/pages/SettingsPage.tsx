@@ -70,6 +70,70 @@ export const SettingsPage: React.FC = () => {
   const [exporting, setExporting] = useState(false);
   const directoryInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Phase 5 Backup & Recovery State
+  const [backups, setBackups] = useState<any[]>([]);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [selectedBackupForRestore, setSelectedBackupForRestore] = useState<any | null>(null);
+  const [stagedRestore, setStagedRestore] = useState<any | null>(null);
+  const [confirmOverwriteCheckbox, setConfirmOverwriteCheckbox] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
+  const fetchBackups = async () => {
+    try {
+      const res = await api.backup.listBackups();
+      if (res?.backups) {
+        setBackups(res.backups);
+      }
+    } catch {}
+  };
+
+  const handleCreateDatabaseBackup = async () => {
+    setCreatingBackup(true);
+    setBackupMessage(null);
+    try {
+      const bkp = await api.backup.createBackup();
+      setBackupMessage(`Verified backup created: ${bkp.backupId} (${(bkp.sizeBytes / 1024).toFixed(1)} KB)`);
+      await fetchBackups();
+    } catch (err: any) {
+      alert(err.message || 'Failed to create backup');
+    } finally {
+      setCreatingBackup(false);
+    }
+  };
+
+  const handlePrepareRestore = async (bkp: any) => {
+    setSelectedBackupForRestore(bkp);
+    setConfirmOverwriteCheckbox(false);
+    try {
+      const preview = await api.recovery.prepareRestore({ candidatePath: bkp.backupPath });
+      setStagedRestore(preview);
+      setRestoreModalOpen(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to prepare staged restore');
+    }
+  };
+
+  const handleExecuteRestore = async () => {
+    if (!stagedRestore || !confirmOverwriteCheckbox) return;
+    setRestoring(true);
+    try {
+      await api.recovery.confirmRestore({
+        restoreId: stagedRestore.restoreId,
+        confirmDestructiveOverwrite: true,
+        targetProfileCode: stagedRestore.targetProfileCode,
+      });
+      alert('Database restored and verified successfully!');
+      setRestoreModalOpen(false);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message || 'Failed to execute restore');
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   const [draftAutoSaveEnabled, setDraftAutoSaveEnabled] = useState<boolean>(() => {
     return localStorage.getItem('draftAutoSaveEnabled') !== 'false';
   });
@@ -100,6 +164,7 @@ export const SettingsPage: React.FC = () => {
         setProfiles(profileRes.data.profiles);
         setActiveProfile(profileRes.data.active);
       }
+      await fetchBackups();
     } catch (err: any) {
       setError(err.message || 'Failed to load settings');
     } finally {
@@ -836,6 +901,144 @@ export const SettingsPage: React.FC = () => {
                     </select>
                   </div>
                 </div>
+
+                {/* Phase 5: Verified Database Backups & Restore Management */}
+                <div className="bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-on-surface m-0">Verified SQLite Database Snapshots</h4>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        Create atomic, SHA-256 verified database backups with WAL flush and JSON manifest
+                      </p>
+                    </div>
+                    <button
+                      id="btn-create-verified-backup"
+                      type="button"
+                      disabled={creatingBackup}
+                      onClick={handleCreateDatabaseBackup}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">verified</span>
+                      {creatingBackup ? 'Creating...' : 'Create Verified Backup'}
+                    </button>
+                  </div>
+
+                  {backupMessage && (
+                    <div className="p-2.5 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-xs flex items-center gap-2">
+                      <span className="material-symbols-outlined text-sm">check_circle</span>
+                      <span>{backupMessage}</span>
+                    </div>
+                  )}
+
+                  {backups.length > 0 ? (
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden max-h-56 overflow-y-auto">
+                      {backups.map((bkp) => (
+                        <div key={bkp.backupId} className="p-2.5 flex items-center justify-between text-xs hover:bg-slate-50">
+                          <div>
+                            <div className="font-semibold text-slate-800">{bkp.backupId}</div>
+                            <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                              <span>{(bkp.sizeBytes / 1024).toFixed(1)} KB</span>
+                              <span>•</span>
+                              <span>{new Date(bkp.createdAt).toLocaleString()}</span>
+                              <span>•</span>
+                              <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-mono text-[9px]">{bkp.status}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const res = await api.backup.verifyBackup(bkp.backupId);
+                                  alert(res.isValid ? '✔ Integrity verified! SHA-256 and SQLite checks passed.' : `❌ Verification failed: ${res.error}`);
+                                } catch (e: any) {
+                                  alert(e.message || 'Verification failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-200 rounded border border-slate-300"
+                            >
+                              Verify
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handlePrepareRestore(bkp)}
+                              className="px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 rounded border border-teal-300"
+                            >
+                              Restore
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-3 text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
+                      No backups created yet. Click &quot;Create Verified Backup&quot; to take a snapshot.
+                    </div>
+                  )}
+
+                  {/* Uninstall Data Safety Contract */}
+                  <div className="mt-2 p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 flex items-start gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-teal-600 shrink-0">shield</span>
+                    <div>
+                      <span className="font-bold text-slate-800">Uninstall Data Preservation Guarantee: </span>
+                      Uninstalling Diamond ERP removes application binaries from Program Files while keeping 100% of your business data, databases, and logs intact in AppData.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Staged Restore Confirmation Modal */}
+                {restoreModalOpen && stagedRestore && (
+                  <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fadeIn">
+                    <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 space-y-4">
+                      <div className="flex items-center gap-2.5 pb-2 border-b border-slate-100">
+                        <span className="material-symbols-outlined text-amber-600 text-2xl">warning</span>
+                        <h3 className="font-bold text-sm text-slate-900 m-0">Confirm Database Restoration</h3>
+                      </div>
+
+                      <div className="text-xs text-slate-600 space-y-2">
+                        <p>
+                          You are about to restore database from backup: <strong className="font-mono text-slate-800">{selectedBackupForRestore?.backupId}</strong>
+                        </p>
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1 text-[11px] text-amber-900">
+                          <div>• <strong>Staged Candidate Verified:</strong> {stagedRestore.tableCount} tables found.</div>
+                          <div>• <strong>Automatic Rollback Protection:</strong> A verified rollback backup of current live data will be taken before swapping.</div>
+                          <div>• <strong>Active Target:</strong> {stagedRestore.targetDatabasePath}</div>
+                        </div>
+                      </div>
+
+                      <label className="flex items-start gap-2 text-xs font-semibold text-slate-800 cursor-pointer pt-2">
+                        <input
+                          id="chk-confirm-restore"
+                          type="checkbox"
+                          checked={confirmOverwriteCheckbox}
+                          onChange={(e) => setConfirmOverwriteCheckbox(e.target.checked)}
+                          className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                        />
+                        <span>I understand that current data will be backed up and replaced with the selected backup snapshot.</span>
+                      </label>
+
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setRestoreModalOpen(false)}
+                          disabled={restoring}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          id="btn-execute-restore"
+                          type="button"
+                          disabled={!confirmOverwriteCheckbox || restoring}
+                          onClick={handleExecuteRestore}
+                          className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all disabled:opacity-40"
+                        >
+                          {restoring ? 'Restoring...' : 'Restore Database'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
 

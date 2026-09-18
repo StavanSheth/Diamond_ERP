@@ -90,6 +90,39 @@ export function getBackupsDir(): string {
 }
 
 /**
+ * Directory for recovery candidates and staged artifacts.
+ */
+export function getRecoveryDir(): string {
+  if (process.env.DIAMOND_RECOVERY_DIR) {
+    return path.resolve(process.env.DIAMOND_RECOVERY_DIR);
+  }
+
+  return path.join(getDataDir(), 'recovery');
+}
+
+/**
+ * Directory for business data export packages.
+ */
+export function getExportDir(): string {
+  if (process.env.DIAMOND_EXPORT_DIR) {
+    return path.resolve(process.env.DIAMOND_EXPORT_DIR);
+  }
+
+  return path.join(getDataDir(), 'exports');
+}
+
+/**
+ * Directory for staged database restore operations.
+ */
+export function getRestoreStagingDir(): string {
+  if (process.env.DIAMOND_RESTORE_STAGING_DIR) {
+    return path.resolve(process.env.DIAMOND_RESTORE_STAGING_DIR);
+  }
+
+  return path.join(getDataDir(), 'restore-staging');
+}
+
+/**
  * Directory for runtime application logs.
  */
 export function getLogsDir(): string {
@@ -203,6 +236,9 @@ export function ensureAllDataDirs(): void {
     getDatabasesDir(),
     getUploadsDir(),
     getBackupsDir(),
+    getRecoveryDir(),
+    getExportDir(),
+    getRestoreStagingDir(),
     getLogsDir(),
     getConfigDir(),
   ];

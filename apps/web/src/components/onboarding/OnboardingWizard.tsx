@@ -291,20 +291,74 @@ export const OnboardingWizard: React.FC = () => {
 
         {/* STEP: NOT_INITIALIZED / APP_SETUP */}
         {(currentStep === 'NOT_INITIALIZED' || currentStep === 'APP_SETUP') && (
-          <div className="space-y-6">
-            <div className="text-slate-300 text-sm leading-relaxed">
-              Welcome to Diamond ERP. Let&apos;s get your workstation set up with secure storage and local identity.
+          status.reinstallRecovery?.hasPreviousData ? (
+            <div className="space-y-4" id="previous-data-detected-card">
+              <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 text-sm">
+                <div className="font-bold flex items-center gap-2 mb-1">
+                  <span className="material-symbols-outlined text-base">restore</span>
+                  Previous Diamond ERP Installation Detected
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {status.reinstallRecovery.details || 'Previous application data and database records were discovered on this computer.'}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5">
+                <button
+                  id="btn-continue-installation"
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleAppSetup}
+                  className="w-full text-left p-3.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-white transition-all flex items-center justify-between"
+                >
+                  <div>
+                    <div className="font-semibold text-sm">Continue with Existing Installation</div>
+                    <div className="text-xs text-slate-400">Keep all existing database records, users, and transactions.</div>
+                  </div>
+                  <span className="material-symbols-outlined text-indigo-400">arrow_forward</span>
+                </button>
+
+                <button
+                  id="btn-start-fresh-installation"
+                  type="button"
+                  disabled={submitting}
+                  onClick={async () => {
+                    setSubmitting(true);
+                    try {
+                      await api.recovery.startFreshInstall();
+                      await fetchStatus();
+                    } catch (err: any) {
+                      setError(err?.message || 'Failed to initialize fresh installation');
+                    } finally {
+                      setSubmitting(false);
+                    }
+                  }}
+                  className="w-full text-left p-3.5 rounded-xl border border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 transition-all flex items-center justify-between"
+                >
+                  <div>
+                    <div className="font-semibold text-sm">Start New Blank Installation</div>
+                    <div className="text-xs text-slate-400">Creates a fresh identity. Previous database files remain 100% preserved on disk.</div>
+                  </div>
+                  <span className="material-symbols-outlined text-slate-400">add_circle</span>
+                </button>
+              </div>
             </div>
-            <button
-              id="btn-init-app"
-              type="button"
-              disabled={submitting}
-              onClick={handleAppSetup}
-              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl shadow-lg transition-all"
-            >
-              {submitting ? 'Initializing...' : 'Initialize Application Setup'}
-            </button>
-          </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="text-slate-300 text-sm leading-relaxed">
+                Welcome to Diamond ERP. Let&apos;s get your workstation set up with secure storage and local identity.
+              </div>
+              <button
+                id="btn-init-app"
+                type="button"
+                disabled={submitting}
+                onClick={handleAppSetup}
+                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl shadow-lg transition-all"
+              >
+                {submitting ? 'Initializing...' : 'Initialize Application Setup'}
+              </button>
+            </div>
+          )
         )}
 
         {/* STEP: PIN_SETUP */}

@@ -16,6 +16,8 @@ export * from './api/settings.api';
 export * from './api/auth.api';
 export * from './api/security.api';
 export * from './api/onboarding.api';
+export * from './api/backup.api';
+export * from './api/recovery.api';
 
 import { stocksApi, buildFilterQueryString } from './api/stocks.api';
 import { ledgerApi } from './api/ledger.api';
@@ -27,6 +29,8 @@ import { settingsApi } from './api/settings.api';
 import { authApi } from './api/auth.api';
 import { securityApi } from './api/security.api';
 import { onboardingApi } from './api/onboarding.api';
+import { backupApi } from './api/backup.api';
+import { recoveryApi } from './api/recovery.api';
 import { AdvancedItemFilters } from '../types/stock';
 
 export { buildFilterQueryString, type AdvancedItemFilters };
@@ -109,4 +113,8 @@ export const api = {
 
   // First-run Onboarding & Lifecycle
   onboarding: onboardingApi,
+
+  // Phase 5 Data Preservation & Recovery
+  backup: backupApi,
+  recovery: recoveryApi,
 };

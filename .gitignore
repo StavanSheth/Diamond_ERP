@@ -61,6 +61,16 @@ uploads/
 **/uploads/
 storage/
 **/storage/
+backups/
+**/backups/
+restore-staging/
+**/restore-staging/
+*.partial
+**/*.partial
+*.manifest.json
+**/*.manifest.json
+test-scratch-*/
+**/test-scratch-*/
 
 # Compiled Binaries & Release Artifacts
 *.exe

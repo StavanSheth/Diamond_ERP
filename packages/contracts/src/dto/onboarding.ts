@@ -1,4 +1,5 @@
 import type { LifecycleState, DatabaseStatus } from './lifecycle';
+import type { ReinstallDetectionDto } from './recovery';
 
 export type DatabaseSuitability =
   | 'VALID'
@@ -16,6 +17,7 @@ export interface OnboardingStatusDto {
   userConfigured: boolean;
   databaseConfigured: boolean;
   ready: boolean;
+  reinstallRecovery?: ReinstallDetectionDto | null;
   installation: {
     id: string;
     installationId: string;

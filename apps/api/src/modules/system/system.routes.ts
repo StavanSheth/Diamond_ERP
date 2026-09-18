@@ -3,6 +3,10 @@ import { activationController } from './activation.controller';
 import { lifecycleController } from './lifecycle.controller';
 import { securityRoutes, securityController } from '../security';
 import { onboardingRoutes } from './onboarding';
+import { backupRoutes } from './backup';
+import { recoveryRoutes } from './recovery';
+import { exportRoutes } from './export';
+import { uninstallRoutes } from './uninstall';
 import { authenticate } from '../../middleware/auth';
 import { authorize } from '../../middleware/authorize';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
@@ -16,6 +20,9 @@ router.get('/lifecycle', lifecycleController.getLifecycleStatus);
 // First-run onboarding routes (status, user discovery, database discovery/attachment)
 router.use('/onboarding', onboardingRoutes);
 
+// Recovery & reinstall routes (candidates, inspect, prepare, restore, fresh-install)
+router.use('/recovery', recoveryRoutes);
+
 // Bootstrap onboarding mutations (guarded by lifecycle state: allowed pre-READY, authenticated post-READY)
 router.post('/lifecycle-state', lifecycleController.updateLifecycleState);
 router.post('/device', lifecycleController.registerDevice);
@@ -24,6 +31,11 @@ router.post('/database/validate', lifecycleController.validateDatabase);
 
 // Security foundation routes (PIN setup, verification, lock/unlock, status)
 router.use('/security', securityRoutes);
+
+// Data preservation, backup, export & uninstall routes
+router.use('/backup', backupRoutes);
+router.use('/export', exportRoutes);
+router.use('/uninstall', uninstallRoutes);
 
 // ── Protected administrative system routes ─────────────────────────────
 // System routes manage Control DB resources (Installation, Device, DatabaseRegistry)

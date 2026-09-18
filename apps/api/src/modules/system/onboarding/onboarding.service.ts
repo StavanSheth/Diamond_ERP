@@ -14,6 +14,8 @@ import { installationService } from '../installation.service';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
 import { authService } from '../../auth/auth.service';
+import { recoveryService } from '../recovery/recovery.service';
+import { backupService } from '../backup/backup.service';
 import type {
   OnboardingStatusDto,
   UserDiscoveryResponseDto,
@@ -69,6 +71,15 @@ export class OnboardingService {
       userConfigured &&
       databaseConfigured;
 
+    let reinstallRecovery = null;
+    if (!isReady) {
+      try {
+        reinstallRecovery = await recoveryService.detectReinstallState();
+      } catch (recErr) {
+        logger.warn(`[OnboardingService] Reinstall detection error: ${String(recErr)}`);
+      }
+    }
+
     return {
       lifecycleState: install.lifecycleState,
       installationInitialized: install.lifecycleState !== 'NOT_INITIALIZED',
@@ -77,6 +88,7 @@ export class OnboardingService {
       userConfigured,
       databaseConfigured,
       ready: isReady,
+      reinstallRecovery,
       installation: {
         id: install.id,
         installationId: install.installationId,
@@ -117,6 +129,7 @@ export class OnboardingService {
    */
   async initializeApplication(): Promise<OnboardingStatusDto> {
     ensureAllDataDirs();
+    backupService.cleanupPartialBackups();
     const install = await installationService.getOrCreateInstallation();
 
     if (install.lifecycleState === 'NOT_INITIALIZED') {
