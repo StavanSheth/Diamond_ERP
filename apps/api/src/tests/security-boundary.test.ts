@@ -552,4 +552,224 @@ describe('Phase 3 Remediation: Authoritative Security Boundary & Attack Regressi
       ).rejects.toThrow(ValidationError);
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 52: CONCURRENCY INVARIANTS, REVOCATION GUARDS & LIFECYCLE TESTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  describe('Section 52: Hardened Concurrency Invariants, Revocation Guards & Full Lifecycle', () => {
+    it('handles 5 simultaneous incorrect PIN requests resulting in exactly 5 failures and active lockout', async () => {
+      const devId = `dev-concurrent-5-${Date.now()}`;
+      const install = await installationService.getOrCreateInstallation();
+      await systemPrisma.device.create({
+        data: {
+          deviceId: devId,
+          installationId: install.id,
+          deviceName: 'Concurrent-5-Terminal',
+          platform: 'WINDOWS',
+          status: 'ACTIVE',
+        },
+      });
+      const validPin = '839201';
+      await deviceSecurityService.setupPin(devId, validPin);
+
+      // Fire 5 concurrent wrong PIN verifications
+      const results = await Promise.all([
+        deviceSecurityService.verifyPin(devId, '111222'),
+        deviceSecurityService.verifyPin(devId, '222333'),
+        deviceSecurityService.verifyPin(devId, '333444'),
+        deviceSecurityService.verifyPin(devId, '444555'),
+        deviceSecurityService.verifyPin(devId, '555666'),
+      ]);
+
+      for (const r of results) {
+        expect(r.success).toBe(false);
+      }
+
+      const status = await deviceSecurityService.getSecurityStatus(devId);
+      expect(status.failedAttempts).toBe(5);
+      expect(status.authenticationLockedUntil).not.toBeNull();
+      expect(status.isLocked).toBe(true);
+
+      // Verify: Correct PIN is rejected during active lockout
+      const duringLockout = await deviceSecurityService.verifyPin(devId, validPin);
+      expect(duringLockout.success).toBe(false);
+      expect(duringLockout.locked).toBe(true);
+    });
+
+    it('handles 4 concurrent failures + 1 correct PIN with consistent non-lockout state', async () => {
+      const devId = `dev-concurrent-mixed-${Date.now()}`;
+      const install = await installationService.getOrCreateInstallation();
+      await systemPrisma.device.create({
+        data: {
+          deviceId: devId,
+          installationId: install.id,
+          deviceName: 'Concurrent-Mixed-Terminal',
+          platform: 'WINDOWS',
+          status: 'ACTIVE',
+        },
+      });
+      const validPin = '739102';
+      await deviceSecurityService.setupPin(devId, validPin);
+
+      // 4 wrong attempts + 1 correct attempt simultaneously
+      await Promise.all([
+        deviceSecurityService.verifyPin(devId, '111222'),
+        deviceSecurityService.verifyPin(devId, '222333'),
+        deviceSecurityService.verifyPin(devId, '333444'),
+        deviceSecurityService.verifyPin(devId, '444555'),
+        deviceSecurityService.verifyPin(devId, validPin),
+      ]);
+
+      const status = await deviceSecurityService.getSecurityStatus(devId);
+      // Because there were only 4 failures, device must NEVER be locked out
+      expect(status.authenticationLockedUntil).toBeNull();
+      expect(status.failedAttempts).toBeLessThan(5);
+    });
+
+    it('proves application screen lock remains locked when auth lockout expires until correct PIN unlocks', async () => {
+      const devId = `dev-screen-shield-${Date.now()}`;
+      const install = await installationService.getOrCreateInstallation();
+      await systemPrisma.device.create({
+        data: {
+          deviceId: devId,
+          installationId: install.id,
+          deviceName: 'Screen-Shield-Terminal',
+          platform: 'WINDOWS',
+          status: 'ACTIVE',
+        },
+      });
+      const validPin = '629104';
+      await deviceSecurityService.setupPin(devId, validPin);
+
+      // 1. User locks workstation screen shield
+      await deviceSecurityService.lockApplication(devId);
+      let status = await deviceSecurityService.getSecurityStatus(devId);
+      expect(status.applicationLocked).toBe(true);
+      expect(status.authenticationLockedUntil).toBeNull();
+
+      // 2. Set expired lockout in DB (15 minutes elapsed)
+      const past = new Date(Date.now() - 5000);
+      await systemPrisma.deviceSecurity.update({
+        where: { deviceId: devId },
+        data: {
+          failedAttempts: 5,
+          lockedUntil: past,
+        },
+      });
+
+      // Status query shows auth lockout has cleared, but application screen lock remains true!
+      status = await deviceSecurityService.getSecurityStatus(devId);
+      expect(status.applicationLocked).toBe(true);
+      expect(status.authenticationLockedUntil).toBeNull();
+
+      // 3. User provides correct PIN to unlock workstation
+      const unlockRes = await deviceSecurityService.unlockApplication(devId, validPin);
+      expect(unlockRes.applicationLocked).toBe(false);
+
+      status = await deviceSecurityService.getSecurityStatus(devId);
+      expect(status.applicationLocked).toBe(false);
+      expect(status.isLocked).toBe(false);
+    });
+
+    it('rejects new session creation on login when deviceId is REVOKED', async () => {
+      const devId = `dev-rev-login-${Date.now()}`;
+      const install = await installationService.getOrCreateInstallation();
+      await systemPrisma.device.create({
+        data: {
+          deviceId: devId,
+          installationId: install.id,
+          deviceName: 'Revoked-Login-Terminal',
+          platform: 'WINDOWS',
+          status: 'ACTIVE',
+        },
+      });
+
+      const username = `revlogin-${Date.now()}`;
+      await authService.createUser(username, 'Password123!', 'Revoked Login User', 'ADMIN');
+
+      // Administratively revoke device
+      await installationService.revokeDevice(devId, 'Compromised workstation');
+
+      // Attempting to log in with this revoked deviceId must be rejected
+      await expect(
+        authService.login(username, 'Password123!', { deviceId: devId })
+      ).rejects.toThrow(AuthorizationError);
+    });
+
+    it('strictly validates full lifecycle transitions and rejects illegal jumps', async () => {
+      // 1. Illegal transitions must fail
+      await installationService.updateLifecycleState('NOT_INITIALIZED', { isReset: true });
+
+      // Jump: NOT_INITIALIZED -> DEVICE_SETUP (illegal jump)
+      await expect(
+        installationService.updateLifecycleState('DEVICE_SETUP')
+      ).rejects.toThrow(ConflictError);
+
+      // Jump: NOT_INITIALIZED -> READY (illegal jump)
+      await expect(
+        installationService.updateLifecycleState('READY')
+      ).rejects.toThrow(ConflictError);
+
+      // Step forward to APP_SETUP
+      await installationService.updateLifecycleState('APP_SETUP');
+
+      // Jump: APP_SETUP -> READY (illegal jump)
+      await expect(
+        installationService.updateLifecycleState('READY')
+      ).rejects.toThrow(ConflictError);
+
+      // Step forward to PIN_SETUP
+      await installationService.updateLifecycleState('PIN_SETUP');
+
+      // Ensure no PIN is configured on local device
+      const localId = installationService.getOrGenerateDeviceId();
+      await systemPrisma.deviceSecurity.deleteMany({ where: { deviceId: localId } });
+
+      // Invariant check: PIN_SETUP -> DEVICE_SETUP without PIN fails
+      await expect(
+        installationService.updateLifecycleState('DEVICE_SETUP')
+      ).rejects.toThrow(ConflictError);
+
+      // Configure PIN
+      await deviceSecurityService.setupPin(localId, '839201');
+
+      // Now PIN_SETUP -> DEVICE_SETUP succeeds
+      await installationService.updateLifecycleState('DEVICE_SETUP');
+
+      // Invalidate device status to REVOKED
+      await systemPrisma.device.update({
+        where: { deviceId: localId },
+        data: { status: 'REVOKED' },
+      });
+
+      // Invariant check: DEVICE_SETUP -> USER_DISCOVERY without active device fails
+      await expect(
+        installationService.updateLifecycleState('USER_DISCOVERY')
+      ).rejects.toThrow(ConflictError);
+
+      // Restore active device status
+      await systemPrisma.device.update({
+        where: { deviceId: localId },
+        data: { status: 'ACTIVE' },
+      });
+
+      // Valid full sequence:
+      // USER_DISCOVERY -> DATABASE_DISCOVERY -> DATABASE_VALIDATION -> DATABASE_SETUP -> READY
+      const step4 = await installationService.updateLifecycleState('USER_DISCOVERY');
+      expect(step4.lifecycleState).toBe('USER_DISCOVERY');
+
+      const step5 = await installationService.updateLifecycleState('DATABASE_DISCOVERY');
+      expect(step5.lifecycleState).toBe('DATABASE_DISCOVERY');
+
+      const step6 = await installationService.updateLifecycleState('DATABASE_VALIDATION');
+      expect(step6.lifecycleState).toBe('DATABASE_VALIDATION');
+
+      const step7 = await installationService.updateLifecycleState('DATABASE_SETUP');
+      expect(step7.lifecycleState).toBe('DATABASE_SETUP');
+
+      const step8 = await installationService.updateLifecycleState('READY');
+      expect(step8.lifecycleState).toBe('READY');
+      expect(step8.initializedAt).not.toBeNull();
+    });
+  });
 });

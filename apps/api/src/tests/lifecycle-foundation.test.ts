@@ -207,6 +207,14 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
     it('enforces the complete 9-stage progression matrix from NOT_INITIALIZED to READY', async () => {
       await installationService.getOrCreateInstallation();
 
+      // Ensure prerequisites exist for authoritative Phase 3 lifecycle validation
+      const dev = await installationService.registerDevice({ deviceName: 'Lifecycle-Matrix-Terminal' });
+      await systemPrisma.deviceSecurity.upsert({
+        where: { deviceId: dev.deviceId },
+        update: { pinHash: '$2b$10$hashedpinplaceholderforexistence' },
+        create: { deviceId: dev.deviceId, pinHash: '$2b$10$hashedpinplaceholderforexistence' },
+      });
+
       // Step forward 1 by 1 across all 9 stages
       const stages: typeof LIFECYCLE_STAGES = [
         'APP_SETUP',
@@ -278,7 +286,13 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       expect(jsonSent?.success).toBe(true);
       expect(jsonSent?.data?.lifecycleState).toBe('APP_SETUP');
 
-      // Fast-forward to READY through valid steps
+      // Fast-forward to READY through valid steps (ensuring required prerequisites exist)
+      const dev = await installationService.registerDevice({ deviceName: 'Bootstrap-FastForward-Terminal' });
+      await systemPrisma.deviceSecurity.upsert({
+        where: { deviceId: dev.deviceId },
+        update: { pinHash: '$2b$10$hashedpinplaceholderforexistence' },
+        create: { deviceId: dev.deviceId, pinHash: '$2b$10$hashedpinplaceholderforexistence' },
+      });
       await installationService.updateLifecycleState('PIN_SETUP');
       await installationService.updateLifecycleState('DEVICE_SETUP');
       await installationService.updateLifecycleState('USER_DISCOVERY');

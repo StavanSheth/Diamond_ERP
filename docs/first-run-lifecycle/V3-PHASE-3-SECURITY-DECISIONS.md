@@ -64,9 +64,9 @@ This document records the architectural and cryptographic decisions made during 
 
 ---
 
-## 9. PIN Recovery Strategy: Defer to Administrative Flow
-- **Decision**: Disallow weak recovery mechanisms (no fixed master PIN, no default `000000`, no unauthenticated reset).
-- **Why**: As an offline desktop application without mandatory internet access, SMS/email OTP recovery cannot be safely assumed. Insecure fallback credentials (e.g. hardcoded master PINs) represent severe vulnerabilities. Dedicated recovery belongs to subsequent phases with cryptographically sound administrative authorization.
+## 9. PIN Recovery Policy: Intentionally NOT Part of Phase 3 (Explicitly Out of Scope)
+- **Decision**: PIN recovery, forgot PIN, master PIN, emergency PIN, hardcoded bypass PIN, secret recovery code, email/SMS recovery, security-question recovery, and recovery tokens are **explicitly NOT part of Phase 3 scope**.
+- **Why**: There must be NO alternate authentication path around the application PIN. If the user forgets the PIN, Phase 3 provides no recovery or bypass mechanism. Any future administrative recovery workflow may be designed independently in a later phase, but is strictly out of scope for Phase 3. There is no backdoor, no master PIN, and no bypass.
 
 ---
 

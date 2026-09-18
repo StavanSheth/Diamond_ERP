@@ -28,9 +28,9 @@ describe('Phase 3: Security Invariants, Identity Isolation & DB Integrity', () =
         where: { deviceId: localDevId },
       });
 
-      // Attempting to advance to DEVICE_SETUP without configured PIN must fail with ConflictError
+      // Attempting to advance to DEVICE_SETUP without configured PIN must fail with ConflictError (authoritative default)
       await expect(
-        installationService.updateLifecycleState('DEVICE_SETUP', { enforceInvariants: true })
+        installationService.updateLifecycleState('DEVICE_SETUP')
       ).rejects.toThrow(ConflictError);
 
       // Now configure PIN
@@ -40,7 +40,7 @@ describe('Phase 3: Security Invariants, Identity Isolation & DB Integrity', () =
       await deviceSecurityService.setupPin(localDevId, '839201');
 
       // Now advancing to DEVICE_SETUP succeeds!
-      const updated = await installationService.updateLifecycleState('DEVICE_SETUP', { enforceInvariants: true });
+      const updated = await installationService.updateLifecycleState('DEVICE_SETUP');
       expect(updated.lifecycleState).toBe('DEVICE_SETUP');
     });
 
@@ -55,7 +55,7 @@ describe('Phase 3: Security Invariants, Identity Isolation & DB Integrity', () =
 
       // Attempting to advance to USER_DISCOVERY with a revoked device must fail
       await expect(
-        installationService.updateLifecycleState('USER_DISCOVERY', { enforceInvariants: true })
+        installationService.updateLifecycleState('USER_DISCOVERY')
       ).rejects.toThrow(ConflictError);
 
       // Reactivate device
@@ -65,7 +65,7 @@ describe('Phase 3: Security Invariants, Identity Isolation & DB Integrity', () =
       });
 
       // Advancing to USER_DISCOVERY now succeeds
-      const updated = await installationService.updateLifecycleState('USER_DISCOVERY', { enforceInvariants: true });
+      const updated = await installationService.updateLifecycleState('USER_DISCOVERY');
       expect(updated.lifecycleState).toBe('USER_DISCOVERY');
     });
   });

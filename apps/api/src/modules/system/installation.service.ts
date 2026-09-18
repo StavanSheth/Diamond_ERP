@@ -189,8 +189,9 @@ export class InstallationService {
       );
     }
 
-    // Security Invariants: enforced when options.enforceInvariants is requested
-    if (options?.enforceInvariants) {
+    // Security-critical lifecycle invariants must not depend on a caller remembering to set an optional flag.
+    // Invariants are always enforced on forward progression.
+    if (!options?.isReset) {
       // Invariant 1: PIN_SETUP cannot be marked complete if no PIN exists
       if (current.lifecycleState === 'PIN_SETUP' && targetState !== 'NOT_INITIALIZED' && targetState !== 'APP_SETUP') {
         const localDeviceId = this.getOrGenerateDeviceId();
@@ -203,7 +204,12 @@ export class InstallationService {
       }
 
       // Invariant 2: DEVICE_SETUP cannot be marked complete if no active device exists
-      if (current.lifecycleState === 'DEVICE_SETUP' && targetState !== 'NOT_INITIALIZED' && targetState !== 'APP_SETUP' && targetState !== 'PIN_SETUP') {
+      if (
+        current.lifecycleState === 'DEVICE_SETUP' &&
+        targetState !== 'NOT_INITIALIZED' &&
+        targetState !== 'APP_SETUP' &&
+        targetState !== 'PIN_SETUP'
+      ) {
         const localDeviceId = this.getOrGenerateDeviceId();
         const dev = await systemPrisma.device.findUnique({
           where: { deviceId: localDeviceId },

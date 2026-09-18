@@ -234,6 +234,17 @@ export class AuthService {
     // Login succeeded: reset brute force failure counter
     accountAttempts.delete(normalizedUsername);
 
+    // Invariant (Section 19): If deviceId is provided, reject session creation on a REVOKED device
+    if (meta?.deviceId) {
+      const device = await systemPrisma.device.findUnique({
+        where: { deviceId: meta.deviceId },
+      });
+      if (device && device.status === 'REVOKED') {
+        logger.warn(`Login rejected: device ${meta.deviceId} is REVOKED.`);
+        throw new AuthorizationError('Device has been revoked. Access denied.');
+      }
+    }
+
     // Accessible profiles: all profiles accessible to all users (RBAC removed)
     const accessibleProfiles: string[] = getAllProfiles();
 

@@ -84,24 +84,47 @@ export class DeviceSecurityService {
     lockedUntil: Date | null;
   }> {
     const updated = await systemPrisma.$transaction(async (tx) => {
-      const latest = await tx.deviceSecurity.findUnique({
+      const now = new Date();
+      const current = await tx.deviceSecurity.findUnique({
         where: { deviceId },
       });
-      const newCount = (latest?.failedAttempts || 0) + 1;
-      const willLock = newCount >= SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS;
-      const newLockout = willLock
-        ? new Date(Date.now() + SECURITY_CONFIG.PIN_LOCKOUT_DURATION_MS)
-        : null;
 
-      return tx.deviceSecurity.update({
-        where: { deviceId },
-        data: {
-          failedAttempts: newCount,
-          // Invariant: Failed attempts trigger authentication lockout (lockedUntil),
-          // and do NOT alter applicationLocked (isLocked).
-          lockedUntil: newLockout || latest?.lockedUntil,
-        },
-      });
+      // If existing lockout has expired, start a new failure sequence at 1
+      const isExpired = !!(current?.lockedUntil && current.lockedUntil <= now);
+
+      let sec;
+      if (isExpired) {
+        sec = await tx.deviceSecurity.update({
+          where: { deviceId },
+          data: {
+            failedAttempts: 1,
+            lockedUntil: null,
+          },
+        });
+      } else {
+        // Atomic database increment avoids race conditions on concurrent failures
+        sec = await tx.deviceSecurity.update({
+          where: { deviceId },
+          data: {
+            failedAttempts: { increment: 1 },
+          },
+        });
+      }
+
+      // Check if threshold reached
+      if (sec.failedAttempts >= SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS) {
+        if (!sec.lockedUntil || sec.lockedUntil <= now) {
+          const lockoutTime = new Date(now.getTime() + SECURITY_CONFIG.PIN_LOCKOUT_DURATION_MS);
+          sec = await tx.deviceSecurity.update({
+            where: { deviceId },
+            data: {
+              lockedUntil: lockoutTime,
+            },
+          });
+        }
+      }
+
+      return sec;
     });
 
     const isLockedOut = !!(updated.lockedUntil && updated.lockedUntil > new Date());
@@ -237,26 +260,36 @@ export class DeviceSecurityService {
 
     const pinHash = await pinService.hashPin(pin);
 
-    // Concurrency check via transaction
+    // Concurrency check via atomic conditional update
     const updated = await systemPrisma.$transaction(async (tx) => {
-      const current = await tx.deviceSecurity.findUnique({
-        where: { deviceId },
-      });
-
-      if (current?.pinHash) {
-        throw new ConflictError('PIN is already configured for this device. Use PIN change instead.');
-      }
-
-      return tx.deviceSecurity.upsert({
-        where: { deviceId },
-        update: {
+      // First try conditional update where pinHash is null
+      const updateResult = await tx.deviceSecurity.updateMany({
+        where: {
+          deviceId,
+          pinHash: null,
+        },
+        data: {
           pinHash,
           pinConfiguredAt: new Date(),
           failedAttempts: 0,
           lockedUntil: null,
           isLocked: false,
         },
-        create: {
+      });
+
+      if (updateResult.count > 0) {
+        return tx.deviceSecurity.findUniqueOrThrow({ where: { deviceId } });
+      }
+
+      // If update matched 0 rows, check if already configured
+      const existing = await tx.deviceSecurity.findUnique({ where: { deviceId } });
+      if (existing?.pinHash) {
+        throw new ConflictError('PIN is already configured for this device. Use PIN change instead.');
+      }
+
+      // Otherwise record didn't exist yet: insert
+      return tx.deviceSecurity.create({
+        data: {
           deviceId,
           pinHash,
           pinConfiguredAt: new Date(),
@@ -336,15 +369,18 @@ export class DeviceSecurityService {
     }
 
     // If lockout duration has elapsed, reset lockout and failed attempts counter
+    // Invariant: Do NOT reset isLocked (workstation screen lock) on lockout expiration.
+    // Screen unlock strictly requires authenticating with the correct PIN.
     if (security.lockedUntil && security.lockedUntil <= now) {
       await systemPrisma.deviceSecurity.update({
         where: { deviceId },
         data: {
           failedAttempts: 0,
           lockedUntil: null,
-          isLocked: false,
         },
       });
+      security.failedAttempts = 0;
+      security.lockedUntil = null;
     }
 
     const isValid = await pinService.verifyPinHash(pin, security.pinHash);
@@ -443,10 +479,14 @@ export class DeviceSecurityService {
 
     const newPinHash = await pinService.hashPin(newPin);
 
-    // Atomically update PIN, clear lockout, and revoke active sessions for this device
+    // Atomically update PIN with optimistic concurrency on verified pinHash,
+    // clear lockout, and revoke active sessions for this device
     const updated = await systemPrisma.$transaction(async (tx) => {
-      const sec = await tx.deviceSecurity.update({
-        where: { deviceId },
+      const updateResult = await tx.deviceSecurity.updateMany({
+        where: {
+          deviceId,
+          pinHash: security.pinHash, // Condition: pinHash must still match the verified current hash
+        },
         data: {
           pinHash: newPinHash,
           lastPinChangeAt: new Date(),
@@ -455,6 +495,10 @@ export class DeviceSecurityService {
           isLocked: false,
         },
       });
+
+      if (updateResult.count === 0) {
+        throw new ConflictError('PIN was modified concurrently by another request. Please try again.');
+      }
 
       // Invalidate sessions bound to this device
       await tx.session.updateMany({
@@ -467,7 +511,7 @@ export class DeviceSecurityService {
         },
       });
 
-      return sec;
+      return tx.deviceSecurity.findUniqueOrThrow({ where: { deviceId } });
     });
 
     await this.recordAuditEvent(
@@ -507,7 +551,7 @@ export class DeviceSecurityService {
     });
 
     await this.recordAuditEvent(
-      SECURITY_AUDIT_EVENTS.SECURITY_STATE_CHANGED,
+      SECURITY_AUDIT_EVENTS.APPLICATION_LOCKED,
       deviceId,
       'Application locked explicitly',
       meta,
@@ -550,7 +594,7 @@ export class DeviceSecurityService {
     });
 
     await this.recordAuditEvent(
-      SECURITY_AUDIT_EVENTS.PIN_UNLOCKED,
+      SECURITY_AUDIT_EVENTS.APPLICATION_UNLOCKED,
       deviceId,
       'Application unlocked successfully',
       meta

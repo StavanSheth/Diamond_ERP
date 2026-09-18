@@ -19,7 +19,6 @@ const updateStateSchema = z.object({
     'READY',
   ]),
   isReset: z.boolean().optional(),
-  enforceInvariants: z.boolean().optional(),
 });
 
 const registerDeviceSchema = z.object({
@@ -117,7 +116,6 @@ export class LifecycleController {
       }
       const updated = await installationService.updateLifecycleState(parsed.data.lifecycleState, {
         isReset: parsed.data.isReset,
-        enforceInvariants: parsed.data.enforceInvariants,
       });
       res.json({ success: true, data: updated });
     } catch (error) {

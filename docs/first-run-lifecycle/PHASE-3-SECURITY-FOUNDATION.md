@@ -162,5 +162,13 @@ Phase 4 (First-Run Onboarding State Machine & UI) can directly consume:
 - `securityApi.setupPin(pin)` / `securityService.setupPin(pin)`
 - `securityApi.verifyPin(pin)` / `securityService.verifyPin(pin)`
 - `securityApi.lock()` / `securityApi.unlock(pin)`
-- `installationService.updateLifecycleState(targetState, { enforceInvariants: true })`
+- `installationService.updateLifecycleState(targetState)`
 All backend services, persistence models, and DTO contracts are fully operational.
+
+---
+
+## 13. Scope Invariants & Zero PIN Recovery Policy
+- **PIN recovery, forgot PIN, master PIN, emergency PIN, hardcoded bypass, secret recovery codes, and recovery tokens are INTENTIONALLY NOT IMPLEMENTED AND EXPLICITLY OUT OF SCOPE in Phase 3**.
+- **Forgotten PIN Outcome**: If a user forgets the application PIN, Phase 3 provides no bypass mechanism.
+- **No Backdoors**: There is strictly no alternate authentication path around the application PIN.
+- Any future recovery workflow may be designed independently in a later phase, but is strictly out of scope for Phase 3.
