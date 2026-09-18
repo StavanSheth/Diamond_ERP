@@ -139,17 +139,20 @@ export function getControlDbPath(): string {
  * Used to provision brand new databases offline without needing prisma CLI.
  */
 export function getDatabaseTemplatePath(): string | null {
+  // 1. Explicit environment override takes precedence
+  if (process.env.DIAMOND_TEMPLATE_DB !== undefined) {
+    const custom = process.env.DIAMOND_TEMPLATE_DB.trim();
+    if (!custom) return null;
+    return fs.existsSync(custom) ? path.resolve(custom) : null;
+  }
+
   const candidates = [
-    // 1. Explicit environment override
-    process.env.DIAMOND_TEMPLATE_DB,
     // 2. Relative to runtime api/prisma/template.db
     path.resolve(__dirname, '../../prisma/template.db'),
-    // 3. Fallback to existing test.db if available
-    path.resolve(__dirname, '../../prisma/test.db'),
-    // 4. Staging / standalone layout: api/prisma/template.db
+    // 3. Staging / standalone layout: api/prisma/template.db
     path.resolve(__dirname, '../prisma/template.db'),
-    // 5. Fallback to default Stavan.db if available in backend
-    path.resolve(__dirname, '../../Stavan.db'),
+    // 4. User data dir / production assets layout
+    path.resolve(getDataDir(), 'template.db'),
   ];
 
   for (const candidate of candidates) {

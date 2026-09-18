@@ -14,6 +14,7 @@ import { AppLockProvider } from './contexts/AppLockContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
 import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
+import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 
 function AppContent() {
   const {
@@ -32,6 +33,9 @@ function AppContent() {
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">
       {/* First-Run Master Lifetime Activation Lock */}
       <FirstRunActivationOverlay />
+
+      {/* First-Run Onboarding & Database Setup Wizard */}
+      <OnboardingWizard />
 
       {/* App Lock Fullscreen Overlay */}
       <AppLockOverlay />

@@ -62,10 +62,10 @@ export function ensureProfileDbFile(dbPath: string): void {
       // Copy the schema-only template (no data rows)
       fs.copyFileSync(templateDb, dbPath);
     } else {
-      // No template available — create an empty file.
-      // Prisma will auto-migrate the schema on first connect.
-      console.warn('[Prisma] No template.db found, creating empty database file:', dbPath);
-      fs.writeFileSync(dbPath, '');
+      // Fail closed: Never create an empty 0-byte SQLite database file
+      throw new Error(
+        `Database template file (template.db) is missing or unavailable. Cannot provision database without immutable template.`
+      );
     }
   }
 }

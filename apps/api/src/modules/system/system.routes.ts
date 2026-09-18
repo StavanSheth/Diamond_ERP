@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { activationController } from './activation.controller';
 import { lifecycleController } from './lifecycle.controller';
 import { securityRoutes, securityController } from '../security';
+import { onboardingRoutes } from './onboarding';
 import { authenticate } from '../../middleware/auth';
 import { authorize } from '../../middleware/authorize';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
@@ -11,6 +12,9 @@ const router = Router();
 // ── Public / Bootstrap routes ──────────────────────────────────────────
 // Public lifecycle probe (always unauthenticated)
 router.get('/lifecycle', lifecycleController.getLifecycleStatus);
+
+// First-run onboarding routes (status, user discovery, database discovery/attachment)
+router.use('/onboarding', onboardingRoutes);
 
 // Bootstrap onboarding mutations (guarded by lifecycle state: allowed pre-READY, authenticated post-READY)
 router.post('/lifecycle-state', lifecycleController.updateLifecycleState);

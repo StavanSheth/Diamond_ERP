@@ -15,6 +15,7 @@ export * from './api/reports.api';
 export * from './api/settings.api';
 export * from './api/auth.api';
 export * from './api/security.api';
+export * from './api/onboarding.api';
 
 import { stocksApi, buildFilterQueryString } from './api/stocks.api';
 import { ledgerApi } from './api/ledger.api';
@@ -25,6 +26,7 @@ import { reportsApi } from './api/reports.api';
 import { settingsApi } from './api/settings.api';
 import { authApi } from './api/auth.api';
 import { securityApi } from './api/security.api';
+import { onboardingApi } from './api/onboarding.api';
 import { AdvancedItemFilters } from '../types/stock';
 
 export { buildFilterQueryString, type AdvancedItemFilters };
@@ -104,4 +106,7 @@ export const api = {
 
   // Security & Device Lock
   security: securityApi,
+
+  // First-run Onboarding & Lifecycle
+  onboarding: onboardingApi,
 };
