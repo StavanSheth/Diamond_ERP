@@ -467,6 +467,9 @@ export class OnboardingService {
       });
 
       if (registry) {
+        if (registry.installationId && registry.installationId !== install.id) {
+          throw new ConflictError('Database is already registered under another installation and cannot be claimed.');
+        }
         registry = await tx.databaseRegistry.update({
           where: { id: registry.id },
           data: {
@@ -536,8 +539,13 @@ export class OnboardingService {
 
     logger.info(`Attached existing database: ${result.registry.displayName} [${result.registry.databaseId}]`);
 
-    // Advance to DATABASE_SETUP
-    if (install.lifecycleState === 'DATABASE_DISCOVERY' || install.lifecycleState === 'DATABASE_VALIDATION') {
+    // Advance to DATABASE_SETUP progressively
+    const freshInstall = await installationService.getOrCreateInstallation();
+    if (freshInstall.lifecycleState === 'DATABASE_DISCOVERY') {
+      await installationService.updateLifecycleState('DATABASE_VALIDATION');
+    }
+    const currentValid = await installationService.getOrCreateInstallation();
+    if (currentValid.lifecycleState === 'DATABASE_VALIDATION') {
       await installationService.updateLifecycleState('DATABASE_SETUP');
     }
 
@@ -659,8 +667,13 @@ export class OnboardingService {
 
       logger.info(`Provisioned new database: ${result.registry.displayName} [${result.registry.databaseId}]`);
 
-      // Advance to DATABASE_SETUP
-      if (install.lifecycleState === 'DATABASE_DISCOVERY' || install.lifecycleState === 'DATABASE_VALIDATION') {
+      // Advance to DATABASE_SETUP progressively
+      const freshInstall = await installationService.getOrCreateInstallation();
+      if (freshInstall.lifecycleState === 'DATABASE_DISCOVERY') {
+        await installationService.updateLifecycleState('DATABASE_VALIDATION');
+      }
+      const currentValid = await installationService.getOrCreateInstallation();
+      if (currentValid.lifecycleState === 'DATABASE_VALIDATION') {
         await installationService.updateLifecycleState('DATABASE_SETUP');
       }
 

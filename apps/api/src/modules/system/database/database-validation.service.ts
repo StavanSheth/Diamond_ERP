@@ -269,19 +269,29 @@ export class DatabaseValidationService {
         details: 'Valid Diamond ERP production database',
       };
     } catch (err) {
-      logger.error(`Error during database validation of ${canonicalPath}: ${(err as Error).message}`);
+      const errMsg = (err as Error).message || '';
+      const isCorrupted =
+        errMsg.toLowerCase().includes('file is not a database') ||
+        errMsg.toLowerCase().includes('malformed') ||
+        errMsg.toLowerCase().includes('corrupt') ||
+        errMsg.toLowerCase().includes('code: `26`') ||
+        errMsg.toLowerCase().includes('code: `11`');
+
+      const status = isCorrupted ? 'CORRUPTED' : 'INVALID';
+
+      logger.error(`Error during database validation of ${canonicalPath}: ${errMsg}`);
       return {
-        status: 'INVALID',
+        status,
         canonicalPath,
         isValid: false,
         tableCount: 0,
         schemaVersion: 0,
-        integrityCheck: 'connection_failed',
+        integrityCheck: isCorrupted ? 'database_corrupted' : 'connection_failed',
         tablesFound: [],
         missingRequiredTables: REQUIRED_ERP_TABLES,
-        detectedType: 'INVALID',
-        details: (err as Error).message,
-        error: 'Failed to inspect database',
+        detectedType: status,
+        details: errMsg,
+        error: isCorrupted ? 'Database corrupted' : 'Failed to inspect database',
       };
     } finally {
       await readOnlyClient.$disconnect().catch(() => {});

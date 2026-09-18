@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { onboardingService } from './onboarding.service';
-import { installationService } from '../installation.service';
-import { authService } from '../../auth/auth.service';
+import { onboardingAuthorizationService } from './onboarding-authorization.service';
 
 const selectUserSchema = z.object({
   userId: z.string().min(1, 'userId is required'),
@@ -34,34 +33,9 @@ const createDatabaseSchema = z.object({
 });
 
 export class OnboardingController {
-  /**
-   * Enforces bootstrap security boundary:
-   * If installation is already READY, onboarding mutations require an authenticated session.
-   */
-  private async checkBootstrapAccess(req: Request, res: Response): Promise<boolean> {
-    const install = await installationService.getOrCreateInstallation();
-    let user = (req as any).user;
-    if (!user && req.headers?.authorization?.startsWith('Bearer ')) {
-      const token = req.headers.authorization.substring(7);
-      const payload = authService.verifyToken(token);
-      if (payload) {
-        user = payload;
-      }
-    }
-
-    if (install.lifecycleState === 'READY' && (!user || user.id === 'default-admin')) {
-      res.status(403).json({
-        success: false,
-        error: 'Forbidden',
-        message: 'Installation is fully initialized. Modifying onboarding state requires authenticated administrative access.',
-      });
-      return false;
-    }
-    return true;
-  }
-
-  getOnboardingStatus = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getOnboardingStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await onboardingAuthorizationService.authorize(req, 'READ_ONBOARDING_STATUS');
       const status = await onboardingService.getOnboardingState();
       res.json({ success: true, data: status });
     } catch (err) {
@@ -71,7 +45,7 @@ export class OnboardingController {
 
   initializeApp = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'INITIALIZE_APPLICATION');
       const status = await onboardingService.initializeApplication();
       res.json({ success: true, data: status });
     } catch (err) {
@@ -79,8 +53,9 @@ export class OnboardingController {
     }
   };
 
-  discoverUsers = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  discoverUsers = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await onboardingAuthorizationService.authorize(req, 'DISCOVER_USERS');
       const result = await onboardingService.discoverUsers();
       res.json({ success: true, data: result });
     } catch (err) {
@@ -90,7 +65,7 @@ export class OnboardingController {
 
   selectUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'SELECT_USER');
       const parsed = selectUserSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -110,7 +85,7 @@ export class OnboardingController {
 
   createUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'CREATE_USER');
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -128,8 +103,9 @@ export class OnboardingController {
     }
   };
 
-  discoverDatabases = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  discoverDatabases = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await onboardingAuthorizationService.authorize(req, 'DISCOVER_DATABASES');
       const result = await onboardingService.discoverDatabases();
       res.json({ success: true, data: result });
     } catch (err) {
@@ -139,6 +115,7 @@ export class OnboardingController {
 
   inspectDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await onboardingAuthorizationService.authorize(req, 'INSPECT_DATABASE');
       const parsed = inspectDatabaseSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -158,7 +135,7 @@ export class OnboardingController {
 
   attachDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'ATTACH_DATABASE');
       const parsed = attachDatabaseSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -178,7 +155,7 @@ export class OnboardingController {
 
   createDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'CREATE_DATABASE');
       const parsed = createDatabaseSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -198,7 +175,7 @@ export class OnboardingController {
 
   completeOnboarding = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'COMPLETE_ONBOARDING');
       const result = await onboardingService.completeOnboarding();
       res.json({ success: true, data: result });
     } catch (err) {
@@ -208,7 +185,7 @@ export class OnboardingController {
 
   resetRecoverableStep = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await this.checkBootstrapAccess(req, res))) return;
+      await onboardingAuthorizationService.authorize(req, 'RESET_ONBOARDING_STEP');
       const result = await onboardingService.resetRecoverableOnboardingState();
       res.json({ success: true, data: result });
     } catch (err) {

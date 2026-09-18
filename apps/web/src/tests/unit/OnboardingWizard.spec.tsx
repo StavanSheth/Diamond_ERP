@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { OnboardingWizard } from '../../components/onboarding/OnboardingWizard';
 import { api } from '../../services/api';
 
@@ -113,5 +113,106 @@ describe('OnboardingWizard Component', () => {
       expect(screen.getByText(/Use Existing User/i)).toBeDefined();
       expect(screen.getByText(/Stavan Sheth/i)).toBeDefined();
     });
+  });
+
+  it('explicitly does NOT auto-populate candidates[0] into candidatePath upon database discovery', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValueOnce({
+      lifecycleState: 'DATABASE_DISCOVERY',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: true,
+      pinConfigured: true,
+      userConfigured: true,
+      databaseConfigured: false,
+    });
+
+    (api.onboarding.discoverDatabases as any).mockResolvedValueOnce({
+      candidates: [
+        {
+          displayName: 'company_main',
+          canonicalPath: 'C:\\DiamondERP\\databases\\company_main.db',
+          source: 'LOCAL_DIR',
+          status: 'ACTIVE',
+          isKnown: false,
+          isCurrentInstallation: false,
+        },
+      ],
+    });
+
+    render(<OnboardingWizard />);
+
+    // Switch to Existing Database mode
+    await waitFor(() => expect(screen.getByText(/Use Existing Database/i)).toBeDefined());
+    fireEvent.click(screen.getByText(/Use Existing Database/i));
+
+    await waitFor(() => {
+      // Input path MUST be empty, not auto-populated!
+      const input = screen.getByPlaceholderText('C:\\DiamondERP\\databases\\company.db') as HTMLInputElement;
+      expect(input.value).toBe('');
+      // Discovered candidate card is rendered with source badge
+      expect(screen.getByText('company_main')).toBeDefined();
+      expect(screen.getByText(/Local Diamond ERP directory/i)).toBeDefined();
+    });
+  });
+
+  it('requires explicit confirmation checkbox before enabling attachment of existing database', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValueOnce({
+      lifecycleState: 'DATABASE_DISCOVERY',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: true,
+      pinConfigured: true,
+      userConfigured: true,
+      databaseConfigured: false,
+    });
+
+    (api.onboarding.discoverDatabases as any).mockResolvedValueOnce({
+      candidates: [
+        {
+          displayName: 'mumbai_db',
+          canonicalPath: 'C:\\DiamondERP\\databases\\mumbai_db.db',
+          source: 'REGISTRY',
+          status: 'ACTIVE',
+          isKnown: true,
+          isCurrentInstallation: false,
+        },
+      ],
+    });
+
+    (api.onboarding.inspectDatabase as any).mockResolvedValueOnce({
+      canonicalPath: 'C:\\DiamondERP\\databases\\mumbai_db.db',
+      displayName: 'mumbai_db',
+      status: 'ACTIVE',
+      suitability: 'REQUIRES_CONFIRMATION',
+      tableCount: 14,
+      schemaVersion: 1,
+      isExistingRegistry: true,
+      details: 'Valid Diamond ERP database. Explicit confirmation required to attach.',
+    });
+
+    render(<OnboardingWizard />);
+
+    await waitFor(() => expect(screen.getByText(/Use Existing Database/i)).toBeDefined());
+    fireEvent.click(screen.getByText(/Use Existing Database/i));
+
+    // Click inspect on the candidate
+    await waitFor(() => expect(screen.getByText('mumbai_db')).toBeDefined());
+    const inspectBtn = screen.getByRole('button', { name: /Select & Inspect/i });
+    fireEvent.click(inspectBtn);
+
+    // Preview panel appears
+    await waitFor(() => {
+      expect(screen.getByText(/REQUIRES_CONFIRMATION/i)).toBeDefined();
+      expect(screen.getByText(/Tables Found:/i)).toBeDefined();
+    });
+
+    // Checkbox is unchecked -> button disabled
+    const attachBtn = screen.getByRole('button', { name: /Use This Database/i }) as HTMLButtonElement;
+    expect(attachBtn.disabled).toBe(true);
+
+    // Check confirmation checkbox -> button becomes enabled
+    const checkbox = screen.getByLabelText(/I confirm that I want to attach this database/i) as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(attachBtn.disabled).toBe(false);
   });
 });
