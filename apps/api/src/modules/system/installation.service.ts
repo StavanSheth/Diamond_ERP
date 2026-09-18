@@ -173,7 +173,10 @@ export class InstallationService {
   /**
    * Controlled state transition for the onboarding/lifecycle state machine.
    */
-  async updateLifecycleState(targetState: LifecycleState, options?: { isReset?: boolean }): Promise<InstallationDto> {
+  async updateLifecycleState(
+    targetState: LifecycleState,
+    options?: { isReset?: boolean; enforceInvariants?: boolean }
+  ): Promise<InstallationDto> {
     if (!LIFECYCLE_STAGES.includes(targetState)) {
       throw new ValidationError(`Invalid lifecycle state: "${targetState}". Allowed: ${LIFECYCLE_STAGES.join(', ')}`);
     }
@@ -184,6 +187,31 @@ export class InstallationService {
       throw new ConflictError(
         `Illegal lifecycle transition: Cannot move from ${current.lifecycleState} to ${targetState}. Step progression must be followed.`
       );
+    }
+
+    // Security Invariants: enforced when options.enforceInvariants is requested
+    if (options?.enforceInvariants) {
+      // Invariant 1: PIN_SETUP cannot be marked complete if no PIN exists
+      if (current.lifecycleState === 'PIN_SETUP' && targetState !== 'NOT_INITIALIZED' && targetState !== 'APP_SETUP') {
+        const localDeviceId = this.getOrGenerateDeviceId();
+        const sec = await systemPrisma.deviceSecurity.findUnique({
+          where: { deviceId: localDeviceId },
+        });
+        if (!sec || !sec.pinHash) {
+          throw new ConflictError('Cannot complete PIN_SETUP: Application PIN must be configured before proceeding.');
+        }
+      }
+
+      // Invariant 2: DEVICE_SETUP cannot be marked complete if no active device exists
+      if (current.lifecycleState === 'DEVICE_SETUP' && targetState !== 'NOT_INITIALIZED' && targetState !== 'APP_SETUP' && targetState !== 'PIN_SETUP') {
+        const localDeviceId = this.getOrGenerateDeviceId();
+        const dev = await systemPrisma.device.findUnique({
+          where: { deviceId: localDeviceId },
+        });
+        if (!dev || dev.status !== 'ACTIVE') {
+          throw new ConflictError('Cannot complete DEVICE_SETUP: An active device registration is required before proceeding.');
+        }
+      }
     }
 
     const updateData: any = {
@@ -346,7 +374,7 @@ export class InstallationService {
   /**
    * Revoke a device administratively.
    */
-  async revokeDevice(deviceId: string): Promise<DeviceDto> {
+  async revokeDevice(deviceId: string, reason?: string): Promise<DeviceDto> {
     const existing = await systemPrisma.device.findUnique({ where: { deviceId } });
     if (!existing) {
       throw new NotFoundError(`Device not found for ID: ${deviceId}`);
@@ -358,7 +386,7 @@ export class InstallationService {
         revokedAt: new Date(),
       },
     });
-    logger.warn(`Device revoked: ${updated.deviceName} [${updated.deviceId}]`);
+    logger.warn(`Device revoked: ${updated.deviceName} [${updated.deviceId}]${reason ? ` (Reason: ${reason})` : ''}`);
     return this.mapDeviceToDto(updated);
   }
 

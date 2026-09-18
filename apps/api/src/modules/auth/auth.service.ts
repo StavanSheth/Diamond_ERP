@@ -196,7 +196,7 @@ export class AuthService {
   async login(
     username: string, 
     password: string, 
-    meta?: { ip?: string; userAgent?: string }
+    meta?: { ip?: string; userAgent?: string; deviceId?: string }
   ): Promise<LoginResult> {
     const normalizedUsername = username.toLowerCase().trim();
 
@@ -250,6 +250,7 @@ export class AuthService {
           id: sessionId,
           userId: user.id,
           tokenHash,
+          deviceId: meta?.deviceId || null,
           expiresAt,
           ipAddress: meta?.ip,
           userAgent: meta?.userAgent,

@@ -54,9 +54,11 @@ export class AuthController {
       }
 
       const { username, password } = parsed.data;
+      const deviceIdHeader = req.headers['x-device-id'] as string | undefined;
       const result = await authService.login(username, password, {
         ip: req.ip,
         userAgent: req.headers['user-agent'],
+        deviceId: deviceIdHeader,
       });
 
       res.json({

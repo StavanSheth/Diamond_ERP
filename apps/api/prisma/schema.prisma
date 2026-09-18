@@ -30,23 +30,42 @@ model Installation {
 }
 
 model Device {
-  id              String       @id @default(uuid())
-  deviceId        String       @unique // Stable local device UUID
+  id              String          @id @default(uuid())
+  deviceId        String          @unique // Stable local device UUID
   installationId  String
   deviceName      String
-  platform        String       @default("WINDOWS")
+  platform        String          @default("WINDOWS")
   osVersion       String?
-  status          String       @default("ACTIVE") // ACTIVE, REVOKED, PENDING
+  status          String          @default("ACTIVE") // ACTIVE, REVOKED, PENDING
   revokedAt       DateTime?
-  lastSeenAt      DateTime     @default(now())
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  lastSeenAt      DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
-  installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  installation    Installation    @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  securityState   DeviceSecurity?
 
   @@index([installationId])
   @@index([deviceId])
   @@index([status])
+}
+
+model DeviceSecurity {
+  id                  String    @id @default(uuid())
+  deviceId            String    @unique
+  pinHash             String?
+  pinConfiguredAt     DateTime?
+  failedAttempts      Int       @default(0)
+  lockedUntil         DateTime?
+  lastAuthenticatedAt DateTime?
+  lastPinChangeAt     DateTime?
+  isLocked            Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  device              Device    @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+
+  @@index([deviceId])
 }
 
 model InstallationUser {
@@ -148,6 +167,7 @@ model Session {
   id         String    @id @default(uuid())
   userId     String
   tokenHash  String    @unique
+  deviceId   String?
   createdAt  DateTime  @default(now())
   expiresAt  DateTime
   revokedAt  DateTime?
@@ -158,6 +178,7 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([deviceId])
 }
 
 model IdempotencyKey {

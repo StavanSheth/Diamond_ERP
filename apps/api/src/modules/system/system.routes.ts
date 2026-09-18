@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { activationController } from './activation.controller';
 import { lifecycleController } from './lifecycle.controller';
+import { securityRoutes, securityController } from '../security';
 import { authenticate } from '../../middleware/auth';
 import { authorize } from '../../middleware/authorize';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
@@ -14,7 +15,11 @@ router.get('/lifecycle', lifecycleController.getLifecycleStatus);
 // Bootstrap onboarding mutations (guarded by lifecycle state: allowed pre-READY, authenticated post-READY)
 router.post('/lifecycle-state', lifecycleController.updateLifecycleState);
 router.post('/device', lifecycleController.registerDevice);
+router.post('/device/bind', securityController.bindDevice);
 router.post('/database/validate', lifecycleController.validateDatabase);
+
+// Security foundation routes (PIN setup, verification, lock/unlock, status)
+router.use('/security', securityRoutes);
 
 // ── Protected administrative system routes ─────────────────────────────
 // System routes manage Control DB resources (Installation, Device, DatabaseRegistry)
