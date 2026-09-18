@@ -197,12 +197,12 @@ describe('Phase 3: PIN Security Service & Cryptographic Verification', () => {
       expect(lockRes.failedAttemptsRemaining).toBe(0);
       expect(lockRes.lockedUntil).toBeDefined();
 
-      // Ensure locked state persisted in database
+      // Ensure lockout state persisted in database
       const dbRow = await systemPrisma.deviceSecurity.findUnique({
         where: { deviceId: testDeviceId },
       });
-      expect(dbRow?.isLocked).toBe(true);
       expect(dbRow?.lockedUntil).toBeDefined();
+      expect(lockRes.authenticationLockedUntil).toBeDefined();
 
       // Subsequent attempt even with CORRECT PIN is blocked during active lockout
       const blockedRes = await deviceSecurityService.verifyPin(testDeviceId, validPin);

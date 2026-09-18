@@ -373,39 +373,98 @@ export class InstallationService {
 
   /**
    * Revoke a device administratively.
+   * Atomically sets Device to REVOKED, revokes all active sessions bound to this device,
+   * and records a DEVICE_REVOKED audit event.
    */
   async revokeDevice(deviceId: string, reason?: string): Promise<DeviceDto> {
     const existing = await systemPrisma.device.findUnique({ where: { deviceId } });
     if (!existing) {
       throw new NotFoundError(`Device not found for ID: ${deviceId}`);
     }
-    const updated = await systemPrisma.device.update({
-      where: { id: existing.id },
-      data: {
-        status: 'REVOKED',
-        revokedAt: new Date(),
-      },
+
+    const now = new Date();
+    const { updated } = await systemPrisma.$transaction(async (tx) => {
+      const dev = await tx.device.update({
+        where: { id: existing.id },
+        data: {
+          status: 'REVOKED',
+          revokedAt: now,
+        },
+      });
+
+      // Atomically revoke all active sessions for this device
+      await tx.session.updateMany({
+        where: {
+          deviceId,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: now,
+        },
+      });
+
+      // Safe audit event creation
+      await tx.auditEvent.create({
+        data: {
+          entityType: 'Device',
+          entityId: deviceId,
+          eventType: 'DEVICE_REVOKED',
+          description: `Device revoked: ${dev.deviceName} [${deviceId}]${reason ? ` (Reason: ${reason})` : ''}`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            deviceId,
+            reason: reason || 'administrative',
+            revokedAt: now.toISOString(),
+          }),
+        },
+      });
+
+      return { updated: dev };
     });
+
     logger.warn(`Device revoked: ${updated.deviceName} [${updated.deviceId}]${reason ? ` (Reason: ${reason})` : ''}`);
     return this.mapDeviceToDto(updated);
   }
 
   /**
    * Reactivate a previously revoked device.
+   * Restores ACTIVE status and clears revokedAt, but explicitly preserves revoked session state
+   * (old sessions remain revoked) and emits a DEVICE_REACTIVATED audit event.
    */
   async reactivateDevice(deviceId: string): Promise<DeviceDto> {
     const existing = await systemPrisma.device.findUnique({ where: { deviceId } });
     if (!existing) {
       throw new NotFoundError(`Device not found for ID: ${deviceId}`);
     }
-    const updated = await systemPrisma.device.update({
-      where: { id: existing.id },
-      data: {
-        status: 'ACTIVE',
-        revokedAt: null,
-        lastSeenAt: new Date(),
-      },
+
+    const { updated } = await systemPrisma.$transaction(async (tx) => {
+      const dev = await tx.device.update({
+        where: { id: existing.id },
+        data: {
+          status: 'ACTIVE',
+          revokedAt: null,
+          lastSeenAt: new Date(),
+        },
+      });
+
+      // Record DEVICE_REACTIVATED audit event
+      await tx.auditEvent.create({
+        data: {
+          entityType: 'Device',
+          entityId: deviceId,
+          eventType: 'DEVICE_REACTIVATED',
+          description: `Device reactivated: ${dev.deviceName} [${deviceId}]`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            deviceId,
+            reactivatedAt: new Date().toISOString(),
+          }),
+        },
+      });
+
+      return { updated: dev };
     });
+
     logger.info(`Device reactivated: ${updated.deviceName} [${updated.deviceId}]`);
     return this.mapDeviceToDto(updated);
   }

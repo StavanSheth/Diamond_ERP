@@ -100,6 +100,20 @@ export async function authenticate(
         });
         return;
       }
+
+      if (session.deviceId) {
+        const device = await systemPrisma.device.findUnique({
+          where: { deviceId: session.deviceId },
+        });
+        if (device && device.status === 'REVOKED') {
+          res.status(401).json({
+            success: false,
+            error: 'Device has been revoked. Access denied.',
+            requestId,
+          });
+          return;
+        }
+      }
     }
 
     // All users have access to all profiles (RBAC removed)

@@ -27,6 +27,7 @@ export interface AuditMeta {
 export class DeviceSecurityService {
   /**
    * Safe audit event recording. Never logs plaintext PIN, hash, or secrets.
+   * Uses positive sanitization to ensure no credential leaks occur.
    */
   private async recordAuditEvent(
     eventType: string,
@@ -47,6 +48,7 @@ export class DeviceSecurityService {
       delete sanitizedMeta.newPin;
       delete sanitizedMeta.password;
       delete sanitizedMeta.token;
+      delete sanitizedMeta.secret;
 
       await systemPrisma.auditEvent.create({
         data: {
@@ -67,7 +69,73 @@ export class DeviceSecurityService {
   }
 
   /**
+   * Atomically records a PIN authentication failure (used by verifyPin and changePin).
+   * Increments failed attempts, triggers 15-minute lockout at threshold (5 attempts),
+   * and emits appropriate audit events.
+   */
+  async recordPinFailure(
+    deviceId: string,
+    meta?: AuditMeta,
+    context: 'VERIFY' | 'CHANGE_PIN' = 'VERIFY'
+  ): Promise<{
+    failedAttempts: number;
+    remainingAttempts: number;
+    isLockedOut: boolean;
+    lockedUntil: Date | null;
+  }> {
+    const updated = await systemPrisma.$transaction(async (tx) => {
+      const latest = await tx.deviceSecurity.findUnique({
+        where: { deviceId },
+      });
+      const newCount = (latest?.failedAttempts || 0) + 1;
+      const willLock = newCount >= SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS;
+      const newLockout = willLock
+        ? new Date(Date.now() + SECURITY_CONFIG.PIN_LOCKOUT_DURATION_MS)
+        : null;
+
+      return tx.deviceSecurity.update({
+        where: { deviceId },
+        data: {
+          failedAttempts: newCount,
+          // Invariant: Failed attempts trigger authentication lockout (lockedUntil),
+          // and do NOT alter applicationLocked (isLocked).
+          lockedUntil: newLockout || latest?.lockedUntil,
+        },
+      });
+    });
+
+    const isLockedOut = !!(updated.lockedUntil && updated.lockedUntil > new Date());
+    const remaining = Math.max(0, SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS - updated.failedAttempts);
+
+    if (isLockedOut) {
+      await this.recordAuditEvent(
+        SECURITY_AUDIT_EVENTS.PIN_LOCKED,
+        deviceId,
+        `Authentication lockout activated after ${updated.failedAttempts} consecutive failed attempts (${context})`,
+        meta,
+        { failedAttempts: updated.failedAttempts, lockedUntil: updated.lockedUntil?.toISOString() }
+      );
+    } else {
+      await this.recordAuditEvent(
+        SECURITY_AUDIT_EVENTS.PIN_VERIFICATION_FAILED,
+        deviceId,
+        `PIN verification failed (attempt ${updated.failedAttempts}, context: ${context})`,
+        meta,
+        { attempt: updated.failedAttempts, remainingAttempts: remaining }
+      );
+    }
+
+    return {
+      failedAttempts: updated.failedAttempts,
+      remainingAttempts: remaining,
+      isLockedOut,
+      lockedUntil: updated.lockedUntil,
+    };
+  }
+
+  /**
    * Retrieves or initializes the DeviceSecurity record for a given deviceId.
+   * Enforces cross-installation isolation: device must belong to current installation.
    */
   async getOrCreateDeviceSecurity(deviceId: string): Promise<{
     device: any;
@@ -79,6 +147,12 @@ export class DeviceSecurityService {
 
     if (!device) {
       throw new NotFoundError(`Device "${deviceId}" not found in system registry.`);
+    }
+
+    // Cross-installation boundary enforcement
+    const install = await systemPrisma.installation.findFirst();
+    if (install && device.installationId !== install.id) {
+      throw new AuthorizationError('Security operation rejected: Device belongs to another installation.');
     }
 
     let security = await systemPrisma.deviceSecurity.findUnique({
@@ -111,38 +185,33 @@ export class DeviceSecurityService {
   /**
    * Returns sanitized, non-secret security status of the device.
    * Invariant: Never exposes pinHash or secrets.
+   * Decouples workstation screen lock (applicationLocked) from authentication lockout (authenticationLockedUntil).
    */
   async getSecurityStatus(deviceId: string): Promise<SecurityStatusDto> {
     const { device, security } = await this.getOrCreateDeviceSecurity(deviceId);
 
     const now = new Date();
-    let isCurrentlyLocked = security.isLocked;
-    let lockedUntilIso: string | null = null;
+    const isAuthLocked = !!(security.lockedUntil && security.lockedUntil > now);
+    const lockedUntilIso = isAuthLocked ? security.lockedUntil!.toISOString() : null;
 
-    if (security.lockedUntil) {
-      if (security.lockedUntil > now) {
-        isCurrentlyLocked = true;
-        lockedUntilIso = security.lockedUntil.toISOString();
-      } else if (security.lockedUntil <= now && security.failedAttempts >= SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS) {
-        // Lockout expired automatically
-        isCurrentlyLocked = false;
-        lockedUntilIso = null;
-      }
-    }
-
-    const failedAttempts = isCurrentlyLocked && security.lockedUntil && security.lockedUntil > now
+    // If lockout duration has elapsed, treat effective failed attempts as 0 for remaining count
+    const isExpiredLockout = security.lockedUntil && security.lockedUntil <= now;
+    const effectiveFailedAttempts = isAuthLocked
       ? security.failedAttempts
-      : (security.lockedUntil && security.lockedUntil <= now ? 0 : security.failedAttempts);
+      : (isExpiredLockout ? 0 : security.failedAttempts);
 
-    const remaining = Math.max(0, SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS - failedAttempts);
+    const remaining = Math.max(0, SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS - effectiveFailedAttempts);
+    const isEffectivelyLocked = security.isLocked || isAuthLocked;
 
     return {
       deviceId: device.deviceId,
       isPinConfigured: !!security.pinHash,
       configured: !!security.pinHash,
-      isLocked: isCurrentlyLocked,
-      lockedUntil: lockedUntilIso,
-      failedAttempts,
+      applicationLocked: security.isLocked,
+      authenticationLockedUntil: lockedUntilIso,
+      isLocked: isEffectivelyLocked, // Backward-compatible alias (locked if either screen locked or auth locked out)
+      lockedUntil: lockedUntilIso,  // Backward-compatible alias for auth lockout
+      failedAttempts: effectiveFailedAttempts,
       failedAttemptsRemaining: remaining,
       isDeviceBound: true,
       deviceBound: true,
@@ -209,9 +278,11 @@ export class DeviceSecurityService {
       deviceId: updated.deviceId,
       isPinConfigured: true,
       configured: true,
+      applicationLocked: false,
+      authenticationLockedUntil: null,
       failedAttempts: updated.failedAttempts,
-      isLocked: updated.isLocked,
-      lockedUntil: updated.lockedUntil?.toISOString() || null,
+      isLocked: false,
+      lockedUntil: null,
       lastAuthenticatedAt: updated.lastAuthenticatedAt?.toISOString() || null,
       lastPinChangeAt: updated.lastPinChangeAt?.toISOString() || null,
     };
@@ -220,6 +291,7 @@ export class DeviceSecurityService {
   /**
    * Verifies an input PIN against the device security record.
    * Manages failed attempts, automatic 15-min lockout on 5 failures, and lockout expiration.
+   * Invariant: During active lockout, all attempts (even correct PIN) are rejected.
    */
   async verifyPin(deviceId: string, pin: string, meta?: AuditMeta): Promise<PinVerificationResponse> {
     const { device, security } = await this.getOrCreateDeviceSecurity(deviceId);
@@ -240,7 +312,8 @@ export class DeviceSecurityService {
 
     const now = new Date();
 
-    // Check if device is in an active lockout window
+    // Invariant: Check if device is in an active lockout window
+    // During active lockout, even a correct PIN cannot authenticate.
     if (security.lockedUntil && security.lockedUntil > now) {
       await this.recordAuditEvent(
         SECURITY_AUDIT_EVENTS.PIN_VERIFICATION_FAILED,
@@ -251,11 +324,14 @@ export class DeviceSecurityService {
       );
       return {
         success: false,
+        applicationLocked: security.isLocked,
+        authenticationLockedUntil: security.lockedUntil.toISOString(),
         isLocked: true,
         locked: true,
         failedAttemptsRemaining: 0,
         remainingAttempts: 0,
         lockedUntil: security.lockedUntil.toISOString(),
+        message: 'Device is temporarily locked out due to multiple failed attempts.',
       };
     }
 
@@ -274,7 +350,7 @@ export class DeviceSecurityService {
     const isValid = await pinService.verifyPinHash(pin, security.pinHash);
 
     if (isValid) {
-      // Successful verification: reset failed attempts and record authentication timestamp
+      // Successful verification: reset failed attempts, clear lockout & lock, and record authentication timestamp
       await systemPrisma.deviceSecurity.update({
         where: { deviceId },
         data: {
@@ -294,73 +370,34 @@ export class DeviceSecurityService {
 
       return {
         success: true,
+        applicationLocked: false,
+        authenticationLockedUntil: null,
         isLocked: false,
         locked: false,
         failedAttemptsRemaining: SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS,
         remainingAttempts: SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS,
       };
     } else {
-      // Failed verification: atomically increment failed attempts
-      const updated = await systemPrisma.$transaction(async (tx) => {
-        const latest = await tx.deviceSecurity.findUnique({
-          where: { deviceId },
-        });
-        const newCount = (latest?.failedAttempts || 0) + 1;
-        const willLock = newCount >= SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS;
-        const newLockout = willLock ? new Date(Date.now() + SECURITY_CONFIG.PIN_LOCKOUT_DURATION_MS) : null;
+      // Failed verification: atomically record failure using centralized helper
+      const failure = await this.recordPinFailure(deviceId, meta, 'VERIFY');
 
-        return tx.deviceSecurity.update({
-          where: { deviceId },
-          data: {
-            failedAttempts: newCount,
-            isLocked: willLock ? true : latest?.isLocked || false,
-            lockedUntil: newLockout || latest?.lockedUntil,
-          },
-        });
-      });
-
-      if (updated.isLocked && updated.lockedUntil) {
-        await this.recordAuditEvent(
-          SECURITY_AUDIT_EVENTS.PIN_LOCKED,
-          deviceId,
-          `PIN locked after ${updated.failedAttempts} consecutive failed attempts`,
-          meta,
-          { failedAttempts: updated.failedAttempts }
-        );
-
-        return {
-          success: false,
-          isLocked: true,
-          locked: true,
-          failedAttemptsRemaining: 0,
-          remainingAttempts: 0,
-          lockedUntil: updated.lockedUntil.toISOString(),
-        };
-      } else {
-        const remaining = Math.max(0, SECURITY_CONFIG.MAX_FAILED_PIN_ATTEMPTS - updated.failedAttempts);
-
-        await this.recordAuditEvent(
-          SECURITY_AUDIT_EVENTS.PIN_VERIFICATION_FAILED,
-          deviceId,
-          `PIN verification failed (attempt ${updated.failedAttempts})`,
-          meta,
-          { attempt: updated.failedAttempts, remainingAttempts: remaining }
-        );
-
-        return {
-          success: false,
-          isLocked: false,
-          locked: false,
-          failedAttemptsRemaining: remaining,
-          remainingAttempts: remaining,
-        };
-      }
+      return {
+        success: false,
+        applicationLocked: security.isLocked,
+        authenticationLockedUntil: failure.lockedUntil?.toISOString() || null,
+        isLocked: security.isLocked || failure.isLockedOut,
+        locked: security.isLocked || failure.isLockedOut,
+        failedAttemptsRemaining: failure.remainingAttempts,
+        remainingAttempts: failure.remainingAttempts,
+        lockedUntil: failure.lockedUntil?.toISOString() || null,
+        message: failure.isLockedOut ? 'Device locked out due to multiple failed attempts.' : 'Incorrect PIN',
+      };
     }
   }
 
   /**
    * Authenticated PIN change requiring valid current PIN.
-   * Resets counters and invalidates active sessions on this device.
+   * Enforces lockout checks, prevents same-PIN reuse, resets counters, and invalidates active sessions on this device.
    */
   async changePin(
     deviceId: string,
@@ -382,26 +419,31 @@ export class DeviceSecurityService {
       throw new BusinessRuleError('PIN is not configured. Use setup instead.');
     }
 
-    // Verify current PIN
+    const now = new Date();
+
+    // Check if device is in active lockout
+    if (security.lockedUntil && security.lockedUntil > now) {
+      throw new AuthenticationError('Device is temporarily locked out. PIN cannot be changed during lockout.');
+    }
+
+    // Invariant: Prevent same-PIN reuse
+    if (currentPin === newPin) {
+      throw new ValidationError('New PIN must be different from current PIN.');
+    }
+
+    // Verify current PIN using unified failure mechanism
     const isCurrentValid = await pinService.verifyPinHash(currentPin, security.pinHash);
     if (!isCurrentValid) {
-      // Increment failed attempt counter on bad current PIN
-      await systemPrisma.deviceSecurity.update({
-        where: { deviceId },
-        data: { failedAttempts: { increment: 1 } },
-      });
-      await this.recordAuditEvent(
-        SECURITY_AUDIT_EVENTS.PIN_VERIFICATION_FAILED,
-        deviceId,
-        'Failed PIN change: current PIN was incorrect',
-        meta
-      );
-      throw new AuthenticationError('Current PIN is incorrect.');
+      const failure = await this.recordPinFailure(deviceId, meta, 'CHANGE_PIN');
+      if (failure.isLockedOut) {
+        throw new AuthenticationError('Incorrect current PIN. Device is now locked out due to multiple failed attempts.');
+      }
+      throw new AuthenticationError(`Current PIN is incorrect. ${failure.remainingAttempts} attempts remaining.`);
     }
 
     const newPinHash = await pinService.hashPin(newPin);
 
-    // Atomically update PIN and revoke existing sessions for this device
+    // Atomically update PIN, clear lockout, and revoke active sessions for this device
     const updated = await systemPrisma.$transaction(async (tx) => {
       const sec = await tx.deviceSecurity.update({
         where: { deviceId },
@@ -439,6 +481,8 @@ export class DeviceSecurityService {
       deviceId: updated.deviceId,
       isPinConfigured: true,
       configured: true,
+      applicationLocked: false,
+      authenticationLockedUntil: null,
       failedAttempts: 0,
       isLocked: false,
       lockedUntil: null,
@@ -448,10 +492,14 @@ export class DeviceSecurityService {
   }
 
   /**
-   * Explicitly locks the application for this device (screen lock/idle lock).
+   * Explicitly locks the application workstation (screen shield / idle lock).
+   * Invariant: Mutates applicationLocked (isLocked) only; does not alter authentication lockout.
    */
   async lockApplication(deviceId: string, meta?: AuditMeta): Promise<LockStateDto> {
-    const { security } = await this.getOrCreateDeviceSecurity(deviceId);
+    const { device, security } = await this.getOrCreateDeviceSecurity(deviceId);
+    if (device.status === 'REVOKED') {
+      throw new AuthorizationError('Cannot lock application: Device is revoked.');
+    }
 
     await systemPrisma.deviceSecurity.update({
       where: { deviceId },
@@ -466,20 +514,31 @@ export class DeviceSecurityService {
       { state: 'LOCKED' }
     );
 
+    const now = new Date();
+    const isAuthLocked = !!(security.lockedUntil && security.lockedUntil > now);
+    const lockedUntilIso = isAuthLocked ? security.lockedUntil!.toISOString() : null;
+
     return {
+      applicationLocked: true,
+      authenticationLockedUntil: lockedUntilIso,
       isLocked: true,
-      lockedUntil: security.lockedUntil?.toISOString() || null,
+      lockedUntil: lockedUntilIso,
     };
   }
 
   /**
-   * Unlocks the application using valid PIN authentication.
+   * Unlocks the application workstation using valid PIN authentication.
    */
   async unlockApplication(deviceId: string, pin: string, meta?: AuditMeta): Promise<LockStateDto> {
+    const { device } = await this.getOrCreateDeviceSecurity(deviceId);
+    if (device.status === 'REVOKED') {
+      throw new AuthorizationError('Cannot unlock application: Device is revoked.');
+    }
+
     const verification = await this.verifyPin(deviceId, pin, meta);
     if (!verification.success) {
       throw new AuthenticationError(
-        verification.isLocked
+        verification.locked || (verification.authenticationLockedUntil !== null && verification.authenticationLockedUntil !== undefined)
           ? 'Application is locked out due to multiple failed attempts.'
           : `Incorrect PIN. ${verification.failedAttemptsRemaining ?? verification.remainingAttempts} attempts remaining.`
       );
@@ -498,6 +557,8 @@ export class DeviceSecurityService {
     );
 
     return {
+      applicationLocked: false,
+      authenticationLockedUntil: null,
       isLocked: false,
       lockedUntil: null,
     };
@@ -507,6 +568,11 @@ export class DeviceSecurityService {
    * Ensures device is bound and initialized.
    */
   async bindDevice(deviceId: string, meta?: AuditMeta): Promise<SecurityStatusDto> {
+    const { device } = await this.getOrCreateDeviceSecurity(deviceId);
+    if (device.status === 'REVOKED') {
+      throw new AuthorizationError('Cannot bind device: Device is revoked.');
+    }
+
     const status = await this.getSecurityStatus(deviceId);
 
     await this.recordAuditEvent(

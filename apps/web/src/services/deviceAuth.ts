@@ -1,6 +1,12 @@
 /**
- * Service for Device Authentication (WebAuthn Platform Authenticator: Windows Hello,
- * Fingerprint, Face ID, Device PIN, Android Pattern/Biometrics) and Fallback In-App PIN.
+ * Diamond ERP V3 — Client-Side Workstation Screen Shield & Platform Authenticator Helper.
+ *
+ * ARCHITECTURAL BOUNDARY (Phase 3 Decision — Option A):
+ * 1. This service provides CLIENT-SIDE UI WORKSTATION SCREEN-LOCK and idle shield functionality.
+ * 2. Authoritative application authentication, device identity, PIN policy, lockout enforcement,
+ *    and session invalidation are governed exclusively by the backend Control DB and DeviceSecurity service.
+ * 3. WebAuthn platform authenticators (Windows Hello, Biometrics) and client-side PBKDF2 hashes
+ *    CANNOT and DO NOT bypass backend security.
  */
 
 // Helper to convert Uint8Array / ArrayBuffer to Base64URL string
@@ -203,6 +209,24 @@ export function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * @deprecated Legacy unsalted SHA-256 fallback for early workstation screen locks only.
+ * Isolated and marked deprecated; all newly generated credentials must use salted PBKDF2.
+ */
+async function verifyLegacyUnsaltedSha256(pin: string, storedHash: string): Promise<boolean> {
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(pin.trim());
+    const legacyBuffer = await crypto.subtle.digest('SHA-256', data);
+    const legacyHex = Array.from(new Uint8Array(legacyBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return constantTimeEqual(legacyHex, storedHash);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Verifies an input PIN against a stored PBKDF2 hash using constant-time comparison (Finding 52).
  */
 export async function verifyPin(pin: string, storedHash: string): Promise<boolean> {
@@ -215,18 +239,8 @@ export async function verifyPin(pin: string, storedHash: string): Promise<boolea
     return constantTimeEqual(computed, storedHash);
   }
 
-  // Legacy unsalted fallback for existing stored screen lock hashes
-  try {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(pin.trim());
-    const legacyBuffer = await crypto.subtle.digest('SHA-256', data);
-    const legacyHex = Array.from(new Uint8Array(legacyBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    return constantTimeEqual(legacyHex, storedHash);
-  } catch {
-    return false;
-  }
+  // Deprecated fallback path for legacy screen locks
+  return verifyLegacyUnsaltedSha256(pin, storedHash);
 }
 
 export const MIN_SESSION_TIMEOUT_MINUTES = 1;

@@ -21,6 +21,8 @@ export interface PinChangeRequest {
 
 export interface PinVerificationResponse {
   success: boolean;
+  applicationLocked?: boolean;
+  authenticationLockedUntil?: string | null;
   isLocked: boolean;
   locked?: boolean;
   failedAttemptsRemaining?: number;
@@ -33,6 +35,8 @@ export interface DeviceSecurityDto {
   deviceId: string;
   isPinConfigured: boolean;
   configured?: boolean;
+  applicationLocked?: boolean;
+  authenticationLockedUntil?: string | null;
   isLocked: boolean;
   lockedUntil?: string | null;
   failedAttempts: number;
@@ -48,6 +52,8 @@ export interface SecurityStatusDto {
   deviceStatus: string;
   isPinConfigured: boolean;
   configured?: boolean;
+  applicationLocked?: boolean;
+  authenticationLockedUntil?: string | null;
   isLocked: boolean;
   lockedUntil?: string | null;
   failedAttempts?: number;
@@ -57,6 +63,8 @@ export interface SecurityStatusDto {
 }
 
 export interface LockStateDto {
+  applicationLocked?: boolean;
+  authenticationLockedUntil?: string | null;
   isLocked: boolean;
   lockedUntil?: string | null;
   reason?: string;
