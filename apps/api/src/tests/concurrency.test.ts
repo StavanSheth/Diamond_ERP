@@ -19,6 +19,7 @@ import { authService } from '../modules/auth/auth.service';
 import { transactionService } from '../modules/transactions/transaction.service';
 import { inventoryService } from '../modules/inventory/inventory.service';
 import { repairService } from '../modules/repairs/repair.service';
+import { installationService } from '../modules/system/installation.service';
 import { TransactionType } from '../types/enums';
 
 const app = express();
@@ -46,6 +47,13 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
   let profileAStockId: string;
 
   beforeAll(async () => {
+    // Ensure installation exists and is in READY state for business routes
+    const install = await installationService.getOrCreateInstallation();
+    await systemPrisma.installation.update({
+      where: { id: install.id },
+      data: { lifecycleState: 'READY', status: 'ACTIVE' },
+    });
+
     // 0. Ensure Profile database files exist with schema
     const apiDir = path.resolve(__dirname, '../../');
     const testDbPath = path.resolve(apiDir, 'prisma/test.db');

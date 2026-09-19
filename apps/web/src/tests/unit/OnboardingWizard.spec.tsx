@@ -9,6 +9,7 @@ vi.mock('../../services/api', () => ({
     onboarding: {
       getStatus: vi.fn(),
       initializeApp: vi.fn(),
+      setupPin: vi.fn(),
       registerDevice: vi.fn(),
       discoverUsers: vi.fn(),
       selectUser: vi.fn(),
@@ -215,4 +216,85 @@ describe('OnboardingWizard Component', () => {
     fireEvent.click(checkbox);
     expect(attachBtn.disabled).toBe(false);
   });
+
+  it('renders visual 8-step progress milestone track and active step highlighting', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValueOnce({
+      lifecycleState: 'DEVICE_SETUP',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: false,
+      pinConfigured: true,
+      userConfigured: false,
+      databaseConfigured: false,
+      completedSteps: ['NOT_INITIALIZED', 'APP_SETUP', 'PIN_SETUP'],
+    });
+
+    render(<OnboardingWizard />);
+    await waitFor(() => {
+      expect(screen.getByText('App Setup')).toBeDefined();
+      expect(screen.getByText('PIN Setup')).toBeDefined();
+      expect(screen.getByText('Device Setup')).toBeDefined();
+      expect(screen.getByText('User Discovery')).toBeDefined();
+      expect(screen.getByText('DB Discovery')).toBeDefined();
+      expect(screen.getByText('DB Validation')).toBeDefined();
+      expect(screen.getByText('DB Setup')).toBeDefined();
+      expect(screen.getByText('Complete')).toBeDefined();
+    });
+  });
+
+  it('renders friendly resume notification when resuming from incomplete lifecycle state', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValueOnce({
+      lifecycleState: 'PIN_SETUP',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: false,
+      pinConfigured: false,
+      userConfigured: false,
+      databaseConfigured: false,
+    });
+
+    render(<OnboardingWizard />);
+    await waitFor(() => {
+      expect(screen.getByText(/Resumed Onboarding:/i)).toBeDefined();
+      expect(screen.getByText(/Terminal PIN Setup/i)).toBeDefined();
+    });
+  });
+
+  it('submits 6-digit PIN via atomic setupPin endpoint and updates status', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValueOnce({
+      lifecycleState: 'PIN_SETUP',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: false,
+      pinConfigured: false,
+      userConfigured: false,
+      databaseConfigured: false,
+    });
+
+    (api.onboarding.setupPin as any).mockResolvedValueOnce({
+      lifecycleState: 'DEVICE_SETUP',
+      ready: false,
+      installationInitialized: true,
+      deviceConfigured: false,
+      pinConfigured: true,
+      userConfigured: false,
+      databaseConfigured: false,
+    });
+
+    render(<OnboardingWizard />);
+    await waitFor(() => expect(screen.getByLabelText(/New 6-Digit PIN/i)).toBeDefined());
+
+    const pinInput = screen.getByLabelText(/New 6-Digit PIN/i);
+    const confirmInput = screen.getByLabelText(/Confirm PIN/i);
+    fireEvent.change(pinInput, { target: { value: '123456' } });
+    fireEvent.change(confirmInput, { target: { value: '123456' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Set Application PIN/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(api.onboarding.setupPin).toHaveBeenCalledWith('123456');
+    });
+  });
 });
+

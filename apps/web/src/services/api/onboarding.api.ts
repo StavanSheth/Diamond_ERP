@@ -32,10 +32,25 @@ export const onboardingApi = {
     return res.data;
   },
 
-  async registerDevice(deviceName: string): Promise<DeviceDto> {
-    const res = await request<{ success: boolean; data: DeviceDto }>('/api/system/device', {
+  async setupPin(pin: string): Promise<OnboardingStatusDto> {
+    const res = await request<{ success: boolean; data: OnboardingStatusDto }>('/api/system/onboarding/pin', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    });
+    return res.data;
+  },
+
+  async registerDevice(deviceName: string): Promise<OnboardingStatusDto> {
+    const res = await request<{ success: boolean; data: OnboardingStatusDto }>('/api/system/onboarding/device', {
       method: 'POST',
       body: JSON.stringify({ deviceName }),
+    });
+    return res.data;
+  },
+
+  async completeDatabaseSetup(): Promise<OnboardingStatusDto> {
+    const res = await request<{ success: boolean; data: OnboardingStatusDto }>('/api/system/onboarding/database-setup', {
+      method: 'POST',
     });
     return res.data;
   },

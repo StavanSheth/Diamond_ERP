@@ -6,6 +6,8 @@ import type {
   DatabaseDiscoveryCandidateDto,
   DatabaseAttachmentPreviewDto,
 } from '@diamond-erp/contracts';
+import { OnboardingProgress } from './components/OnboardingProgress';
+import { OnboardingResumeNotice } from './components/OnboardingResumeNotice';
 
 interface OnboardingWizardProps {
   onReady?: () => void;
@@ -119,9 +121,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
     setSubmitting(true);
     setError(null);
     try {
-      await api.security.setupPin(pin);
-      // Advance past PIN_SETUP → DEVICE_SETUP
-      await api.onboarding.updateLifecycleState('DEVICE_SETUP');
+      const latest = await api.onboarding.setupPin(pin);
+      setStatus(latest);
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to configure application PIN');
@@ -141,9 +142,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
     setSubmitting(true);
     setError(null);
     try {
-      await api.onboarding.registerDevice(deviceName.trim());
-      // Advance past DEVICE_SETUP → USER_DISCOVERY
-      await api.onboarding.updateLifecycleState('USER_DISCOVERY');
+      const latest = await api.onboarding.registerDevice(deviceName.trim());
+      setStatus(latest);
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to register device');
@@ -286,7 +286,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500" />
 
         {/* Header */}
-        <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-800">
+        <div className="flex items-center justify-between pb-6 mb-4 border-b border-slate-800">
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">Diamond ERP Setup</h1>
             <p className="text-xs text-slate-400">Step: {currentStep}</p>
@@ -295,6 +295,15 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
             V3.0
           </span>
         </div>
+
+        {/* Milestone Progress Bar */}
+        <OnboardingProgress
+          currentStep={currentStep}
+          completedSteps={status.completedSteps}
+        />
+
+        {/* Resumed Progress Notice */}
+        <OnboardingResumeNotice lifecycleState={currentStep} />
 
         {error && (
           <div

@@ -14,9 +14,11 @@ import { installationService } from '../installation.service';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
 import { authService } from '../../auth/auth.service';
+import { deviceSecurityService } from '../../security/device-security.service';
 import { recoveryService } from '../recovery/recovery.service';
 import { backupService } from '../backup/backup.service';
 import type {
+  LifecycleState,
   OnboardingStatusDto,
   UserDiscoveryResponseDto,
   UserDiscoveryCandidateDto,
@@ -53,15 +55,16 @@ export class OnboardingService {
     const userConfigured = !!installUser && installUser.user.isActive && !installUser.user.deletedAt;
 
     // 3. Database check
-    const activeRegistry = await systemPrisma.databaseRegistry.findFirst({
+    const activeRegistries = await systemPrisma.databaseRegistry.findMany({
       where: {
         installationId: install.id,
         status: 'ACTIVE',
       },
       include: { profile: true },
+      orderBy: { updatedAt: 'desc' },
     });
-    const dbFileExists = activeRegistry ? fs.existsSync(activeRegistry.canonicalPath) : false;
-    const databaseConfigured = !!activeRegistry && dbFileExists;
+    const activeRegistry = activeRegistries.find((r) => fs.existsSync(r.canonicalPath)) || null;
+    const databaseConfigured = !!activeRegistry;
 
     // 4. Authoritative Ready verification
     const isReady =
@@ -80,8 +83,25 @@ export class OnboardingService {
       }
     }
 
+    const LIFECYCLE_ORDER: LifecycleState[] = [
+      'NOT_INITIALIZED',
+      'APP_SETUP',
+      'PIN_SETUP',
+      'DEVICE_SETUP',
+      'USER_DISCOVERY',
+      'DATABASE_DISCOVERY',
+      'DATABASE_VALIDATION',
+      'DATABASE_SETUP',
+      'READY',
+    ];
+    const currentIndex = LIFECYCLE_ORDER.indexOf(install.lifecycleState);
+    const completedSteps = LIFECYCLE_ORDER.slice(0, Math.max(0, currentIndex));
+
     return {
       lifecycleState: install.lifecycleState,
+      currentStep: install.lifecycleState,
+      completedSteps,
+      canContinue: true,
       installationInitialized: install.lifecycleState !== 'NOT_INITIALIZED',
       deviceConfigured,
       pinConfigured,
@@ -137,6 +157,48 @@ export class OnboardingService {
       await installationService.updateLifecycleState('APP_SETUP');
     }
 
+    return this.getOnboardingState();
+  }
+
+  /**
+   * Set up application PIN during onboarding and advance state machine to DEVICE_SETUP.
+   */
+  async setupPin(pin: string, meta?: any): Promise<OnboardingStatusDto> {
+    const install = await installationService.getOrCreateInstallation();
+    if (install.lifecycleState !== 'APP_SETUP' && install.lifecycleState !== 'PIN_SETUP') {
+      throw new ConflictError(
+        `Cannot configure PIN at lifecycle state "${install.lifecycleState}". Expected PIN_SETUP or APP_SETUP.`
+      );
+    }
+
+    if (install.lifecycleState === 'APP_SETUP') {
+      await installationService.updateLifecycleState('PIN_SETUP');
+    }
+
+    const deviceId = installationService.getOrGenerateDeviceId();
+    await deviceSecurityService.setupPin(deviceId, pin, meta);
+
+    await installationService.updateLifecycleState('DEVICE_SETUP');
+    return this.getOnboardingState();
+  }
+
+  /**
+   * Register local workstation device during onboarding and advance state machine to USER_DISCOVERY.
+   */
+  async registerDevice(deviceName: string): Promise<OnboardingStatusDto> {
+    const install = await installationService.getOrCreateInstallation();
+    if (install.lifecycleState !== 'DEVICE_SETUP') {
+      throw new ConflictError(
+        `Cannot register device at lifecycle state "${install.lifecycleState}". Expected DEVICE_SETUP.`
+      );
+    }
+
+    await installationService.registerDevice({
+      deviceName: deviceName.trim(),
+      platform: 'WINDOWS',
+    });
+
+    await installationService.updateLifecycleState('USER_DISCOVERY');
     return this.getOnboardingState();
   }
 
@@ -745,17 +807,20 @@ export class OnboardingService {
     }
 
     // 5. Active DatabaseRegistry
-    const registry = await systemPrisma.databaseRegistry.findFirst({
+    const registries = await systemPrisma.databaseRegistry.findMany({
       where: {
         installationId: install.id,
         status: 'ACTIVE',
       },
       include: { profile: true },
+      orderBy: { updatedAt: 'desc' },
     });
-    if (!registry) {
+    if (registries.length === 0) {
       if (silent) return false;
       throw new ConflictError('Cannot mark READY: No active database is registered for this installation.');
     }
+
+    const registry = registries.find((r) => fs.existsSync(r.canonicalPath)) || registries[0];
 
     // 6. Physical database existence & validation
     if (!fs.existsSync(registry.canonicalPath)) {
@@ -815,6 +880,27 @@ export class OnboardingService {
       install.lifecycleState === 'DATABASE_SETUP'
     ) {
       await installationService.updateLifecycleState('DATABASE_DISCOVERY', { isReset: true });
+    }
+
+    return this.getOnboardingState();
+  }
+
+  /**
+   * Finalize database setup step before entering READY.
+   */
+  async completeDatabaseSetup(): Promise<OnboardingStatusDto> {
+    const install = await installationService.getOrCreateInstallation();
+    if (
+      install.lifecycleState !== 'DATABASE_VALIDATION' &&
+      install.lifecycleState !== 'DATABASE_SETUP'
+    ) {
+      throw new ConflictError(
+        `Cannot complete database setup at lifecycle state "${install.lifecycleState}". Expected DATABASE_VALIDATION or DATABASE_SETUP.`
+      );
+    }
+
+    if (install.lifecycleState === 'DATABASE_VALIDATION') {
+      await installationService.updateLifecycleState('DATABASE_SETUP');
     }
 
     return this.getOnboardingState();

@@ -32,6 +32,15 @@ const createDatabaseSchema = z.object({
   profileName: z.string().max(100).optional(),
 });
 
+const setupPinSchema = z.object({
+  pin: z.string().regex(/^\d{6}$/, 'PIN must be exactly 6 digits'),
+  metadata: z.record(z.string(), z.any()).optional(),
+});
+
+const registerDeviceSchema = z.object({
+  deviceName: z.string().min(1, 'Device name is required').max(100),
+});
+
 export class OnboardingController {
   getOnboardingStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -47,6 +56,46 @@ export class OnboardingController {
     try {
       await onboardingAuthorizationService.authorize(req, 'INITIALIZE_APPLICATION');
       const status = await onboardingService.initializeApplication();
+      res.json({ success: true, data: status });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  setupPin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await onboardingAuthorizationService.authorize(req, 'SETUP_PIN');
+      const parsed = setupPinSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+
+      const status = await onboardingService.setupPin(parsed.data.pin, parsed.data.metadata);
+      res.json({ success: true, data: status });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  registerDevice = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await onboardingAuthorizationService.authorize(req, 'REGISTER_DEVICE');
+      const parsed = registerDeviceSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+
+      const status = await onboardingService.registerDevice(parsed.data.deviceName);
       res.json({ success: true, data: status });
     } catch (err) {
       next(err);
@@ -168,6 +217,16 @@ export class OnboardingController {
 
       const result = await onboardingService.createNewDatabase(parsed.data);
       res.status(201).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  completeDatabaseSetup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await onboardingAuthorizationService.authorize(req, 'COMPLETE_DATABASE_SETUP');
+      const status = await onboardingService.completeDatabaseSetup();
+      res.json({ success: true, data: status });
     } catch (err) {
       next(err);
     }

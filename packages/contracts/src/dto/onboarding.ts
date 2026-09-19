@@ -11,6 +11,9 @@ export type DatabaseSuitability =
 
 export interface OnboardingStatusDto {
   lifecycleState: LifecycleState;
+  currentStep?: LifecycleState;
+  completedSteps?: string[];
+  canContinue?: boolean;
   installationInitialized: boolean;
   deviceConfigured: boolean;
   pinConfigured: boolean;
