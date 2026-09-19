@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
@@ -10,13 +11,18 @@ import { RepairsPage } from './pages/RepairsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { useStocks } from './hooks/useStocks';
-import { AppLockProvider } from './contexts/AppLockContext';
+import { AppLockProvider, useAppLock } from './contexts/AppLockContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
 import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
+import { api } from './services/api';
 
-function AppContent() {
+/**
+ * Main ERP Business Application Layout and Router.
+ * Mounted strictly ONLY when lifecycle is READY and screen is unlocked.
+ */
+function ErpAppLayout() {
   const {
     stocks,
     loading: stocksLoading,
@@ -31,15 +37,6 @@ function AppContent() {
 
   return (
     <div className="bg-background text-on-surface h-screen flex overflow-hidden">
-      {/* First-Run Master Lifetime Activation Lock */}
-      <FirstRunActivationOverlay />
-
-      {/* First-Run Onboarding & Database Setup Wizard */}
-      <OnboardingWizard />
-
-      {/* App Lock Fullscreen Overlay */}
-      <AppLockOverlay />
-
       {/* Sidebar (desktop) */}
       <Sidebar syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} />
 
@@ -83,6 +80,46 @@ function AppContent() {
         </Routes>
       </main>
     </div>
+  );
+}
+
+/**
+ * Sequential Security & Lifecycle Gated Application Hierarchy.
+ * Application Entry → Lifecycle Gate → Security/PIN Gate → ERP Load
+ */
+function AppContent() {
+  const { isLocked } = useAppLock();
+  const [onboardingReady, setOnboardingReady] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api.onboarding
+      .getStatus()
+      .then((status) => {
+        if (active) setOnboardingReady(status.ready || status.lifecycleState === 'READY');
+      })
+      .catch(() => {
+        if (active) setOnboardingReady(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <>
+      {/* 1. First-Run Master Lifetime Activation Lock */}
+      <FirstRunActivationOverlay />
+
+      {/* 2. First-Run Onboarding & Database Setup Wizard */}
+      <OnboardingWizard onReady={() => setOnboardingReady(true)} />
+
+      {/* 3. App Lock Fullscreen Overlay */}
+      <AppLockOverlay />
+
+      {/* 4. ERP Business Application — Mounted ONLY when lifecycle is READY */}
+      {onboardingReady && !isLocked && <ErpAppLayout />}
+    </>
   );
 }
 

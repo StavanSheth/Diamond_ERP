@@ -11,7 +11,7 @@ export default function setup() {
   }
 
   try {
-    execSync('npx prisma db push --accept-data-loss', {
+    execSync('npx prisma db push --accept-data-loss --skip-generate', {
       env: {
         ...process.env,
         DATABASE_URL: 'file:./test.db'

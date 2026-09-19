@@ -1,4 +1,5 @@
 import { systemPrisma } from '../../infrastructure/database/prisma';
+import { installationService } from '../system/installation.service';
 import { logger } from '../../infrastructure/logging';
 import {
   ValidationError,
@@ -164,17 +165,41 @@ export class DeviceSecurityService {
     device: any;
     security: any;
   }> {
-    const device = await systemPrisma.device.findUnique({
+    const localId = installationService.getOrGenerateDeviceId();
+    const install = await installationService.getOrCreateInstallation();
+
+    let device = await systemPrisma.device.findUnique({
       where: { deviceId },
+      include: { installation: true },
     });
 
     if (!device) {
-      throw new NotFoundError(`Device "${deviceId}" not found in system registry.`);
+      if (deviceId === localId) {
+        device = await systemPrisma.device.create({
+          data: {
+            installationId: install.id,
+            deviceId: localId,
+            deviceName: 'Main Workstation',
+            platform: 'WINDOWS',
+            status: 'ACTIVE',
+            lastSeenAt: new Date(),
+          },
+          include: { installation: true },
+        });
+      } else {
+        throw new NotFoundError(`Device "${deviceId}" not found in system registry.`);
+      }
+    } else if (deviceId === localId && device.installationId !== install.id) {
+      // Re-bind local device if prior installation was archived/reinstalled
+      device = await systemPrisma.device.update({
+        where: { id: device.id },
+        data: { installationId: install.id, status: 'ACTIVE' },
+        include: { installation: true },
+      });
     }
 
     // Cross-installation boundary enforcement
-    const install = await systemPrisma.installation.findFirst();
-    if (install && device.installationId !== install.id) {
+    if (device.installationId !== install.id) {
       throw new AuthorizationError('Security operation rejected: Device belongs to another installation.');
     }
 

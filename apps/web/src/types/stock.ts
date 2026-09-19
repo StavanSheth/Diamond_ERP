@@ -12,6 +12,7 @@ export {
   RepairStatus,
   CertificationStatus,
   CertificateState,
+  type HealthResponse,
 } from '@diamond-erp/contracts';
 export * from '@diamond-erp/contracts';
 
@@ -24,15 +25,3 @@ export interface LedgerStockOption {
   status: string;
 }
 
-export interface HealthResponse {
-  status: 'ok' | 'error';
-  timestamp: string;
-  provider?: {
-    connected: boolean;
-    latencyMs: number;
-  };
-  metrics?: {
-    uptime: number;
-    memory: any;
-  };
-}

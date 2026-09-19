@@ -3,6 +3,7 @@ import fs from 'fs';
 import { systemPrisma, ensureProfileDbFile } from '../../../infrastructure/database/prisma';
 import { canonicalizeDatabasePath } from './database-path.util';
 import { databaseValidationService } from './database-validation.service';
+import { installationService } from '../installation.service';
 import { logger } from '../../../infrastructure/logging';
 import { ValidationError, NotFoundError } from '../../../errors';
 import type { DatabaseRegistryDto, DatabaseStatus } from '@diamond-erp/contracts';
@@ -12,7 +13,7 @@ export interface RegisterDatabaseInput {
   displayName?: string;
   databaseType?: string;
   profileId?: string;
-  installationId: string;
+  installationId?: string;
 }
 
 export class DatabaseRegistryService {
@@ -67,6 +68,8 @@ export class DatabaseRegistryService {
     const databaseId = crypto.randomUUID();
     const displayName = input.displayName || canonicalPath.split(/[\\/]/).pop()?.replace(/\.db$/, '') || 'Database';
 
+    const installId = input.installationId || (await installationService.getOrCreateInstallation()).id;
+
     try {
       const created = await systemPrisma.databaseRegistry.create({
         data: {
@@ -77,7 +80,7 @@ export class DatabaseRegistryService {
           status: validation.isValid ? 'ACTIVE' : validation.status,
           databaseType: input.databaseType || (pathResult.isExternal ? 'EXTERNAL' : 'LOCAL_PROFILE'),
           profileId: input.profileId || null,
-          installationId: input.installationId,
+          installationId: installId,
           lastValidatedAt: new Date(),
         },
       });

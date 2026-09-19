@@ -81,6 +81,8 @@ const PRE_READY_OPERATIONS: Record<string, Set<OnboardingOperation>> = {
     'DISCOVER_USERS',
     'DISCOVER_DATABASES',
     'INSPECT_DATABASE',
+    'ATTACH_DATABASE',
+    'CREATE_DATABASE',
     'RESET_ONBOARDING_STEP',
   ]),
   DATABASE_VALIDATION: new Set([

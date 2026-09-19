@@ -2,10 +2,24 @@ const path = require('path');
 const fs = require('fs');
 const { PrismaClient } = require(path.resolve('apps/api/node_modules/@prisma/client'));
 
+const localAppData = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local');
+const localAppDir = path.join(localAppData, 'DiamondERP');
+
 const targetDbs = [
   path.resolve('apps/api/Stavan.db'),
   path.resolve('apps/api/system.db'),
+  path.resolve('apps/api/prisma/template.db'),
+  path.join(localAppDir, 'system.db'),
 ];
+
+if (fs.existsSync(path.join(localAppDir, 'databases'))) {
+  const files = fs.readdirSync(path.join(localAppDir, 'databases'));
+  for (const f of files) {
+    if (f.endsWith('.db')) {
+      targetDbs.push(path.join(localAppDir, 'databases', f));
+    }
+  }
+}
 
 async function applyToDb(dbFilePath) {
   if (!fs.existsSync(dbFilePath)) {
@@ -44,7 +58,14 @@ async function applyToDb(dbFilePath) {
     await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "DeviceSecurity_deviceId_key" ON "DeviceSecurity"("deviceId");`);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "DeviceSecurity_deviceId_idx" ON "DeviceSecurity"("deviceId");`);
 
-    // 2. Add deviceId column to Session table if missing
+    // 2. Add lastAuthenticatedAt column to DeviceSecurity table if missing
+    const secCols = await prisma.$queryRawUnsafe('PRAGMA table_info("DeviceSecurity")');
+    if (secCols.length > 0 && !secCols.some((c) => c.name === 'lastAuthenticatedAt')) {
+      await prisma.$executeRawUnsafe('ALTER TABLE "DeviceSecurity" ADD COLUMN "lastAuthenticatedAt" DATETIME;');
+      console.log(`✔ Added lastAuthenticatedAt column to DeviceSecurity on ${path.basename(dbFilePath)}`);
+    }
+
+    // 3. Add deviceId column to Session table if missing
     const sessionCols = await prisma.$queryRawUnsafe('PRAGMA table_info("Session")');
     if (sessionCols.length > 0 && !sessionCols.some((c) => c.name === 'deviceId')) {
       await prisma.$executeRawUnsafe('ALTER TABLE "Session" ADD COLUMN "deviceId" TEXT;');

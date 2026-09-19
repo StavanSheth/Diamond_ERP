@@ -7,7 +7,11 @@ import type {
   DatabaseAttachmentPreviewDto,
 } from '@diamond-erp/contracts';
 
-export const OnboardingWizard: React.FC = () => {
+interface OnboardingWizardProps {
+  onReady?: () => void;
+}
+
+export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) => {
   const [status, setStatus] = useState<OnboardingStatusDto | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -42,6 +46,10 @@ export const OnboardingWizard: React.FC = () => {
       setError(null);
       const data = await api.onboarding.getStatus();
       setStatus(data);
+
+      if (data.ready || data.lifecycleState === 'READY') {
+        onReady?.();
+      }
 
       if (data.lifecycleState === 'USER_DISCOVERY') {
         const users = await api.onboarding.discoverUsers();
@@ -84,6 +92,10 @@ export const OnboardingWizard: React.FC = () => {
     setError(null);
     try {
       await api.onboarding.initializeApp();
+      const latest = await api.onboarding.getStatus();
+      if (latest.lifecycleState === 'NOT_INITIALIZED' || latest.lifecycleState === 'APP_SETUP') {
+        await api.onboarding.updateLifecycleState('PIN_SETUP');
+      }
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to initialize application setup');
@@ -108,6 +120,8 @@ export const OnboardingWizard: React.FC = () => {
     setError(null);
     try {
       await api.security.setupPin(pin);
+      // Advance past PIN_SETUP → DEVICE_SETUP
+      await api.onboarding.updateLifecycleState('DEVICE_SETUP');
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to configure application PIN');
@@ -128,6 +142,8 @@ export const OnboardingWizard: React.FC = () => {
     setError(null);
     try {
       await api.onboarding.registerDevice(deviceName.trim());
+      // Advance past DEVICE_SETUP → USER_DISCOVERY
+      await api.onboarding.updateLifecycleState('USER_DISCOVERY');
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to register device');
@@ -308,7 +324,22 @@ export const OnboardingWizard: React.FC = () => {
                   id="btn-continue-installation"
                   type="button"
                   disabled={submitting}
-                  onClick={handleAppSetup}
+                  onClick={async () => {
+                    setSubmitting(true);
+                    setError(null);
+                    try {
+                      await api.recovery.continueExistingInstall(status.reinstallRecovery?.previousInstallationId || undefined);
+                      const latest = await api.onboarding.getStatus();
+                      if (latest.lifecycleState === 'NOT_INITIALIZED' || latest.lifecycleState === 'APP_SETUP') {
+                        await api.onboarding.updateLifecycleState('PIN_SETUP');
+                      }
+                      await fetchStatus();
+                    } catch (err: any) {
+                      setError(err?.message || 'Failed to continue existing installation');
+                    } finally {
+                      setSubmitting(false);
+                    }
+                  }}
                   className="w-full text-left p-3.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-white transition-all flex items-center justify-between"
                 >
                   <div>
@@ -324,8 +355,11 @@ export const OnboardingWizard: React.FC = () => {
                   disabled={submitting}
                   onClick={async () => {
                     setSubmitting(true);
+                    setError(null);
                     try {
                       await api.recovery.startFreshInstall();
+                      // Advance past APP_SETUP → PIN_SETUP
+                      await api.onboarding.updateLifecycleState('PIN_SETUP');
                       await fetchStatus();
                     } catch (err: any) {
                       setError(err?.message || 'Failed to initialize fresh installation');

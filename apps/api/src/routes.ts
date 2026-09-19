@@ -22,18 +22,20 @@ import systemRoutes from './modules/system/system.routes';
 import { authenticate } from './middleware/auth';
 import { profileMiddleware, optionalProfileMiddleware } from './middleware/profile';
 import { idempotencyMiddleware } from './middleware/idempotency';
+import { lifecycleReadyMiddleware } from './middleware/lifecycle-ready';
 
 /**
  * Route aggregator — registers all application routes.
  * 
  * Security architecture:
  *   - /health, /api/auth, and /api/system (bootstrap/public probes) are handled at route level
- *   - All other /api/* routes run through `protectedStack` [authenticate, profileMiddleware, idempotencyMiddleware]:
- *       1. Authenticate user via JWT & session check
- *       2. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
- *       3. Establish canonical profile DB context
- *       4. Support Idempotency-Key header on mutating requests
- *       5. Individual routes enforce RBAC via authorize()
+ *   - All other /api/* routes run through `protectedStack` [lifecycleReadyMiddleware, authenticate, profileMiddleware, idempotencyMiddleware]:
+ *       1. Enforce lifecycle READY state before business access
+ *       2. Authenticate user via JWT & session check
+ *       3. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
+ *       4. Establish canonical profile DB context
+ *       5. Support Idempotency-Key header on mutating requests
+ *       6. Individual routes enforce RBAC via authorize()
  */
 export function createRoutes(
   stockController: StockController,
@@ -54,8 +56,8 @@ export function createRoutes(
   // ── System & Lifecycle routes (handles public bootstrap and protected admin internally) ──
   router.use('/api/system', systemRoutes);
 
-  // ── Protected routes requiring explicit profile context ───────────────
-  const protectedStack = [authenticate, profileMiddleware, idempotencyMiddleware];
+  // ── Protected routes requiring explicit profile context & READY lifecycle ───────────────
+  const protectedStack = [lifecycleReadyMiddleware, authenticate, profileMiddleware, idempotencyMiddleware];
 
   router.use('/api/stocks', protectedStack, createStockRouter(stockController));
   router.use('/api/dashboard', protectedStack, createDashboardRouter(dashboardController));

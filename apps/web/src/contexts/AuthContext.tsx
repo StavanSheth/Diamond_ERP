@@ -1,14 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { sessionStore } from '../services/api/client';
+import type { AuthenticatedUserInfo } from '@diamond-erp/contracts';
 
-interface User {
-  id: string;
-  username: string;
-  displayName: string;
-  role: string;
-  profiles?: string[];
-}
+export type User = AuthenticatedUserInfo;
 
 interface AuthContextType {
   user: User | null;
@@ -22,12 +17,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEFAULT_USER: User = {
+const DEFAULT_USER: AuthenticatedUserInfo = {
   id: 'default-stavan',
   username: 'stavan',
   displayName: 'Stavan',
   role: 'SUPER_ADMIN',
   profiles: ['Stavan'],
+  activeProfile: 'Stavan',
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {

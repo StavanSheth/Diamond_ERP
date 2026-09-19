@@ -328,9 +328,17 @@ export class InstallationService {
         deviceId: effectiveDeviceId,
         installationId: { not: install.id },
       },
+      include: { installation: true },
     });
     if (crossInstall) {
-      throw new ConflictError('Device is already registered under another installation.');
+      if (crossInstall.installation?.status === 'ACTIVE') {
+        throw new ConflictError('Device is already registered under another installation.');
+      }
+      // Re-assign device from archived/inactive installation to active installation
+      await systemPrisma.device.update({
+        where: { id: crossInstall.id },
+        data: { installationId: install.id },
+      });
     }
 
     // Look up existing device by stable deviceId on this installation

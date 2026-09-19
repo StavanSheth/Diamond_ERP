@@ -121,3 +121,14 @@ export interface InstallationUserDto {
   userId: string;
   createdAt: string;
 }
+
+export interface HealthResponse {
+  backend: string;
+  database: string;
+  status: 'ok' | 'error';
+  uptime: number;
+  requestId?: string;
+  timestamp: string;
+  error?: string;
+}
+

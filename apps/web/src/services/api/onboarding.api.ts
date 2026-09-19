@@ -8,11 +8,20 @@ import type {
   AttachDatabaseRequest,
   CreateDatabaseRequest,
   CreateOnboardingUserRequest,
+  LifecycleState,
 } from '@diamond-erp/contracts';
 
 export const onboardingApi = {
   async getStatus(): Promise<OnboardingStatusDto> {
     const res = await request<{ success: boolean; data: OnboardingStatusDto }>('/api/system/onboarding');
+    return res.data;
+  },
+
+  async updateLifecycleState(lifecycleState: LifecycleState): Promise<any> {
+    const res = await request<{ success: boolean; data: any }>('/api/system/lifecycle-state', {
+      method: 'POST',
+      body: JSON.stringify({ lifecycleState }),
+    });
     return res.data;
   },
 
