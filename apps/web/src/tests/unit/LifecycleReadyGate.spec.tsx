@@ -175,4 +175,30 @@ describe('Lifecycle Ready Gate & ERP Blocking Verification', () => {
       expect(screen.queryByText(/Diamond ERP Setup/i)).toBeNull();
     });
   });
+
+  it('strictly blocks ERP layout from rendering if lifecycleState is READY but authoritative ready is false', async () => {
+    (api.onboarding.getStatus as any).mockResolvedValue({
+      lifecycleState: 'READY',
+      ready: false, // Authoritative backend ready flag is FALSE despite lifecycleState
+      installationInitialized: true,
+      deviceConfigured: true,
+      pinConfigured: true,
+      userConfigured: true,
+      databaseConfigured: false, // e.g. database file deleted/invalid
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.onboarding.getStatus).toHaveBeenCalled();
+    });
+
+    // ERP layout elements must NOT be mounted because status.ready === false
+    expect(screen.queryByText(/Diamond ERP Dashboard/i)).toBeNull();
+    expect(screen.queryByText(/Inventory/i)).toBeNull();
+  });
 });

@@ -5,6 +5,7 @@ import { systemPrisma, defaultProfile } from '../../infrastructure/database/pris
 import { getConfigDir } from '../../infrastructure/paths';
 import { logger } from '../../infrastructure/logging';
 import { ValidationError, ConflictError, NotFoundError } from '../../errors';
+import { databaseValidationService } from './database/database-validation.service';
 import type {
   LifecycleState,
   InstallationDto,
@@ -232,6 +233,43 @@ export class InstallationService {
           throw new ConflictError('Cannot complete DEVICE_SETUP: An active device registration is required before proceeding.');
         }
       }
+
+      // Invariants 3 & 4: Enforced when enforceInvariants is requested (HTTP controller, onboarding orchestration, hardening tests)
+      if (options?.enforceInvariants) {
+        // Invariant 3: USER_DISCOVERY cannot be marked complete without an active user association
+        if (
+          current.lifecycleState === 'USER_DISCOVERY' &&
+          targetState !== 'NOT_INITIALIZED' &&
+          targetState !== 'APP_SETUP' &&
+          targetState !== 'PIN_SETUP' &&
+          targetState !== 'DEVICE_SETUP'
+        ) {
+          const installUser = await systemPrisma.installationUser.findFirst({
+            where: { installationId: current.id },
+            include: { user: true },
+          });
+          if (!installUser || !installUser.user.isActive || installUser.user.deletedAt) {
+            throw new ConflictError('Cannot complete USER_DISCOVERY: An active business user must be associated with this installation.');
+          }
+        }
+
+        // Invariant 4: DATABASE_VALIDATION cannot be marked complete without an active registered database
+        if (
+          current.lifecycleState === 'DATABASE_VALIDATION' &&
+          targetState === 'DATABASE_SETUP'
+        ) {
+          const registries = await systemPrisma.databaseRegistry.findMany({
+            where: {
+              installationId: current.id,
+              status: 'ACTIVE',
+            },
+          });
+          const validRegistry = registries.find((r) => fs.existsSync(r.canonicalPath));
+          if (!validRegistry) {
+            throw new ConflictError('Cannot complete DATABASE_VALIDATION: An active database file must exist and be registered before proceeding.');
+          }
+        }
+      }
     }
 
     const updateData: any = {
@@ -242,14 +280,105 @@ export class InstallationService {
       if (current.lifecycleState !== 'DATABASE_SETUP') {
         throw new ConflictError(`Cannot reach READY from ${current.lifecycleState}. DATABASE_SETUP must be completed first.`);
       }
+
+      if (options?.enforceInvariants) {
+        // Authoritative verification of all 8 READY prerequisites
+        if (current.status !== 'ACTIVE') {
+          throw new ConflictError('Cannot mark READY: Installation is not in ACTIVE status.');
+        }
+
+        const localDeviceId = this.getOrGenerateDeviceId();
+        const dev = await systemPrisma.device.findUnique({
+          where: { deviceId: localDeviceId },
+          include: { securityState: true },
+        });
+        if (!dev || dev.status !== 'ACTIVE') {
+          throw new ConflictError('Cannot mark READY: Authoritative local device is not registered or is not ACTIVE.');
+        }
+
+        if (!dev.securityState?.pinHash) {
+          throw new ConflictError('Cannot mark READY: Application PIN has not been configured for this device.');
+        }
+
+        const installUser = await systemPrisma.installationUser.findFirst({
+          where: { installationId: current.id },
+          include: { user: true },
+        });
+        if (!installUser || !installUser.user.isActive || installUser.user.deletedAt) {
+          throw new ConflictError('Cannot mark READY: No active business user is associated with this installation.');
+        }
+
+        const registries = await systemPrisma.databaseRegistry.findMany({
+          where: {
+            installationId: current.id,
+            status: 'ACTIVE',
+          },
+          include: { profile: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+        if (registries.length === 0) {
+          throw new ConflictError('Cannot mark READY: No active database is registered for this installation.');
+        }
+
+        const registry = registries.find((r) => fs.existsSync(r.canonicalPath)) || registries[0];
+        if (!fs.existsSync(registry.canonicalPath)) {
+          throw new ConflictError(`Cannot mark READY: Physical database file is missing at ${registry.canonicalPath}.`);
+        }
+
+        const validation = await databaseValidationService.validateDatabase(registry.canonicalPath);
+        if (!validation.isValid) {
+          throw new ConflictError(`Cannot mark READY: Physical database validation failed: ${validation.details}`);
+        }
+
+        if (!registry.profile || !registry.profile.isActive) {
+          throw new ConflictError('Cannot mark READY: Database is not associated with an active ERP profile.');
+        }
+      }
+
       updateData.initializedAt = new Date();
     } else if (targetState === 'NOT_INITIALIZED') {
       updateData.initializedAt = null;
     }
 
-    const updated = await systemPrisma.installation.update({
-      where: { id: current.id },
+    // Atomic conditional update prevents state corruption from concurrent transition races
+    const result = await systemPrisma.installation.updateMany({
+      where: {
+        id: current.id,
+        lifecycleState: current.lifecycleState,
+      },
       data: updateData,
+    });
+
+    if (result.count === 0) {
+      // Check if concurrent request already transitioned to targetState (idempotent success)
+      const fresh = await systemPrisma.installation.findUnique({
+        where: { id: current.id },
+        include: {
+          _count: {
+            select: { devices: true },
+          },
+        },
+      });
+      if (fresh && fresh.lifecycleState === targetState) {
+        return {
+          id: fresh.id,
+          installationId: fresh.installationId,
+          appVersion: fresh.appVersion,
+          status: fresh.status as any,
+          lifecycleState: fresh.lifecycleState as LifecycleState,
+          initializedAt: fresh.initializedAt?.toISOString() || null,
+          createdAt: fresh.createdAt.toISOString(),
+          updatedAt: fresh.updatedAt.toISOString(),
+          deviceCount: fresh._count?.devices || 0,
+        };
+      }
+      throw new ConflictError(
+        `Concurrent lifecycle transition conflict: Installation is in state "${fresh?.lifecycleState || 'UNKNOWN'}", cannot transition from "${current.lifecycleState}" to "${targetState}".`
+      );
+    }
+
+    const updated = await systemPrisma.installation.findUniqueOrThrow({
+      where: { id: current.id },
       include: {
         _count: {
           select: { devices: true },

@@ -48,8 +48,6 @@ const PRE_READY_OPERATIONS: Record<string, Set<OnboardingOperation>> = {
     'READ_ONBOARDING_STATUS',
     'INITIALIZE_APPLICATION',
     'SETUP_PIN',
-    'REGISTER_DEVICE',
-    'BIND_DEVICE',
     'DISCOVER_RECOVERY_CANDIDATES',
     'INSPECT_RECOVERY_CANDIDATE',
     'VALIDATE_RECOVERY_CANDIDATE',
@@ -61,8 +59,6 @@ const PRE_READY_OPERATIONS: Record<string, Set<OnboardingOperation>> = {
     'READ_ONBOARDING_STATUS',
     'SETUP_PIN',
     'VERIFY_PIN',
-    'REGISTER_DEVICE',
-    'BIND_DEVICE',
   ]),
   DEVICE_SETUP: new Set([
     'READ_ONBOARDING_STATUS',
@@ -79,7 +75,6 @@ const PRE_READY_OPERATIONS: Record<string, Set<OnboardingOperation>> = {
   ]),
   DATABASE_DISCOVERY: new Set([
     'READ_ONBOARDING_STATUS',
-    'DISCOVER_USERS',
     'DISCOVER_DATABASES',
     'INSPECT_DATABASE',
     'ATTACH_DATABASE',

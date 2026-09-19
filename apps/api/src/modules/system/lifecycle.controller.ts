@@ -116,6 +116,7 @@ export class LifecycleController {
       }
       const updated = await installationService.updateLifecycleState(parsed.data.lifecycleState, {
         isReset: parsed.data.isReset,
+        enforceInvariants: true,
       });
       res.json({ success: true, data: updated });
     } catch (error) {

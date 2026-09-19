@@ -49,7 +49,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
       const data = await api.onboarding.getStatus();
       setStatus(data);
 
-      if (data.ready || data.lifecycleState === 'READY') {
+      if (data.ready === true) {
         onReady?.();
       }
 
@@ -84,7 +84,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
   }, []);
 
   if (loading) return null;
-  if (!status || status.ready || status.lifecycleState === 'READY') {
+  if (!status || status.ready === true) {
     return null;
   }
 

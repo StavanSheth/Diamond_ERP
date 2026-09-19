@@ -96,7 +96,7 @@ function AppContent() {
     api.onboarding
       .getStatus()
       .then((status) => {
-        if (active) setOnboardingReady(status.ready || status.lifecycleState === 'READY');
+        if (active) setOnboardingReady(Boolean(status.ready));
       })
       .catch(() => {
         if (active) setOnboardingReady(false);
@@ -118,7 +118,7 @@ function AppContent() {
       <AppLockOverlay />
 
       {/* 4. ERP Business Application — Mounted ONLY when lifecycle is READY */}
-      {onboardingReady && !isLocked && <ErpAppLayout />}
+      {onboardingReady === true && !isLocked && <ErpAppLayout />}
     </>
   );
 }
