@@ -748,7 +748,7 @@ export class RecoveryService {
     });
 
     // 2. Generate brand new installation ID and persist to config
-    const newInstallId = `inst_${crypto.randomUUID()}`;
+    const newInstallId = crypto.randomUUID();
     const installFilePath = path.join(getConfigDir(), '.installation-id');
     try {
       fs.writeFileSync(installFilePath, newInstallId, { encoding: 'utf-8', mode: 0o600 });

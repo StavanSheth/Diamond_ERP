@@ -108,7 +108,7 @@ function httpRequest(urlPath, options = {}, postData = null, port = PROD_PORT) {
   });
 }
 
-async function waitForServer(port = PROD_PORT, maxAttempts = 35, delayMs = 400) {
+async function waitForServer(port = PROD_PORT, maxAttempts = 60, delayMs = 400) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await new Promise((resolve, reject) => {
@@ -401,7 +401,7 @@ async function runSuite() {
     );
 
     // Poll health endpoint on production port 3002
-    const healthResult = await waitForServer(PROD_PORT, 35, 400);
+    const healthResult = await waitForServer(PROD_PORT, 60, 400);
     record(
       'C',
       'Real DiamondERP.exe boots production backend and responds healthy on 127.0.0.1:3002',

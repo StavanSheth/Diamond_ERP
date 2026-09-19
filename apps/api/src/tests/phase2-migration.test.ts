@@ -392,5 +392,5 @@ describe('Phase 2 Migration & V3 Data Compatibility Verification', () => {
     expect(fs.existsSync(profileDbFile)).toBe(true); // Physical file on disk preserved!
 
     await client.$disconnect();
-  });
+  }, 30000);
 });

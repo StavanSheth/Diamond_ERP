@@ -16,7 +16,7 @@
     "build:client": "npm run build --workspace=@diamond-erp/api-client",
     "build:api": "npm run build --workspace=@diamond-erp/api",
     "build:web": "npm run build --workspace=@diamond-erp/web",
-    "build:prod": "npm run clean && npm run build:contracts && npm run build:utils && npm run build:client && npm run build:api && npm run build:web && npm run verify:packaging",
+    "build:prod": "npm run clean && npm run build:contracts && npm run build:utils && npm run build:client && npm run build:api && npm run build:web && npm run stage:windows && npm run verify:packaging",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

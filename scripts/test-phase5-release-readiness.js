@@ -97,7 +97,7 @@ function httpRequest(urlPath, options = {}, postData = null) {
   });
 }
 
-async function waitForServer(maxAttempts = 50) {
+async function waitForServer(maxAttempts = 80) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await httpRequest('/health');

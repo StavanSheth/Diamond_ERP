@@ -27,7 +27,8 @@ describe('Phase 5 — Reinstall Detection & Multi-Choice Preservation Engine', (
     const newInstall = await recoveryService.startFreshInstallation();
 
     expect(newInstall).toBeDefined();
-    expect(newInstall.installationId).toMatch(/^inst_/);
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    expect(uuidRegex.test(newInstall.installationId)).toBe(true);
     expect(newInstall.lifecycleState).toBe('APP_SETUP');
 
     // Invariant: Previous physical database file must remain 100% untouched on disk!
