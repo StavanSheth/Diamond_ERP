@@ -113,11 +113,53 @@ export interface AttachDatabaseRequest {
   confirmAttachment: boolean;
 }
 
+export interface CreateBusinessUserResponseDto {
+  success: boolean;
+  user: any;
+  provisioningContext: {
+    userId: string;
+    installationId: string;
+  };
+}
+
 export interface CreateDatabaseRequest {
   displayName: string;
   profileCode?: string;
   profileName?: string;
   userId?: string;
+  provisioningOperationId?: string;
+}
+
+export type ProvisioningOperationStatus =
+  | 'PENDING'
+  | 'DESTINATION_RESERVED'
+  | 'FILE_CREATED'
+  | 'DATABASE_VALIDATED'
+  | 'PRISTINE_VALIDATED'
+  | 'CONTROL_RECORDS_CREATED'
+  | 'RUNTIME_REGISTERED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'COMPENSATING'
+  | 'COMPENSATED'
+  | 'RECOVERABLE';
+
+export interface ProvisioningOperationDto {
+  id: string;
+  operationId: string;
+  installationId: string;
+  userId: string;
+  profileCode: string;
+  targetPath: string;
+  status: ProvisioningOperationStatus;
+  requestHash: string;
+  databaseId?: string | null;
+  profileId?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
 }
 
 export interface ProvisionDatabaseResultDto {
@@ -129,6 +171,7 @@ export interface ProvisionDatabaseResultDto {
   schemaVersion: number;
   status: DatabaseStatus;
   isPristine: boolean;
+  operationId?: string;
 }
 
 export interface OnboardingOperationResponse {

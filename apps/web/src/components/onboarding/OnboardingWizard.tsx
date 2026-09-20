@@ -42,6 +42,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
   const [inspectPreview, setInspectPreview] = useState<DatabaseAttachmentPreviewDto | null>(null);
   const [confirmAttach, setConfirmAttach] = useState<boolean>(false);
   const [newDbName, setNewDbName] = useState<string>('Main Company');
+  const [createdUserId, setCreatedUserId] = useState<string | null>(null);
+  const provisioningOpIdRef = React.useRef<string | null>(null);
 
   const fetchStatus = async () => {
     try {
@@ -166,6 +168,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
           return;
         }
         await api.onboarding.selectUser(selectedUserId);
+        setCreatedUserId(selectedUserId);
       } else {
         if (newPassword.length < 12) {
           setError('Password must be at least 12 characters');
@@ -177,12 +180,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
           setSubmitting(false);
           return;
         }
-        await api.onboarding.createUser({
+        const userRes = await api.onboarding.createUser({
           username: newUsername.trim(),
           password: newPassword,
           displayName: newDisplayName.trim() || newUsername.trim(),
           role: 'ADMIN',
         });
+        if (userRes?.user?.id) {
+          setCreatedUserId(userRes.user.id);
+        } else if ((userRes as any)?.provisioningContext?.userId) {
+          setCreatedUserId((userRes as any).provisioningContext.userId);
+        }
       }
       await fetchStatus();
     } catch (err: any) {
@@ -247,12 +255,23 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
       setError('Please provide a database name');
       return;
     }
+    const effectiveUserId = createdUserId || selectedUserId || status?.user?.id;
+    if (!effectiveUserId) {
+      setError('No active target user identified for database creation. Please select or create a user first.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
+      if (!provisioningOpIdRef.current) {
+        provisioningOpIdRef.current = crypto.randomUUID();
+      }
       await api.onboarding.createDatabase({
         displayName: newDbName.trim(),
+        userId: effectiveUserId,
+        provisioningOperationId: provisioningOpIdRef.current,
       });
+      provisioningOpIdRef.current = null;
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'New database creation failed');

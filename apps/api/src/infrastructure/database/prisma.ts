@@ -84,6 +84,7 @@ export interface CanonicalProfile {
 // ── Canonical Profile Registry ──────────────────────────────────────────
 // Dynamic profile registry allowing creation of any valid profile.
 const configuredProfiles = new Map<string, CanonicalProfile>();
+export const FORBIDDEN_PROFILE_NAMES = new Set(['system', 'template', 'test']);
 
 function initConfiguredProfiles() {
   const allowed = new Set<string>([
@@ -96,7 +97,7 @@ function initConfiguredProfiles() {
   }
 
   for (const code of allowed) {
-    if (PROFILE_REGEX.test(code)) {
+    if (PROFILE_REGEX.test(code) && !FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) {
       const dbPath = path.resolve(DB_DIR, `${code}.db`);
       configuredProfiles.set(code.toLowerCase(), {
         id: code.toLowerCase(),
@@ -111,9 +112,13 @@ function initConfiguredProfiles() {
   try {
     const files = fs.readdirSync(DB_DIR);
     for (const f of files) {
-      if (f.endsWith('.db') && !f.includes('-') && !f.includes('.bak') && f !== 'test.db') {
+      if (f.endsWith('.db') && !f.includes('-') && !f.includes('.bak')) {
         const code = f.replace(/\.db$/, '');
-        if (PROFILE_REGEX.test(code) && !configuredProfiles.has(code.toLowerCase())) {
+        if (
+          PROFILE_REGEX.test(code) &&
+          !FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase()) &&
+          !configuredProfiles.has(code.toLowerCase())
+        ) {
           configuredProfiles.set(code.toLowerCase(), {
             id: code.toLowerCase(),
             code,
@@ -136,6 +141,9 @@ initConfiguredProfiles();
 export function registerProfile(profile: { code: string; name?: string; dbPath?: string }): CanonicalProfile {
   if (!PROFILE_REGEX.test(profile.code)) {
     throw new Error(`Invalid profile code format: "${profile.code}". Must match ${PROFILE_REGEX}`);
+  }
+  if (FORBIDDEN_PROFILE_NAMES.has(profile.code.toLowerCase())) {
+    throw new Error(`Reserved database profile name cannot be registered as a business profile: "${profile.code}"`);
   }
 
   const key = profile.code.toLowerCase();
@@ -180,7 +188,7 @@ export function registerProfile(profile: { code: string; name?: string; dbPath?:
  * Check if a profile is configured on the server.
  */
 export function isConfiguredProfile(code: string): boolean {
-  if (!code || !PROFILE_REGEX.test(code)) return false;
+  if (!code || !PROFILE_REGEX.test(code) || FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) return false;
   getAllProfiles(); // Refresh from disk if needed
   return configuredProfiles.has(code.toLowerCase());
 }
@@ -189,7 +197,7 @@ export function isConfiguredProfile(code: string): boolean {
  * Get canonical profile metadata by code.
  */
 export function getCanonicalProfile(code: string): CanonicalProfile | undefined {
-  if (!code || !PROFILE_REGEX.test(code)) return undefined;
+  if (!code || !PROFILE_REGEX.test(code) || FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) return undefined;
   if (!configuredProfiles.has(code.toLowerCase())) {
     getAllProfiles(); // Refresh
   }
@@ -203,9 +211,13 @@ export function getAllProfiles(): string[] {
   try {
     const files = fs.readdirSync(DB_DIR);
     for (const f of files) {
-      if (f.endsWith('.db') && !f.includes('-') && !f.includes('.bak') && f !== 'test.db') {
+      if (f.endsWith('.db') && !f.includes('-') && !f.includes('.bak')) {
         const code = f.replace(/\.db$/, '');
-        if (PROFILE_REGEX.test(code) && !configuredProfiles.has(code.toLowerCase())) {
+        if (
+          PROFILE_REGEX.test(code) &&
+          !FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase()) &&
+          !configuredProfiles.has(code.toLowerCase())
+        ) {
           configuredProfiles.set(code.toLowerCase(), {
             id: code.toLowerCase(),
             code,
@@ -250,7 +262,7 @@ function createPrismaClient(dbUrl: string): PrismaClient {
 // Dedicated client for system/tenant metadata, installation lifecycle, and user auth
 const controlDbPath = getControlDbPath();
 ensureProfileDbFile(controlDbPath);
-const systemDbUrl = process.env.DATABASE_URL || `file:${controlDbPath}`;
+const systemDbUrl = `file:${controlDbPath}`;
 export const systemPrisma = createPrismaClient(systemDbUrl);
 configureSqlitePragmas(systemPrisma).catch(() => {});
 

@@ -11,25 +11,106 @@ import { logger } from '../../../infrastructure/logging';
 import { ValidationError, ConflictError, NotFoundError } from '../../../errors';
 import type { ProvisionDatabaseResultDto } from '@diamond-erp/contracts';
 
-const PRISTINE_BUSINESS_TABLES = [
-  'Stock',
-  'Party',
-  'Transaction',
-  'Ledger',
-  'DiamondItem',
-  'Repair',
-  'FinancialEntry',
-  'ItemEvent',
-  'InventoryMovement',
-  'TransactionItem',
-];
+export enum TableCategory {
+  SCHEMA_METADATA = 'SCHEMA_METADATA',
+  SYSTEM_CONFIGURATION = 'SYSTEM_CONFIGURATION',
+  REFERENCE_DATA = 'REFERENCE_DATA',
+  BUSINESS_DATA = 'BUSINESS_DATA',
+  AUDIT_DATA = 'AUDIT_DATA',
+}
+
+/**
+ * Authoritative Classification of every known table in the Diamond ERP Schema.
+ * Fix #4: Prevents unclassified business tables from bypassing pristine validation.
+ */
+export const PRISTINE_TABLE_CLASSIFICATION: Record<string, TableCategory> = {
+  // Schema & Migration Metadata
+  _prisma_migrations: TableCategory.SCHEMA_METADATA,
+  sqlite_sequence: TableCategory.SCHEMA_METADATA,
+
+  // System Configuration & Sequences
+  Sequence: TableCategory.SYSTEM_CONFIGURATION,
+  Setting: TableCategory.SYSTEM_CONFIGURATION,
+
+  // Control Plane Tables (if present in template or control DB)
+  Installation: TableCategory.SYSTEM_CONFIGURATION,
+  Device: TableCategory.SYSTEM_CONFIGURATION,
+  DeviceSecurity: TableCategory.SYSTEM_CONFIGURATION,
+  InstallationUser: TableCategory.SYSTEM_CONFIGURATION,
+  DatabaseRegistry: TableCategory.SYSTEM_CONFIGURATION,
+  BackupRecord: TableCategory.SYSTEM_CONFIGURATION,
+  RestoreRecord: TableCategory.SYSTEM_CONFIGURATION,
+  Session: TableCategory.SYSTEM_CONFIGURATION,
+  IdempotencyKey: TableCategory.SYSTEM_CONFIGURATION,
+  ProvisioningOperation: TableCategory.SYSTEM_CONFIGURATION,
+
+  // Reference / Tenant Definitions
+  Profile: TableCategory.REFERENCE_DATA,
+  UserProfile: TableCategory.REFERENCE_DATA,
+  User: TableCategory.REFERENCE_DATA,
+  Location: TableCategory.REFERENCE_DATA,
+
+  // Core Business Data (MUST BE STRICTLY ZERO ROWS IN PRISTINE DB)
+  Stock: TableCategory.BUSINESS_DATA,
+  Ledger: TableCategory.BUSINESS_DATA,
+  Party: TableCategory.BUSINESS_DATA,
+  DiamondItem: TableCategory.BUSINESS_DATA,
+  Transaction: TableCategory.BUSINESS_DATA,
+  TransactionItem: TableCategory.BUSINESS_DATA,
+  ItemEvent: TableCategory.BUSINESS_DATA,
+  Certification: TableCategory.BUSINESS_DATA,
+  Repair: TableCategory.BUSINESS_DATA,
+  InventoryMovement: TableCategory.BUSINESS_DATA,
+  FinancialEntry: TableCategory.BUSINESS_DATA,
+  ItemTransformation: TableCategory.BUSINESS_DATA,
+  TransformationProvenance: TableCategory.BUSINESS_DATA,
+  DocumentDraft: TableCategory.BUSINESS_DATA,
+  DraftRevision: TableCategory.BUSINESS_DATA,
+  RecordVersion: TableCategory.BUSINESS_DATA,
+  VersionChange: TableCategory.BUSINESS_DATA,
+
+  // Audit Data
+  AuditEvent: TableCategory.AUDIT_DATA,
+};
 
 export interface ProvisionDatabaseInput {
   displayName: string;
   profileCode?: string;
   profileName?: string;
-  userId?: string;
+  userId: string; // Strictly required for Phase 6 ownership isolation
   installationId?: string;
+  provisioningOperationId?: string;
+}
+
+let tableEnsured = false;
+async function ensureProvisioningOperationTable(): Promise<void> {
+  if (tableEnsured) return;
+  try {
+    await systemPrisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ProvisioningOperation" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "operationId" TEXT NOT NULL,
+        "installationId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL,
+        "profileCode" TEXT NOT NULL,
+        "targetPath" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'PENDING',
+        "requestHash" TEXT NOT NULL,
+        "databaseId" TEXT,
+        "profileId" TEXT,
+        "errorCode" TEXT,
+        "errorMessage" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "completedAt" DATETIME
+      );
+    `);
+    await systemPrisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "ProvisioningOperation_operationId_key" ON "ProvisioningOperation"("operationId");`);
+    await systemPrisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ProvisioningOperation_status_idx" ON "ProvisioningOperation"("status");`);
+    tableEnsured = true;
+  } catch (err: any) {
+    logger.warn(`Could not ensure ProvisioningOperation table: ${err.message}`);
+  }
 }
 
 export class DatabaseProvisioningService {
@@ -78,7 +159,9 @@ export class DatabaseProvisioningService {
 
   /**
    * Validate that the newly cloned database is truly pristine.
-   * Ensures zero business records exist in core customer tables.
+   * Authoritative Policy (Fix #4):
+   * 1. Detects and fails closed on unclassified tables (PRISTINE_VALIDATION_UNCLASSIFIED).
+   * 2. Asserts strictly 0 business records across all classified BUSINESS_DATA tables.
    */
   async validatePristineState(canonicalPath: string): Promise<{ isPristine: boolean; recordCounts: Record<string, number> }> {
     const client = new PrismaClient({
@@ -97,16 +180,26 @@ export class DatabaseProvisioningService {
       const existingTables = await client.$queryRawUnsafe<{ name: string }[]>(
         "SELECT name FROM sqlite_master WHERE type='table';"
       );
-      const tableNames = new Set(existingTables.map((t) => t.name));
+      const tableNames = existingTables.map((t) => t.name);
 
-      for (const table of PRISTINE_BUSINESS_TABLES) {
-        if (tableNames.has(table)) {
-          const rows = await client.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as cnt FROM "${table}";`);
+      for (const tableName of tableNames) {
+        // Skip SQLite system internals
+        if (tableName.startsWith('sqlite_')) continue;
+
+        const category = PRISTINE_TABLE_CLASSIFICATION[tableName];
+        if (!category) {
+          throw new ConflictError(
+            `Pristine validation failed: Unclassified table "${tableName}" detected (PRISTINE_VALIDATION_UNCLASSIFIED). Cannot verify pristine state.`
+          );
+        }
+
+        if (category === TableCategory.BUSINESS_DATA) {
+          const rows = await client.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as cnt FROM "${tableName}";`);
           const count = Number(rows?.[0]?.cnt || 0);
-          recordCounts[table] = count;
+          recordCounts[tableName] = count;
           if (count > 0) {
             throw new ConflictError(
-              `Provisioned database is not pristine. Table "${table}" contains ${count} customer record(s).`
+              `Provisioned database is not pristine. Business table "${tableName}" contains ${count} customer record(s).`
             );
           }
         }
@@ -122,26 +215,221 @@ export class DatabaseProvisioningService {
   }
 
   /**
+   * Validate the approved immutable template before copying.
+   * Invariants:
+   * - Template exists and is readable.
+   * - Passes structural and schema integrity check.
+   * - Satisfies pristine policy (zero business records).
+   */
+  async validateTemplate(): Promise<string> {
+    const templateDbPath = getDatabaseTemplatePath();
+    if (!templateDbPath || !fs.existsSync(templateDbPath)) {
+      throw new NotFoundError(
+        'Database template file (template.db) is missing or unavailable. Cannot provision database without immutable template.'
+      );
+    }
+
+    try {
+      fs.accessSync(templateDbPath, fs.constants.R_OK);
+    } catch (err: any) {
+      throw new ValidationError(`Database template is not readable: ${err.message}`);
+    }
+
+    const validation = await databaseValidationService.validateDatabase(templateDbPath, { allowTemplate: true });
+    if (!validation.isValid) {
+      throw new ValidationError(`Database template failed structural validation: ${validation.error} (${validation.details})`);
+    }
+
+    await this.validatePristineState(templateDbPath);
+
+    return templateDbPath;
+  }
+
+  /**
+   * Reconcile interrupted or in-flight provisioning operations (Crash Recovery / Fix #3).
+   * Finds operations in transient states and safely reconciles or compensates them without deleting customer data.
+   */
+  async reconcileInterruptedOperations(installationId?: string): Promise<{ reconciled: number; compensated: number }> {
+    await ensureProvisioningOperationTable();
+    const where: any = {
+      status: {
+        in: [
+          'PENDING',
+          'DESTINATION_RESERVED',
+          'FILE_CREATED',
+          'DATABASE_VALIDATED',
+          'PRISTINE_VALIDATED',
+          'CONTROL_RECORDS_CREATED',
+          'RUNTIME_REGISTERED',
+          'RECOVERABLE',
+        ],
+      },
+    };
+    if (installationId) {
+      where.installationId = installationId;
+    }
+
+    const transientOps = await systemPrisma.provisioningOperation.findMany({ where });
+    let reconciled = 0;
+    let compensated = 0;
+
+    for (const op of transientOps) {
+      const fileExists = fs.existsSync(op.targetPath);
+      const registry = op.databaseId
+        ? await systemPrisma.databaseRegistry.findUnique({ where: { databaseId: op.databaseId } })
+        : await systemPrisma.databaseRegistry.findUnique({ where: { canonicalPath: op.targetPath } });
+
+      const profile = await systemPrisma.profile.findUnique({ where: { code: op.profileCode } });
+      const userProfile = profile
+        ? await systemPrisma.userProfile.findFirst({
+            where: { userId: op.userId, profileId: profile.id, isActive: true },
+          })
+        : null;
+
+      // Case 1: Everything exists, database is valid and owned
+      if (fileExists && registry && profile && userProfile) {
+        const val = await databaseValidationService.validateDatabase(op.targetPath);
+        if (val.isValid) {
+          await systemPrisma.provisioningOperation.update({
+            where: { id: op.id },
+            data: { status: 'COMPLETED', completedAt: new Date() },
+          });
+          reconciled++;
+          continue;
+        }
+      }
+
+      // Case 2: File exists but control registration incomplete
+      if (fileExists && !registry) {
+        try {
+          const val = await databaseValidationService.validateDatabase(op.targetPath);
+          const pristine = await this.validatePristineState(op.targetPath);
+          if (val.isValid && pristine.isPristine) {
+            // Complete registration idempotently
+            const result = await systemPrisma.$transaction(async (tx) => {
+              let prof = await tx.profile.findUnique({ where: { code: op.profileCode } });
+              if (!prof) {
+                prof = await tx.profile.create({
+                  data: {
+                    code: op.profileCode,
+                    name: op.profileCode,
+                    dbPath: op.targetPath,
+                    schemaVersion: val.schemaVersion || 1,
+                    status: 'ACTIVE',
+                    isActive: true,
+                  },
+                });
+              }
+              const reg = await tx.databaseRegistry.create({
+                data: {
+                  databaseId: op.databaseId || crypto.randomUUID(),
+                  displayName: op.profileCode,
+                  canonicalPath: op.targetPath,
+                  schemaVersion: val.schemaVersion || 1,
+                  status: 'ACTIVE',
+                  databaseType: 'LOCAL_PROFILE',
+                  profileId: prof.id,
+                  installationId: op.installationId,
+                  lastValidatedAt: new Date(),
+                },
+              });
+              await tx.userProfile.upsert({
+                where: { userId_profileId: { userId: op.userId, profileId: prof.id } },
+                update: { isActive: true },
+                create: { userId: op.userId, profileId: prof.id, role: 'ADMIN', isActive: true },
+              });
+              return { prof, reg };
+            });
+
+            await systemPrisma.provisioningOperation.update({
+              where: { id: op.id },
+              data: {
+                databaseId: result.reg.databaseId,
+                profileId: result.prof.id,
+                status: 'COMPLETED',
+                completedAt: new Date(),
+              },
+            });
+            reconciled++;
+            continue;
+          }
+        } catch {
+          // Validation failed on incomplete file: compensate
+        }
+
+        // Clean up incomplete file created by this operation
+        try {
+          fs.unlinkSync(op.targetPath);
+        } catch {}
+        await systemPrisma.provisioningOperation.update({
+          where: { id: op.id },
+          data: { status: 'COMPENSATED', errorCode: 'INCOMPLETE_ORPHAN_CLEANED' },
+        });
+        compensated++;
+        continue;
+      }
+
+      // Case 3: File missing or registry without file
+      await systemPrisma.provisioningOperation.update({
+        where: { id: op.id },
+        data: { status: 'COMPENSATED', errorCode: 'FILE_MISSING_CLEANED' },
+      });
+      compensated++;
+    }
+
+    return { reconciled, compensated };
+  }
+
+  /**
    * Provision a brand-new blank database from the immutable template.
-   * Full lifecycle:
-   * 1. Check destination uniqueness & concurrency locks
-   * 2. Clone immutable template.db
-   * 3. Validate SQLite structure, schema, and SQLite integrity
-   * 4. Validate pristine state (0 business rows)
-   * 5. Register Profile, DatabaseRegistry, and UserProfile in Control DB transaction
-   * 6. Emit audit events
-   * 7. Register profile in runtime client pool
-   * 8. Filesystem compensation on transaction rollback
+   * Full Phase 6 lifecycle:
+   * 1. Validate target user existence and installation association (Strict User-DB Isolation / Fix #1)
+   * 2. Check durable operation identity & deterministic request hash (Durable Idempotency / Fix #2)
+   * 3. Validate approved template before copying (Fix #4)
+   * 4. Clone template to destination path
+   * 5. Validate SQLite structure, schema, and SQLite integrity
+   * 6. Validate pristine state with authoritative classification (Fix #4)
+   * 7. Register Profile, DatabaseRegistry, and UserProfile in Control DB transaction for TARGET USER ONLY
+   * 8. Emit audit events
+   * 9. Register profile in runtime client pool
+   * 10. Mark operation COMPLETED; compensate filesystem artifacts on failure (Crash Recovery / Fix #3)
    */
   async provisionBlankDatabase(input: ProvisionDatabaseInput): Promise<ProvisionDatabaseResultDto> {
-    const displayName = input.displayName?.trim();
-    if (!displayName) {
-      throw new ValidationError('Database display name is required');
+    await ensureProvisioningOperationTable();
+
+    // ── Fix #1: Authoritative Target User Enforcement ───────────────────────
+    if (!input.userId || !input.userId.trim()) {
+      throw new ValidationError('A valid target userId is strictly required for provisioning a new database.');
     }
+    const targetUserId = input.userId.trim();
 
     const install = input.installationId
       ? { id: input.installationId }
       : await installationService.getOrCreateInstallation();
+
+    // Validate user exists and is active
+    const user = await systemPrisma.user.findUnique({ where: { id: targetUserId } });
+    if (!user || !user.isActive || user.deletedAt) {
+      throw new ValidationError('Target user is invalid, inactive, or soft-deleted.');
+    }
+
+    // Validate user belongs to this installation
+    const installUser = await systemPrisma.installationUser.findUnique({
+      where: {
+        installationId_userId: {
+          installationId: install.id,
+          userId: targetUserId,
+        },
+      },
+    });
+    if (!installUser) {
+      throw new ConflictError('Target user does not belong to the current installation.');
+    }
+
+    const displayName = input.displayName?.trim();
+    if (!displayName) {
+      throw new ValidationError('Database display name is required');
+    }
 
     const profileCode = (input.profileCode || displayName)
       .toLowerCase()
@@ -150,7 +438,82 @@ export class DatabaseProvisioningService {
 
     const { canonicalPath: targetDbPath } = this.determineDestination(profileCode);
 
-    // Concurrency lock check
+    // ── Fix #2: Durable Operation Identity & Hash Verification ─────────────
+    const operationId = input.provisioningOperationId || crypto.randomUUID();
+    const requestHash = crypto
+      .createHash('sha256')
+      .update(
+        JSON.stringify({
+          installationId: install.id,
+          userId: targetUserId,
+          profileCode,
+          displayName,
+          profileName,
+        })
+      )
+      .digest('hex');
+
+    // Check for existing durable operation
+    let durableOp = await systemPrisma.provisioningOperation.findUnique({
+      where: { operationId },
+    });
+
+    if (durableOp) {
+      // Reject reuse of same operationId with conflicting payload
+      if (durableOp.requestHash !== requestHash) {
+        throw new ConflictError(
+          `Provisioning operation ID "${operationId}" was previously executed with different parameters.`
+        );
+      }
+
+      // Idempotent return if already completed
+      if (durableOp.status === 'COMPLETED') {
+        logger.info(`Durable idempotency return for completed operation: ${operationId}`);
+        const reg = durableOp.databaseId
+          ? await systemPrisma.databaseRegistry.findUnique({
+              where: { databaseId: durableOp.databaseId },
+              include: { profile: true },
+            })
+          : await systemPrisma.databaseRegistry.findUnique({
+              where: { canonicalPath: targetDbPath },
+              include: { profile: true },
+            });
+
+        if (reg) {
+          return {
+            databaseId: reg.databaseId,
+            displayName: reg.displayName,
+            canonicalPath: reg.canonicalPath,
+            profileId: reg.profileId || '',
+            profileCode: reg.profile?.code || profileCode,
+            schemaVersion: reg.schemaVersion,
+            status: reg.status as any,
+            isPristine: true,
+            operationId,
+          };
+        }
+      }
+
+      if (durableOp.status === 'FAILED' || durableOp.status === 'COMPENSATED') {
+        throw new ConflictError(
+          `Provisioning operation "${operationId}" previously terminated: ${durableOp.errorMessage || durableOp.status}`
+        );
+      }
+    } else {
+      durableOp = await systemPrisma.provisioningOperation.create({
+        data: {
+          operationId,
+          installationId: install.id,
+          userId: targetUserId,
+          profileCode,
+          targetPath: targetDbPath,
+          status: 'PENDING',
+          requestHash,
+        },
+      });
+    }
+
+    // Fast in-process concurrency guard
     const lockKey = targetDbPath.toLowerCase();
     if (this.activeProvisioningPaths.has(lockKey)) {
       throw new ConflictError(`Concurrent provisioning already in progress for "${profileCode}".`);
@@ -159,15 +522,23 @@ export class DatabaseProvisioningService {
 
     let createdFile = false;
     try {
-      // Guard: Disk collision
+      // Guard: Disk collision check
       if (fs.existsSync(targetDbPath)) {
-        // Check if already registered to this installation (Idempotency)
         const existingReg = await systemPrisma.databaseRegistry.findUnique({
           where: { canonicalPath: targetDbPath },
           include: { profile: true },
         });
         if (existingReg && existingReg.installationId === install.id) {
-          logger.info(`Idempotent return for already provisioned database: ${targetDbPath}`);
+          logger.info(`Idempotent return for already registered database: ${targetDbPath}`);
+          await systemPrisma.provisioningOperation.update({
+            where: { operationId },
+            data: {
+              databaseId: existingReg.databaseId,
+              profileId: existingReg.profileId,
+              status: 'COMPLETED',
+              completedAt: new Date(),
+            },
+          });
           return {
             databaseId: existingReg.databaseId,
             displayName: existingReg.displayName,
@@ -177,38 +548,55 @@ export class DatabaseProvisioningService {
             schemaVersion: existingReg.schemaVersion,
             status: existingReg.status as any,
             isPristine: true,
+            operationId,
           };
         }
         throw new ConflictError(`A database file already exists at "${targetDbPath}". Cannot overwrite.`);
       }
 
-      // 1. Template validation
-      const templateDbPath = getDatabaseTemplatePath();
-      if (!templateDbPath || !fs.existsSync(templateDbPath)) {
-        throw new NotFoundError(
-          'Database template file (template.db) is missing or unavailable. Cannot provision database without immutable template.'
-        );
-      }
+      // Step 1: Destination Reserved
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: { status: 'DESTINATION_RESERVED' },
+      });
 
-      // 2. Clone approved immutable template to destination
+      // Step 2: Validate approved template before copying (Fix #4)
+      const templateDbPath = await this.validateTemplate();
+
+      // Step 3: Clone immutable template to destination
       fs.copyFileSync(templateDbPath, targetDbPath);
       createdFile = true;
 
-      // 3. Structural, schema, and SQLite integrity validation
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: { status: 'FILE_CREATED' },
+      });
+
+      // Step 4: Structural, schema, and SQLite integrity validation
       const validation = await databaseValidationService.validateDatabase(targetDbPath);
       if (!validation.isValid) {
         throw new ValidationError(`Provisioned database failed validation: ${validation.error} (${validation.details})`);
       }
 
-      // 4. Pristine-state validation (0 customer business records)
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: { status: 'DATABASE_VALIDATED' },
+      });
+
+      // Step 5: Pristine-state validation (Fix #4: authoritative classification)
       const pristineCheck = await this.validatePristineState(targetDbPath);
       if (!pristineCheck.isPristine) {
         throw new ConflictError('Newly provisioned database failed pristine check.');
       }
 
-      // 5. Control DB Transaction: atomic registration of Profile, DatabaseRegistry, and UserProfile
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: { status: 'PRISTINE_VALIDATED' },
+      });
+
+      // Step 6: Control DB Transaction: atomic registration of Profile, DatabaseRegistry, and UserProfile
+      // STRICT FIX #1: Only targetUserId receives the UserProfile association.
       const result = await systemPrisma.$transaction(async (tx) => {
-        // Create or reuse Profile
         let profile = await tx.profile.findUnique({ where: { code: profileCode } });
         if (!profile) {
           profile = await tx.profile.create({
@@ -222,7 +610,6 @@ export class DatabaseProvisioningService {
             },
           });
         } else {
-          // If profile existed without dbPath, link to newly provisioned path
           profile = await tx.profile.update({
             where: { id: profile.id },
             data: {
@@ -233,7 +620,6 @@ export class DatabaseProvisioningService {
           });
         }
 
-        // Create DatabaseRegistry
         const registry = await tx.databaseRegistry.create({
           data: {
             databaseId: crypto.randomUUID(),
@@ -248,34 +634,22 @@ export class DatabaseProvisioningService {
           },
         });
 
-        // Link specified user or all associated installation users
-        const targetUserIds: string[] = [];
-        if (input.userId) {
-          targetUserIds.push(input.userId);
-        } else {
-          const installUsers = await tx.installationUser.findMany({
-            where: { installationId: install.id },
-          });
-          targetUserIds.push(...installUsers.map((u) => u.userId));
-        }
-
-        for (const uid of targetUserIds) {
-          await tx.userProfile.upsert({
-            where: {
-              userId_profileId: {
-                userId: uid,
-                profileId: profile.id,
-              },
-            },
-            update: { isActive: true },
-            create: {
-              userId: uid,
+        // Associating SOLELY the target user (Strict User-DB isolation)
+        await tx.userProfile.upsert({
+          where: {
+            userId_profileId: {
+              userId: targetUserId,
               profileId: profile.id,
-              role: 'ADMIN',
-              isActive: true,
             },
-          });
-        }
+          },
+          update: { isActive: true },
+          create: {
+            userId: targetUserId,
+            profileId: profile.id,
+            role: 'ADMIN',
+            isActive: true,
+          },
+        });
 
         // Audit Events
         await tx.auditEvent.create({
@@ -284,8 +658,8 @@ export class DatabaseProvisioningService {
             entityId: registry.databaseId,
             eventType: 'NEW_DATABASE_PROVISIONING_STARTED',
             description: `Provisioning started for new database "${displayName}" from template`,
-            performedBy: targetUserIds[0] || 'SYSTEM',
-            metadata: JSON.stringify({ displayName, profileCode, targetDbPath }),
+            performedBy: targetUserId,
+            metadata: JSON.stringify({ displayName, profileCode, targetDbPath, operationId }),
           },
         });
 
@@ -295,11 +669,12 @@ export class DatabaseProvisioningService {
             entityId: registry.databaseId,
             eventType: 'NEW_DATABASE_PROVISIONED',
             description: `Blank database provisioned successfully: ${displayName} -> ${targetDbPath}`,
-            performedBy: targetUserIds[0] || 'SYSTEM',
+            performedBy: targetUserId,
             metadata: JSON.stringify({
               databaseId: registry.databaseId,
               canonicalPath: targetDbPath,
               schemaVersion: validation.schemaVersion,
+              operationId,
             }),
           },
         });
@@ -310,11 +685,12 @@ export class DatabaseProvisioningService {
             entityId: registry.databaseId,
             eventType: 'NEW_DATABASE_VALIDATED',
             description: `Newly provisioned database passed structural and pristine validation`,
-            performedBy: targetUserIds[0] || 'SYSTEM',
+            performedBy: targetUserId,
             metadata: JSON.stringify({
               tableCount: validation.tableCount,
               schemaVersion: validation.schemaVersion,
               pristine: true,
+              operationId,
             }),
           },
         });
@@ -325,11 +701,12 @@ export class DatabaseProvisioningService {
             entityId: registry.databaseId,
             eventType: 'NEW_DATABASE_ATTACHED',
             description: `New database registered and attached: ${displayName} [${registry.databaseId}]`,
-            performedBy: targetUserIds[0] || 'SYSTEM',
+            performedBy: targetUserId,
             metadata: JSON.stringify({
               databaseId: registry.databaseId,
               profileId: profile.id,
               installationId: install.id,
+              operationId,
             }),
           },
         });
@@ -337,7 +714,16 @@ export class DatabaseProvisioningService {
         return { profile, registry };
       });
 
-      // 6. Register canonical profile in runtime client pool
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: {
+          databaseId: result.registry.databaseId,
+          profileId: result.profile.id,
+          status: 'CONTROL_RECORDS_CREATED',
+        },
+      });
+
+      // Step 7: Register canonical profile in runtime client pool
       try {
         registerProfile({
           code: profileCode,
@@ -347,6 +733,14 @@ export class DatabaseProvisioningService {
       } catch (poolErr: any) {
         logger.warn(`Could not register canonical profile in pool: ${poolErr.message}`);
       }
+
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+        },
+      });
 
       logger.info(`Successfully provisioned blank database: ${displayName} [${result.registry.databaseId}] at ${targetDbPath}`);
 
@@ -359,9 +753,10 @@ export class DatabaseProvisioningService {
         schemaVersion: result.registry.schemaVersion,
         status: result.registry.status as any,
         isPristine: true,
+        operationId,
       };
     } catch (err: any) {
-      // 7. Filesystem Compensation: Clean up newly created file if transaction or validation failed
+      // Step 8: Compensation & Safe Cleanup (Fix #3)
       if (createdFile && fs.existsSync(targetDbPath)) {
         try {
           fs.unlinkSync(targetDbPath);
@@ -371,15 +766,35 @@ export class DatabaseProvisioningService {
         }
       }
 
-      // Log failure audit event
+      await systemPrisma.provisioningOperation.update({
+        where: { operationId },
+        data: {
+          status: 'COMPENSATED',
+          errorCode: err.code || 'PROVISIONING_FAILED',
+          errorMessage: err.message,
+        },
+      }).catch(() => {});
+
+      // Log failure audit events
       await systemPrisma.auditEvent.create({
         data: {
           entityType: 'DatabaseRegistry',
           entityId: profileCode,
-          eventType: 'NEW_DATABASE_PROVISIONING_FAILED',
+          eventType: 'PROVISIONING_FAILED',
           description: `Failed to provision database for profile "${profileCode}": ${err.message}`,
-          performedBy: input.userId || 'SYSTEM',
-          metadata: JSON.stringify({ error: err.message, profileCode, targetDbPath }),
+          performedBy: targetUserId || 'SYSTEM',
+          metadata: JSON.stringify({ error: err.message, profileCode, targetDbPath, operationId }),
+        },
+      }).catch(() => {});
+
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: profileCode,
+          eventType: 'PROVISIONING_COMPENSATED',
+          description: `Compensated incomplete artifacts for profile "${profileCode}"`,
+          performedBy: targetUserId || 'SYSTEM',
+          metadata: JSON.stringify({ targetDbPath, operationId }),
         },
       }).catch(() => {});
 

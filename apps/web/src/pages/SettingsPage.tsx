@@ -80,6 +80,49 @@ export const SettingsPage: React.FC = () => {
   const [confirmOverwriteCheckbox, setConfirmOverwriteCheckbox] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
+  // User & Database Management State
+  const [usersList, setUsersList] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [deleteDbCheckbox, setDeleteDbCheckbox] = useState(true);
+  const [deleteUserModal, setDeleteUserModal] = useState<any | null>(null);
+
+  const fetchUsers = async () => {
+    try {
+      setLoadingUsers(true);
+      const res = await api.listUsers();
+      if (res.success && Array.isArray(res.data)) {
+        setUsersList(res.data);
+      }
+    } catch (err: any) {
+      console.warn('Failed to load users:', err.message);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (!deleteUserModal) return;
+    setDeletingUserId(deleteUserModal.id);
+    try {
+      const res = await api.deleteUser(deleteUserModal.id, deleteDbCheckbox);
+      if (res.success) {
+        alert(res.message || 'User deleted successfully.');
+        setDeleteUserModal(null);
+        await fetchUsers();
+        const profileRes = await api.getProfiles();
+        if (profileRes.success) {
+          setProfiles(profileRes.data.profiles);
+          setActiveProfile(profileRes.data.active);
+        }
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete user');
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
   const fetchBackups = async () => {
     try {
       const res = await api.backup.listBackups();
@@ -165,6 +208,7 @@ export const SettingsPage: React.FC = () => {
         setActiveProfile(profileRes.data.active);
       }
       await fetchBackups();
+      await fetchUsers();
     } catch (err: any) {
       setError(err.message || 'Failed to load settings');
     } finally {
@@ -770,37 +814,29 @@ export const SettingsPage: React.FC = () => {
                 </div>
                 
                 <div className="flex flex-col gap-md">
-                  <div className="flex items-center justify-between p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs">
+                  <div className="flex items-center justify-between p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs opacity-75">
                     <div>
-                      <h4 className="text-xs font-bold text-on-surface m-0">Auto-Sync to Google Sheets</h4>
-                      <p className="text-[11px] text-on-surface-variant m-0 mt-0.5">Automatically backup data periodically.</p>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-on-surface m-0">Auto-Sync to Google Sheets</h4>
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 rounded-full border border-amber-300">
+                          Coming Soon
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-on-surface-variant m-0 mt-0.5">
+                        Automated periodic cloud backup &amp; sync (Feature Coming Soon).
+                      </p>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
+                    <label className="relative inline-flex items-center cursor-not-allowed opacity-50" title="Coming Soon">
                       <input 
                         type="checkbox" 
                         className="sr-only peer" 
-                        checked={settings.autoSync === 'true'}
-                        onChange={e => handleChange('autoSync', e.target.checked ? 'true' : 'false')}
+                        checked={false}
+                        disabled
+                        readOnly
                       />
-                      <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                     </label>
                   </div>
-                  
-                  {settings.autoSync === 'true' && (
-                    <div className="flex flex-col gap-1 bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
-                      <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Sync Interval (Minutes)</label>
-                      <select 
-                        value={settings.syncInterval || '15'}
-                        onChange={e => handleChange('syncInterval', e.target.value)}
-                        className="w-full px-sm py-1.5 border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:border-rose-600 text-on-surface text-xs"
-                      >
-                        <option value="5">5 Minutes</option>
-                        <option value="15">15 Minutes</option>
-                        <option value="30">30 Minutes</option>
-                        <option value="60">1 Hour</option>
-                      </select>
-                    </div>
-                  )}
                   
                   <div className="p-md bg-rose-50/60 border border-rose-200 rounded-xl shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md">
                     <div>
@@ -826,6 +862,104 @@ export const SettingsPage: React.FC = () => {
                       Delete All System Data
                     </button>
                   </div>
+                </div>
+              </div>
+            </section>
+            
+            {/* ══════════════════════════════════════════════════════════ */}
+            {/* SECTION 6.5: USER & DATABASE MANAGEMENT                   */}
+            {/* ══════════════════════════════════════════════════════════ */}
+            <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+              <div className="h-1 bg-indigo-600" />
+              <div className="p-lg flex flex-col gap-md">
+                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0 shadow-2xs">
+                      <span className="material-symbols-outlined text-[18px]">manage_accounts</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                        User &amp; Database Management
+                      </h3>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        View active users, inspect database attachments, and cleanly remove users with their databases
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchUsers}
+                    disabled={loadingUsers}
+                    className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold px-2 py-1 rounded-lg border border-indigo-200 bg-white shadow-2xs"
+                  >
+                    <span className={`material-symbols-outlined text-[14px] ${loadingUsers ? 'animate-spin' : ''}`}>refresh</span>
+                    Refresh
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-sm">
+                  {loadingUsers && usersList.length === 0 ? (
+                    <div className="text-xs text-on-surface-variant p-md text-center">Loading users...</div>
+                  ) : usersList.length === 0 ? (
+                    <div className="text-xs text-on-surface-variant p-md text-center">No users found.</div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {usersList.map((usr) => {
+                        const isStavan = usr.username.toLowerCase() === 'stavan';
+                        return (
+                          <div
+                            key={usr.id}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs"
+                          >
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-on-surface">{usr.displayName}</span>
+                                <span className="text-[11px] font-mono text-slate-500">(@{usr.username})</span>
+                                <span className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-700 rounded border border-slate-200">
+                                  {usr.role}
+                                </span>
+                                {isStavan && (
+                                  <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded border border-emerald-300">
+                                    Primary Admin
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-on-surface-variant flex flex-wrap items-center gap-x-2">
+                                {usr.profiles && usr.profiles.length > 0 ? (
+                                  usr.profiles.map((p: any) => (
+                                    <span key={p.profileId} className="flex items-center gap-1 font-mono text-[10px] text-slate-600">
+                                      <span className="material-symbols-outlined text-[12px] text-slate-400">database</span>
+                                      {p.code} {p.dbPath ? `(${p.dbPath.split(/[\\/]/).pop()})` : ''}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 italic">No dedicated database assigned</span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 self-end sm:self-center">
+                              {isStavan ? (
+                                <span className="text-[11px] text-slate-400 italic px-2 py-1">Protected</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeleteUserModal(usr);
+                                    setDeleteDbCheckbox(true);
+                                  }}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors shadow-2xs"
+                                >
+                                  <span className="material-symbols-outlined text-[14px]">delete</span>
+                                  Delete User
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
@@ -1306,6 +1440,73 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <button onClick={() => setImportModalOpen(false)} className="mt-md text-on-surface-variant hover:text-on-surface font-bold">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {deleteUserModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-surface rounded-xl shadow-lg w-full max-w-md p-lg flex flex-col gap-md">
+            <div className="flex items-center gap-2 text-error">
+              <span className="material-symbols-outlined text-[24px]">warning</span>
+              <h3 className="font-title-lg font-bold">Confirm User Deletion</h3>
+            </div>
+            
+            <p className="font-body-md text-on-surface">
+              Are you sure you want to delete user <strong className="font-bold">{deleteUserModal.displayName}</strong> (<span className="font-mono">@{deleteUserModal.username}</span>)?
+            </p>
+
+            {deleteUserModal.profiles && deleteUserModal.profiles.length > 0 && (
+              <div className="p-sm bg-slate-50 border border-slate-200 rounded-lg flex flex-col gap-1 text-xs">
+                <span className="font-bold text-slate-700">Associated Profile &amp; Database:</span>
+                {deleteUserModal.profiles.map((p: any) => (
+                  <span key={p.profileId} className="font-mono text-[11px] text-slate-600">
+                    Profile: {p.code} — {p.dbPath || 'No DB file'}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-xs text-on-surface cursor-pointer p-2 rounded-lg bg-amber-50 border border-amber-200">
+              <input
+                type="checkbox"
+                checked={deleteDbCheckbox}
+                onChange={e => setDeleteDbCheckbox(e.target.checked)}
+                className="w-4 h-4 text-rose-600 rounded"
+              />
+              <span className="font-medium text-amber-900">
+                Also permanently delete dedicated SQLite database file(s) from disk
+              </span>
+            </label>
+
+            <div className="flex items-center justify-end gap-md mt-sm">
+              <button
+                type="button"
+                onClick={() => setDeleteUserModal(null)}
+                disabled={Boolean(deletingUserId)}
+                className="text-on-surface-variant hover:text-on-surface font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteUser}
+                disabled={Boolean(deletingUserId)}
+                className="bg-error hover:bg-error-container text-white px-md py-sm rounded-md font-bold text-xs transition-colors flex items-center gap-1 shadow-xs"
+              >
+                {deletingUserId ? (
+                  <>
+                    <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[14px]">delete</span>
+                    Confirm Delete
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -101,6 +101,8 @@ export const api = {
   importExcel: settingsApi.importExcel,
   getActivationStatus: settingsApi.getActivationStatus,
   activateApp: settingsApi.activateApp,
+  listUsers: settingsApi.listUsers,
+  deleteUser: settingsApi.deleteUser,
 
   // Auth
   login: authApi.login,

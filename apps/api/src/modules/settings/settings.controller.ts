@@ -20,7 +20,13 @@ export class SettingsController {
   
   getSettings = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const rows = await prisma.setting.findMany();
+      let rows: any[] = [];
+      try {
+        rows = await prisma.setting.findMany();
+      } catch (err: any) {
+        // Fallback gracefully if Setting table does not exist in current profile DB
+        rows = [];
+      }
       const settings: Record<string, string> = {};
       
       rows.forEach(r => {
@@ -1510,6 +1516,160 @@ export class SettingsController {
         success: true,
         message: 'SQLite WAL checkpoint completed successfully',
         data: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * GET /api/settings/users
+   * Lists all business users with their assigned profiles and database paths.
+   */
+  listUsers = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const users = await systemPrisma.user.findMany({
+        where: { deletedAt: null },
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+          userProfiles: {
+            where: { isActive: true },
+            include: {
+              profile: {
+                include: {
+                  databaseRegistries: {
+                    where: { status: 'ACTIVE' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const formatted = users.map((u) => {
+        const profiles = u.userProfiles.map((up) => {
+          const registry = up.profile.databaseRegistries[0];
+          return {
+            profileId: up.profile.id,
+            code: up.profile.code,
+            name: up.profile.name,
+            dbPath: registry?.canonicalPath || up.profile.dbPath || null,
+            databaseId: registry?.databaseId || null,
+          };
+        });
+
+        return {
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName,
+          role: u.role,
+          isActive: u.isActive,
+          createdAt: u.createdAt,
+          profiles,
+        };
+      });
+
+      res.json({ success: true, data: formatted });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * DELETE /api/settings/users/:userId
+   * Deletes a user and optionally their dedicated profile database file.
+   */
+  deleteUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = String(req.params.userId);
+      const deleteDatabase = req.query.deleteDatabase === 'true' || req.body?.deleteDatabase === true;
+
+      const user = (await systemPrisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          userProfiles: {
+            include: {
+              profile: {
+                include: {
+                  databaseRegistries: true,
+                },
+              },
+            },
+          },
+        },
+      })) as any;
+
+      if (!user) {
+        throw new ValidationError('User not found');
+      }
+
+      // Safeguard: Never delete the primary admin user Stavan
+      if (user.username?.toLowerCase() === 'stavan') {
+        throw new ValidationError('The primary administrator "stavan" cannot be deleted.');
+      }
+
+      const deletedDatabases: string[] = [];
+
+      // If requested, clean up dedicated profile databases owned ONLY by this user
+      if (deleteDatabase) {
+        for (const up of (user.userProfiles || [])) {
+          const profileId = up.profileId;
+          const otherAssociations = await systemPrisma.userProfile.count({
+            where: {
+              profileId,
+              userId: { not: userId },
+              isActive: true,
+            },
+          });
+
+          if (otherAssociations === 0) {
+            for (const reg of (up.profile?.databaseRegistries || [])) {
+              const dbFile = reg.canonicalPath;
+              const baseName = path.basename(dbFile).toLowerCase();
+
+              // Invariant: NEVER delete system.db, template.db, or Stavan.db!
+              if (
+                baseName !== 'system.db' &&
+                baseName !== 'template.db' &&
+                baseName !== 'stavan.db' &&
+                fs.existsSync(dbFile)
+              ) {
+                try {
+                  fs.unlinkSync(dbFile);
+                  deletedDatabases.push(dbFile);
+                  if (fs.existsSync(`${dbFile}-wal`)) fs.unlinkSync(`${dbFile}-wal`);
+                  if (fs.existsSync(`${dbFile}-shm`)) fs.unlinkSync(`${dbFile}-shm`);
+                } catch (delErr: any) {
+                  console.warn(`[SettingsController] Could not delete DB file ${dbFile}:`, delErr.message);
+                }
+              }
+
+              await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => {});
+            }
+
+            await systemPrisma.profile.delete({ where: { id: profileId } }).catch(() => {});
+          }
+        }
+      }
+
+      // Clean up relations and user
+      await systemPrisma.session.deleteMany({ where: { userId } }).catch(() => {});
+      await systemPrisma.userProfile.deleteMany({ where: { userId } }).catch(() => {});
+      await systemPrisma.installationUser.deleteMany({ where: { userId } }).catch(() => {});
+      await systemPrisma.provisioningOperation.deleteMany({ where: { userId } }).catch(() => {});
+      await systemPrisma.user.delete({ where: { id: userId } });
+
+      res.json({
+        success: true,
+        message: `User "${user.username}" deleted successfully.`,
+        deletedDatabases,
       });
     } catch (error) {
       next(error);

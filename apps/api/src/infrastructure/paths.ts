@@ -169,7 +169,11 @@ export function getControlDbPath(): string {
     return path.resolve(process.env.DIAMOND_SYSTEM_DB);
   }
   if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
-    return path.resolve(process.env.DATABASE_URL.slice(5));
+    const rawPath = process.env.DATABASE_URL.slice(5);
+    if (!path.isAbsolute(rawPath)) {
+      return path.resolve(__dirname, '../../prisma', rawPath);
+    }
+    return path.resolve(rawPath);
   }
   if (checkIsProduction() || process.env.DIAMOND_DATA_DIR) {
     return path.join(getDataDir(), 'system.db');

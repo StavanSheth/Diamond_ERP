@@ -143,5 +143,75 @@ describe('Production Remediation Verification Suite', () => {
       expect(responseData.success).toBe(true);
       expect(responseData.message).toContain('SQLite WAL checkpoint completed');
     });
+
+    it('successfully lists users and their assigned databases via SettingsController', async () => {
+      const { SettingsController } = await import('../modules/settings/settings.controller');
+      const controller = new SettingsController();
+      let responseData: any = null;
+      const mockRes: any = {
+        json: (data: any) => {
+          responseData = data;
+        },
+        status: () => mockRes,
+      };
+
+      await controller.listUsers({} as any, mockRes, (err) => {
+        if (err) throw err;
+      });
+
+      expect(responseData).toBeDefined();
+      expect(responseData.success).toBe(true);
+      expect(Array.isArray(responseData.data)).toBe(true);
+    });
+
+    it('strictly prevents deleting primary user "stavan" via SettingsController', async () => {
+      const { SettingsController } = await import('../modules/settings/settings.controller');
+      const { systemPrisma } = await import('../infrastructure/database/prisma');
+      const controller = new SettingsController();
+
+      let stavan = await systemPrisma.user.findFirst({ where: { username: 'stavan' } });
+      if (!stavan) {
+        stavan = await systemPrisma.user.create({
+          data: {
+            username: 'stavan',
+            displayName: 'Stavan',
+            passwordHash: 'dummy',
+            role: 'SUPER_ADMIN',
+          },
+        });
+      }
+
+      let errorCaught: any = null;
+      await controller.deleteUser(
+        { params: { userId: stavan.id }, query: { deleteDatabase: 'true' } } as any,
+        {} as any,
+        (err) => {
+          errorCaught = err;
+        }
+      );
+
+      expect(errorCaught).toBeDefined();
+      expect(errorCaught.message).toContain('cannot be deleted');
+    });
+
+    it('gracefully returns empty settings if table is missing or fails', async () => {
+      const { SettingsController } = await import('../modules/settings/settings.controller');
+      const controller = new SettingsController();
+      let responseData: any = null;
+      const mockRes: any = {
+        json: (data: any) => {
+          responseData = data;
+        },
+        status: () => mockRes,
+      };
+
+      await controller.getSettings({} as any, mockRes, (err) => {
+        if (err) throw err;
+      });
+
+      expect(responseData).toBeDefined();
+      expect(responseData.success).toBe(true);
+      expect(typeof responseData.data).toBe('object');
+    });
   });
 });

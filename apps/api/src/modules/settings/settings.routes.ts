@@ -40,6 +40,10 @@ export function createSettingsRouter(controller: SettingsController): Router {
   router.post('/backup', controller.backupDatabase);
   router.post('/checkpoint', controller.checkpointWAL);
 
+  // User & Database Management
+  if (controller.listUsers) router.get('/users', controller.listUsers);
+  if (controller.deleteUser) router.delete('/users/:userId', controller.deleteUser);
+
   // Factory reset
   router.post('/factory-reset', controller.factoryReset);
 

@@ -37,7 +37,7 @@ export class DatabaseValidationService {
    * Security Invariant:
    * Validation NEVER modifies, copies, migrates, renames, or deletes the target file.
    */
-  async validateDatabase(candidatePath: string): Promise<DatabaseValidationResultDto> {
+  async validateDatabase(candidatePath: string, options?: { allowTemplate?: boolean }): Promise<DatabaseValidationResultDto> {
     const pathResult = canonicalizeDatabasePath(candidatePath);
     if (!pathResult.valid) {
       return {
@@ -75,9 +75,9 @@ export class DatabaseValidationService {
       };
     }
 
-    // Guard: Reject Template Database (template.db)
+    // Guard: Reject Template Database (template.db) unless validating the template itself
     const templateDbPath = getDatabaseTemplatePath();
-    if (templateDbPath && canonicalPath.toLowerCase() === path.resolve(templateDbPath).toLowerCase()) {
+    if (!options?.allowTemplate && templateDbPath && canonicalPath.toLowerCase() === path.resolve(templateDbPath).toLowerCase()) {
       return {
         status: 'INVALID',
         canonicalPath,

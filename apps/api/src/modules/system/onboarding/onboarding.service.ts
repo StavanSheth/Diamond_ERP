@@ -150,9 +150,10 @@ export class OnboardingService {
    */
   async initializeApplication(): Promise<OnboardingStatusDto> {
     ensureAllDataDirs();
+    const install = await installationService.getOrCreateInstallation();
     backupService.cleanupPartialBackups();
     await recoveryService.reconcileInterruptedRestores();
-    const install = await installationService.getOrCreateInstallation();
+    await databaseProvisioningService.reconcileInterruptedOperations(install.id);
 
     if (install.lifecycleState === 'NOT_INITIALIZED') {
       await installationService.updateLifecycleState('APP_SETUP');
@@ -293,7 +294,14 @@ export class OnboardingService {
     password: string;
     displayName: string;
     role?: string;
-  }): Promise<{ success: boolean; user: any }> {
+  }): Promise<{
+    success: boolean;
+    user: any;
+    provisioningContext: {
+      userId: string;
+      installationId: string;
+    };
+  }> {
     const install = await installationService.getOrCreateInstallation();
     const role = input.role || 'ADMIN';
 
@@ -360,6 +368,10 @@ export class OnboardingService {
     return {
       success: true,
       user: created,
+      provisioningContext: {
+        userId: created.id,
+        installationId: install.id,
+      },
     };
   }
 
@@ -794,15 +806,28 @@ export class OnboardingService {
    * Delegated authoritatively to DatabaseProvisioningService for pristine validation & atomic compensation.
    */
   async createNewDatabase(input: CreateDatabaseRequest): Promise<{ success: boolean; registry: any }> {
+    // 1. Environmental prerequisite: template existence check
+    const templateDbPath = getDatabaseTemplatePath();
+    if (!templateDbPath || !fs.existsSync(templateDbPath)) {
+      throw new NotFoundError(
+        'Database template file (template.db) is missing or unavailable. Cannot provision database without immutable template.'
+      );
+    }
+
     const install = await installationService.getOrCreateInstallation();
 
-    // Resolve target user if not explicitly supplied
-    let targetUserId = input.userId;
+    // Fix #1: Authoritative target user resolution
+    let targetUserId = input.userId?.trim();
     if (!targetUserId) {
-      const installUser = await systemPrisma.installationUser.findFirst({
+      const latestInstallUser = await systemPrisma.installationUser.findFirst({
         where: { installationId: install.id },
+        orderBy: { createdAt: 'desc' },
       });
-      targetUserId = installUser?.userId;
+      targetUserId = latestInstallUser?.userId;
+    }
+
+    if (!targetUserId) {
+      throw new ValidationError('A valid target userId is strictly required for provisioning a new database.');
     }
 
     const provisioned = await databaseProvisioningService.provisionBlankDatabase({
@@ -811,6 +836,7 @@ export class OnboardingService {
       profileName: input.profileName,
       userId: targetUserId,
       installationId: install.id,
+      provisioningOperationId: input.provisioningOperationId,
     });
 
     // Advance to DATABASE_SETUP progressively
@@ -860,11 +886,12 @@ export class OnboardingService {
     }
 
     // 4. Business User Associated
-    const installUser = await systemPrisma.installationUser.findFirst({
+    const installUsers = await systemPrisma.installationUser.findMany({
       where: { installationId: install.id },
       include: { user: true },
     });
-    if (!installUser || !installUser.user.isActive || installUser.user.deletedAt) {
+    const activeInstallUsers = installUsers.filter((iu) => iu.user && iu.user.isActive && !iu.user.deletedAt);
+    if (activeInstallUsers.length === 0) {
       if (silent) return false;
       throw new ConflictError('Cannot mark READY: No active business user is associated with this installation.');
     }
@@ -902,6 +929,45 @@ export class OnboardingService {
       if (silent) return false;
       throw new ConflictError('Cannot mark READY: Database is not associated with an active ERP profile.');
     }
+
+    // 8. UserProfile ownership for active profile
+    const activeUserIds = activeInstallUsers.map((iu) => iu.userId);
+    const userProfile = await systemPrisma.userProfile.findFirst({
+      where: {
+        profileId: registry.profile.id,
+        userId: { in: activeUserIds },
+        isActive: true,
+      },
+    });
+    if (!userProfile) {
+      if (silent) return false;
+      throw new ConflictError('Cannot mark READY: Active business user is not associated with this database profile.');
+    }
+
+    // 9. In-flight provisioning operations must be COMPLETED
+    try {
+      const inFlightOp = await systemPrisma.provisioningOperation.findFirst({
+        where: {
+          installationId: install.id,
+          status: {
+            in: [
+              'PENDING',
+              'DESTINATION_RESERVED',
+              'FILE_CREATED',
+              'DATABASE_VALIDATED',
+              'PRISTINE_VALIDATED',
+              'CONTROL_RECORDS_CREATED',
+              'RUNTIME_REGISTERED',
+              'COMPENSATING',
+            ],
+          },
+        },
+      });
+      if (inFlightOp) {
+        if (silent) return false;
+        throw new ConflictError(`Cannot mark READY: Provisioning operation ${inFlightOp.operationId} is still in status "${inFlightOp.status}".`);
+      }
+    } catch {}
 
     return true;
   }

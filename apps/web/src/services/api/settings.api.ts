@@ -57,4 +57,16 @@ export const settingsApi = {
       body: JSON.stringify({ password }),
     });
   },
+
+  /** List all business users with their assigned profiles and databases */
+  listUsers(): Promise<{ success: boolean; data: any[] }> {
+    return request('/api/settings/users');
+  },
+
+  /** Delete a user and optionally their dedicated profile database */
+  deleteUser(userId: string, deleteDatabase = true): Promise<{ success: boolean; message?: string; deletedDatabases?: string[] }> {
+    return request(`/api/settings/users/${userId}?deleteDatabase=${deleteDatabase}`, {
+      method: 'DELETE',
+    });
+  },
 };

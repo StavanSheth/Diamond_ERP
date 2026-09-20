@@ -26,6 +26,7 @@ model Installation {
   databaseRegistries  DatabaseRegistry[]
   backups             BackupRecord[]
   restores            RestoreRecord[]
+  provisioningOperations ProvisioningOperation[]
 
   @@index([status])
   @@index([lifecycleState])
@@ -160,6 +161,36 @@ model RestoreRecord {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// NEW USER PROVISIONING & DURABLE IDEMPOTENCY (PHASE 6)
+// ═══════════════════════════════════════════════════════════════
+
+model ProvisioningOperation {
+  id              String    @id @default(uuid())
+  operationId     String    @unique // Stable durable operation UUID or idempotency key
+  installationId  String
+  userId          String
+  profileCode     String
+  targetPath      String
+  status          String    @default("PENDING") // PENDING, DESTINATION_RESERVED, FILE_CREATED, DATABASE_VALIDATED, PRISTINE_VALIDATED, CONTROL_RECORDS_CREATED, RUNTIME_REGISTERED, COMPLETED, FAILED, COMPENSATING, COMPENSATED, RECOVERABLE
+  requestHash     String
+  databaseId      String?
+  profileId       String?
+  errorCode       String?
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  completedAt     DateTime?
+
+  installation    Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([installationId])
+  @@index([userId])
+  @@index([profileCode])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════════════
 // AUTHENTICATION & AUTHORIZATION
 // ═══════════════════════════════════════════════════════════════
 
@@ -179,6 +210,7 @@ model User {
   userProfiles      UserProfile[]
   installationUsers InstallationUser[]
   sessions          Session[]
+  provisioningOperations ProvisioningOperation[]
 
   @@index([role])
 }
