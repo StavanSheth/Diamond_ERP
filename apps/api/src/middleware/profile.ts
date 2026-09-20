@@ -68,7 +68,22 @@ export function createProfileMiddleware(
         return;
       }
 
-      // Auto-register profile if not yet registered (RBAC removed: allow dynamic profiles)
+      // Cross-User Isolation (Phase 6):
+      // Non-super-admin users cannot access profiles not assigned to them
+      const authenticatedUser = (req as AuthenticatedRequest).user;
+      if (authenticatedUser && authenticatedUser.role !== 'SUPER_ADMIN') {
+        const allowedProfiles = (authenticatedUser.profiles || []).map((p) => p.toLowerCase());
+        if (allowedProfiles.length > 0 && !allowedProfiles.includes(requestedProfile.toLowerCase())) {
+          res.status(403).json({
+            success: false,
+            error: `Access denied: You do not have permission to access profile "${requestedProfile}".`,
+            code: 'PROFILE_ACCESS_DENIED',
+          });
+          return;
+        }
+      }
+
+      // Auto-register profile if not yet registered
       if (!isConfiguredProfile(requestedProfile)) {
         try {
           const { registerProfile } = require('../infrastructure/database/prisma');

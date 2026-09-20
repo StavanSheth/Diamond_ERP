@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { systemPrisma, ensureProfileDbFile } from '../../../infrastructure/database/prisma';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getDatabasesDir,
   getControlDbPath,
@@ -13,6 +13,7 @@ import { ValidationError, ConflictError, NotFoundError } from '../../../errors';
 import { installationService } from '../installation.service';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
+import { databaseProvisioningService } from '../database/database-provisioning.service';
 import { authService } from '../../auth/auth.service';
 import { deviceSecurityService } from '../../security/device-security.service';
 import { recoveryService } from '../recovery/recovery.service';
@@ -296,6 +297,18 @@ export class OnboardingService {
     const install = await installationService.getOrCreateInstallation();
     const role = input.role || 'ADMIN';
 
+    // 0. Audit event: provisioning started
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'User',
+        entityId: input.username,
+        eventType: 'NEW_USER_PROVISIONING_STARTED',
+        description: `New user provisioning started for "${input.username}"`,
+        performedBy: 'SYSTEM',
+        metadata: JSON.stringify({ username: input.username, role }),
+      },
+    }).catch(() => {});
+
     // 1. Create user in control DB using authoritative authService
     const created = await authService.createUser(
       input.username,
@@ -308,7 +321,22 @@ export class OnboardingService {
     // 2. Associate with installation
     await installationService.associateUser(install.id, created.id);
 
-    // Audit event
+    // 3. Audit events: user created and associated
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'User',
+        entityId: created.id,
+        eventType: 'NEW_USER_CREATED',
+        description: `New business user account created: "${created.username}" [${created.id}]`,
+        performedBy: created.id,
+        metadata: JSON.stringify({
+          userId: created.id,
+          username: created.username,
+          role: created.role,
+        }),
+      },
+    }).catch(() => {});
+
     await systemPrisma.auditEvent.create({
       data: {
         entityType: 'User',
@@ -763,136 +791,42 @@ export class OnboardingService {
   /**
    * Provision a brand new profile database from immutable template.db.
    * Invariant: If template.db is missing, fails immediately without creating empty DB.
+   * Delegated authoritatively to DatabaseProvisioningService for pristine validation & atomic compensation.
    */
   async createNewDatabase(input: CreateDatabaseRequest): Promise<{ success: boolean; registry: any }> {
     const install = await installationService.getOrCreateInstallation();
-    const displayName = input.displayName.trim();
-    if (!displayName) {
-      throw new ValidationError('Database display name is required');
-    }
 
-    const profileCode = (input.profileCode || displayName)
-      .toLowerCase()
-      .replace(/[^a-z0-9_]/g, '_');
-    const profileName = input.profileName || displayName;
-
-    const dbDir = path.resolve(getDatabasesDir());
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
-    }
-
-    const targetDbPath = path.resolve(dbDir, `${profileCode}.db`);
-    if (fs.existsSync(targetDbPath)) {
-      throw new ConflictError(`A database file with code "${profileCode}" already exists at ${targetDbPath}.`);
-    }
-
-    // 1. Filesystem operation: copy from immutable template.db
-    let createdFile = false;
-    try {
-      ensureProfileDbFile(targetDbPath);
-      createdFile = true;
-
-      // 2. Validate newly provisioned database
-      const validation = await databaseValidationService.validateDatabase(targetDbPath);
-      if (!validation.isValid) {
-        throw new Error(`Provisioned database validation failed: ${validation.details}`);
-      }
-
-      // 3. Register in control DB
-      const result = await systemPrisma.$transaction(async (tx) => {
-        let profile = await tx.profile.findUnique({ where: { code: profileCode } });
-        if (!profile) {
-          profile = await tx.profile.create({
-            data: {
-              code: profileCode,
-              name: profileName,
-              dbPath: targetDbPath,
-              schemaVersion: validation.schemaVersion || 1,
-              status: 'ACTIVE',
-              isActive: true,
-            },
-          });
-        }
-
-        const registry = await tx.databaseRegistry.create({
-          data: {
-            databaseId: crypto.randomUUID(),
-            displayName,
-            canonicalPath: targetDbPath,
-            schemaVersion: validation.schemaVersion || 1,
-            status: 'ACTIVE',
-            databaseType: 'LOCAL_PROFILE',
-            profileId: profile.id,
-            installationId: install.id,
-            lastValidatedAt: new Date(),
-          },
-        });
-
-        // Link all associated users
-        const installUsers = await tx.installationUser.findMany({
-          where: { installationId: install.id },
-        });
-        for (const installUser of installUsers) {
-          await tx.userProfile.upsert({
-            where: {
-              userId_profileId: {
-                userId: installUser.userId,
-                profileId: profile.id,
-              },
-            },
-            update: { isActive: true },
-            create: {
-              userId: installUser.userId,
-              profileId: profile.id,
-              role: 'ADMIN',
-              isActive: true,
-            },
-          });
-        }
-
-        // Audit event
-        await tx.auditEvent.create({
-          data: {
-            entityType: 'DatabaseRegistry',
-            entityId: registry.databaseId,
-            eventType: 'DATABASE_CREATED',
-            description: `New database created from template: ${displayName} -> ${targetDbPath}`,
-            performedBy: installUsers[0]?.userId || 'SYSTEM',
-            metadata: JSON.stringify({
-              targetDbPath,
-              databaseId: registry.databaseId,
-              profileId: profile.id,
-              installationId: install.id,
-            }),
-          },
-        });
-
-        return { profile, registry };
+    // Resolve target user if not explicitly supplied
+    let targetUserId = input.userId;
+    if (!targetUserId) {
+      const installUser = await systemPrisma.installationUser.findFirst({
+        where: { installationId: install.id },
       });
-
-      logger.info(`Provisioned new database: ${result.registry.displayName} [${result.registry.databaseId}]`);
-
-      // Advance to DATABASE_SETUP progressively
-      const freshInstall = await installationService.getOrCreateInstallation();
-      if (freshInstall.lifecycleState === 'DATABASE_DISCOVERY') {
-        await installationService.updateLifecycleState('DATABASE_VALIDATION');
-      }
-      const currentValid = await installationService.getOrCreateInstallation();
-      if (currentValid.lifecycleState === 'DATABASE_VALIDATION') {
-        await installationService.updateLifecycleState('DATABASE_SETUP');
-      }
-
-      return {
-        success: true,
-        registry: result.registry,
-      };
-    } catch (err) {
-      // Compensation: remove incomplete new file if DB registration failed
-      if (createdFile && fs.existsSync(targetDbPath)) {
-        try { fs.unlinkSync(targetDbPath); } catch {}
-      }
-      throw err;
+      targetUserId = installUser?.userId;
     }
+
+    const provisioned = await databaseProvisioningService.provisionBlankDatabase({
+      displayName: input.displayName,
+      profileCode: input.profileCode,
+      profileName: input.profileName,
+      userId: targetUserId,
+      installationId: install.id,
+    });
+
+    // Advance to DATABASE_SETUP progressively
+    const freshInstall = await installationService.getOrCreateInstallation();
+    if (freshInstall.lifecycleState === 'DATABASE_DISCOVERY') {
+      await installationService.updateLifecycleState('DATABASE_VALIDATION');
+    }
+    const currentValid = await installationService.getOrCreateInstallation();
+    if (currentValid.lifecycleState === 'DATABASE_VALIDATION') {
+      await installationService.updateLifecycleState('DATABASE_SETUP');
+    }
+
+    return {
+      success: true,
+      registry: provisioned,
+    };
   }
 
   /**
@@ -993,6 +927,20 @@ export class OnboardingService {
         }),
       },
     });
+
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'Installation',
+        entityId: install.id,
+        eventType: 'NEW_USER_PROVISIONING_COMPLETED',
+        description: `New user provisioning workflow completed. Installation ${install.installationId} is now READY.`,
+        performedBy: 'SYSTEM',
+        metadata: JSON.stringify({
+          installationId: install.installationId,
+          completedAt: new Date().toISOString(),
+        }),
+      },
+    }).catch(() => {});
 
     return this.getOnboardingState();
   }

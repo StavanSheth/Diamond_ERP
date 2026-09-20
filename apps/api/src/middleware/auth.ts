@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService, AuthenticatedUser, ROLES } from '../modules/auth/auth.service';
 import { RequestWithId } from './request-id';
-import { systemPrisma, getAllProfiles } from '../infrastructure/database/prisma';
+import { systemPrisma, getAllProfiles, defaultProfile } from '../infrastructure/database/prisma';
 import { logger } from '../infrastructure/logging';
 import { config } from '../config';
 
@@ -116,8 +116,13 @@ export async function authenticate(
       }
     }
 
-    // All users have access to all profiles (RBAC removed)
-    const authorizedProfiles: string[] = getAllProfiles();
+    // User-Profile Isolation:
+    // Non-super-admin users are strictly scoped to their assigned profiles in userProfiles.
+    // SUPER_ADMIN has access to all registered profiles.
+    const userProfileCodes = user.userProfiles?.filter((up) => up.isActive).map((up) => up.profile.code) || [];
+    const authorizedProfiles: string[] = user.role === ROLES.SUPER_ADMIN
+      ? Array.from(new Set([...userProfileCodes, ...getAllProfiles()]))
+      : (userProfileCodes.length > 0 ? userProfileCodes : [defaultProfile]);
 
     (req as AuthenticatedRequest).user = {
       id: user.id,

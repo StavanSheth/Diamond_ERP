@@ -117,6 +117,18 @@ export interface CreateDatabaseRequest {
   displayName: string;
   profileCode?: string;
   profileName?: string;
+  userId?: string;
+}
+
+export interface ProvisionDatabaseResultDto {
+  databaseId: string;
+  displayName: string;
+  canonicalPath: string;
+  profileId: string;
+  profileCode: string;
+  schemaVersion: number;
+  status: DatabaseStatus;
+  isPristine: boolean;
 }
 
 export interface OnboardingOperationResponse {
@@ -124,3 +136,4 @@ export interface OnboardingOperationResponse {
   message?: string;
   data?: any;
 }
+

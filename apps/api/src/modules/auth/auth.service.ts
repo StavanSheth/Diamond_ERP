@@ -245,8 +245,18 @@ export class AuthService {
       }
     }
 
-    // Accessible profiles: all profiles accessible to all users (RBAC removed)
-    const accessibleProfiles: string[] = getAllProfiles();
+    // User-Profile Isolation:
+    // Non-super-admin users are strictly scoped to their assigned profiles in userProfiles.
+    // SUPER_ADMIN has access to all registered profiles.
+    const userProfileCodes = user.userProfiles?.filter((up) => up.isActive).map((up) => up.profile.code) || [];
+    const sortedUserProfiles = [
+      ...userProfileCodes.filter((p) => p.toLowerCase() !== defaultProfile.toLowerCase()),
+      ...userProfileCodes.filter((p) => p.toLowerCase() === defaultProfile.toLowerCase()),
+    ];
+    const accessibleProfiles: string[] = user.role === ROLES.SUPER_ADMIN
+      ? Array.from(new Set([...sortedUserProfiles, ...getAllProfiles()]))
+      : (sortedUserProfiles.length > 0 ? sortedUserProfiles : [defaultProfile]);
+    const activeProfile = sortedUserProfiles[0] || accessibleProfiles[0] || defaultProfile;
 
     // Generate unique session identifier
     const sessionId = crypto.randomUUID();
@@ -301,7 +311,7 @@ export class AuthService {
         displayName: user.displayName,
         role: user.role,
         profiles: accessibleProfiles,
-        activeProfile: accessibleProfiles[0] || defaultProfile,
+        activeProfile,
       },
     };
   }
@@ -346,8 +356,8 @@ export class AuthService {
         },
       });
 
-      // Ensure default profiles exist in Profile table
-      const targetProfiles = profileCodes && profileCodes.length > 0 ? profileCodes : [defaultProfile];
+      // Ensure default profiles exist in Profile table (only default when profileCodes is omitted)
+      const targetProfiles = profileCodes !== undefined ? profileCodes : [defaultProfile];
       for (const pCode of targetProfiles) {
         let prof = await tx.profile.findUnique({ where: { code: pCode } });
         if (!prof) {
