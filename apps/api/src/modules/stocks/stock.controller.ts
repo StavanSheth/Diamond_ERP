@@ -55,6 +55,7 @@ export class StockController {
           take,
           include: {
             ledgers: true,
+            locations: true,
             diamondItems: {
               where: diamondWhere,
               select: {
@@ -128,8 +129,11 @@ export class StockController {
           stockStatus = 'PARTIAL';
         }
 
-        // Bug #1/#2: Derive location and classification from actual diamond items
+        // Bug #1/#2: Derive location and classification from actual diamond items & stock locations
         const locationNames = new Set<string>();
+        for (const loc of (stock as any).locations || []) {
+          if (loc.name) locationNames.add(loc.name);
+        }
         const shapes = new Map<string, number>();
         const colors = new Map<string, number>();
         const clarities = new Map<string, number>();
@@ -218,6 +222,16 @@ export class StockController {
         }
       });
 
+      // Persist storage location if provided
+      let locationRecord: any = null;
+      if (req.body.location) {
+        locationRecord = await prisma.location.upsert({
+          where: { stockId_name: { stockId: stock.id, name: req.body.location } },
+          create: { stockId: stock.id, name: req.body.location, locationType: 'WAREHOUSE' },
+          update: {},
+        });
+      }
+
       // Insert initial diamond item using a transaction
       // Only if caratWeight is provided > 0
       if (req.body.caratWeight && req.body.caratWeight > 0) {
@@ -236,6 +250,7 @@ export class StockController {
               ratePerCarat: parseFloat(req.body.caratRate || 0),
               totalValue: parseFloat(req.body.caratWeight) * parseFloat(req.body.caratRate || 0),
               itemAction: TransactionItemAction.IN as any,
+              toLocationId: locationRecord?.id,
               shape: req.body.shape || 'MIX',
               color: req.body.color || 'MIX',
               clarity: req.body.clarity || 'MIX',
@@ -275,6 +290,19 @@ export class StockController {
         where: { id },
         data: dataToUpdate
       });
+
+      if (req.body.location) {
+        const loc = await prisma.location.upsert({
+          where: { stockId_name: { stockId: id, name: req.body.location } },
+          create: { stockId: id, name: req.body.location, locationType: 'WAREHOUSE' },
+          update: {},
+        });
+        await prisma.diamondItem.updateMany({
+          where: { stockId: id },
+          data: { locationId: loc.id }
+        });
+      }
+
       res.json({ success: true, data: stock });
     } catch (error) {
       next(error);

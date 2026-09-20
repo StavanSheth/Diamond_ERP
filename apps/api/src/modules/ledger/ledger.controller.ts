@@ -181,8 +181,12 @@ export class LedgerController {
         if (ledger) targetLedgerId = ledger.id;
       }
       if (!targetLedgerId) {
-        const firstLedger = await prisma.ledger.findFirst();
-        if (firstLedger) targetLedgerId = firstLedger.id;
+        res.status(400).json({
+          success: false,
+          error: 'A valid ledgerId or stockId is required to post a transaction.',
+          code: 'LEDGER_REQUIRED'
+        });
+        return;
       }
 
       // Server-authoritative calculation using Decimal

@@ -37,9 +37,9 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [selectedStockForReport, setSelectedStockForReport] = useState<any>(null);
   
-  // Initialize status from URL if present
+  // Initialize status from URL if present (comma-separated supported)
   const initialStatus = searchParams.get('status');
-  const [statusFilter, setStatusFilter] = useState<string[]>(initialStatus ? [initialStatus] : []);
+  const [statusFilter, setStatusFilter] = useState<string[]>(initialStatus ? initialStatus.split(',').filter(Boolean) : []);
   
   // Advanced filters
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -207,7 +207,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
     setStatusFilter((prev) => {
       const next = prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status];
       if (next.length > 0) {
-        searchParams.set('status', next[0]); // Simplification for URL
+        searchParams.set('status', next.join(','));
       } else {
         searchParams.delete('status');
       }
