@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import prisma from '../../infrastructure/database/prisma';
 import { Prisma } from '@prisma/client';
 import { transactionService } from '../transactions/transaction.service';
+import { computeLedgerBalances } from './ledger.service';
 
 export class LedgerController {
 
@@ -110,61 +111,52 @@ export class LedgerController {
         })
       ]);
 
-      // Calculate cumulative opening balance from older historical transactions (transactions older than current page)
-      let currentCaratBalance = new Prisma.Decimal(0);
-      let currentValueBalance = new Prisma.Decimal(0);
-
-      const olderItems = await prisma.transactionItem.findMany({
-        where: { transaction: whereCondition },
-        select: {
-          itemAction: true,
-          carat: true,
-          totalValue: true,
-        },
-        orderBy: { transaction: { transactionDate: 'desc' } },
-        skip: skip + take, // all items older than the current page window
-      });
-
-      olderItems.forEach(item => {
-        if (item.itemAction === 'IN') {
-          currentCaratBalance = currentCaratBalance.add(item.carat || 0);
-          currentValueBalance = currentValueBalance.add(item.totalValue || 0);
-        } else if (item.itemAction === 'OUT') {
-          currentCaratBalance = currentCaratBalance.sub(item.carat || 0);
-          currentValueBalance = currentValueBalance.sub(item.totalValue || 0);
+      // Bug #14: Incorporate ledger opening balance
+      let openingCarat = 0;
+      let openingValue = 0;
+      if (stockId) {
+        const ledger = await prisma.ledger.findFirst({
+          where: { stockId: stockId as string },
+          select: { openingCarat: true, openingValue: true },
+        });
+        if (ledger) {
+          openingCarat = Number(ledger.openingCarat || 0);
+          openingValue = Number(ledger.openingValue || 0);
         }
-      });
-      
-      const transactionsAsc = [...transactions].reverse();
-      const balancedTransactions = transactionsAsc.map(txn => {
-        let caratIn = new Prisma.Decimal(0);
-        let caratOut = new Prisma.Decimal(0);
-        let valueIn = new Prisma.Decimal(0);
-        let valueOut = new Prisma.Decimal(0);
-        
+      }
+
+      // Bug #13: Fix pagination balance — query older TRANSACTIONS (not items) to get correct carry-forward
+      const olderTransactions = skip > 0 ? await prisma.transaction.findMany({
+        where: whereCondition,
+        include: { items: { select: { itemAction: true, carat: true, totalValue: true } } },
+        orderBy: { transactionDate: 'desc' },
+        skip: take, // skip current page, get everything after
+        // Note: we need ALL older transactions for correct balance, not just one page
+      }) : [];
+
+      // Compute carry-forward from older transactions
+      let carryForwardCarat = new Prisma.Decimal(openingCarat);
+      let carryForwardValue = new Prisma.Decimal(openingValue);
+      // olderTransactions are desc; process them in asc order
+      [...olderTransactions].reverse().forEach(txn => {
         txn.items.forEach(item => {
           if (item.itemAction === 'IN') {
-            caratIn = caratIn.add(item.carat || 0);
-            valueIn = valueIn.add(item.totalValue || 0);
+            carryForwardCarat = carryForwardCarat.add(item.carat || 0);
+            carryForwardValue = carryForwardValue.add(item.totalValue || 0);
           } else if (item.itemAction === 'OUT') {
-            caratOut = caratOut.add(item.carat || 0);
-            valueOut = valueOut.add(item.totalValue || 0);
+            carryForwardCarat = carryForwardCarat.sub(item.carat || 0);
+            carryForwardValue = carryForwardValue.sub(item.totalValue || 0);
           }
         });
-
-        currentCaratBalance = currentCaratBalance.add(caratIn).sub(caratOut);
-        currentValueBalance = currentValueBalance.add(valueIn).sub(valueOut);
-        return {
-          ...txn,
-          caratIn: caratIn.toNumber(),
-          caratOut: caratOut.toNumber(),
-          valueIn: valueIn.toNumber(),
-          valueOut: valueOut.toNumber(),
-          balanceCarat: currentCaratBalance.toNumber(),
-          balanceValue: currentValueBalance.toNumber(),
-          itemsCount: txn.items.length
-        };
       });
+
+      // Use shared service for balance computation on current page
+      const transactionsAsc = [...transactions].reverse();
+      const balancedTransactions = computeLedgerBalances(
+        transactionsAsc as any,
+        carryForwardCarat.toNumber(),
+        carryForwardValue.toNumber(),
+      );
 
       // Reverse back for display (newest first)
       balancedTransactions.reverse();
@@ -294,15 +286,25 @@ export class LedgerController {
 
   /**
    * PUT /api/ledger/:id
-   * Historical posted accounting transactions are immutable.
+   * Allow edits for non-COMPLETED transactions. COMPLETED transactions are immutable.
    */
-  update = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  update = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      res.status(400).json({
-        success: false,
-        error: 'Posted accounting transactions are immutable. To correct balances, please post a reversal or correcting transaction.',
-        code: 'TRANSACTION_IMMUTABLE'
-      });
+      const txn = await prisma.transaction.findUnique({ where: { id: req.params.id as string } });
+      if (!txn) {
+        res.status(404).json({ success: false, error: 'Transaction not found' });
+        return;
+      }
+      if (txn.status === 'COMPLETED') {
+        res.status(400).json({
+          success: false,
+          error: 'Completed accounting transactions are immutable. To correct balances, please post a reversal or correcting transaction.',
+          code: 'TRANSACTION_IMMUTABLE'
+        });
+        return;
+      }
+      const updated = await transactionService.updateTransaction(txn.id, req.body);
+      res.json({ success: true, data: updated });
     } catch (err) {
       next(err);
     }

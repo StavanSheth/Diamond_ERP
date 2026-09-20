@@ -8,6 +8,7 @@ import { ValidationError, AuthenticationError } from '../../errors';
 import { sanitizeForSpreadsheet } from '@diamond-erp/shared-utils';
 import { getBackupsDir, getDatabasesDir } from '../../infrastructure/paths';
 import { userLifecycleService } from '../system/user-lifecycle/user-lifecycle.service';
+import { computeLedgerBalances, generateStockColorMap } from '../ledger/ledger.service';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
   const sanitized: Record<string, any> = {};
@@ -82,9 +83,12 @@ export class SettingsController {
     }
   };
 
-  exportExcel = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  exportExcel = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // Task 21: Streaming exports
+      const arrangement = (['default', 'party', 'stock'].includes(req.query.arrangement as string))
+        ? (req.query.arrangement as string)
+        : 'default';
+
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="diamond_inventory_export.xlsx"');
 
@@ -93,8 +97,71 @@ export class SettingsController {
         useStyles: true,
         useSharedStrings: true
       });
-      
-      // 1. Diamonds Sheet (Chunked/Batched Streaming to prevent OOM)
+
+      // Pre-fetch all data needed
+      const [stocks, locations, parties, ledgers, certificates, repairs, transactions, settingsRows] = await Promise.all([
+        prisma.stock.findMany({ orderBy: { stockCode: 'asc' } }),
+        prisma.location.findMany({ include: { stock: true, parentLocation: true }, orderBy: { name: 'asc' } }),
+        prisma.party.findMany({ orderBy: { partyCode: 'asc' } }),
+        prisma.ledger.findMany({
+          include: { stock: true, transactions: { include: { items: true } } },
+          orderBy: { name: 'asc' },
+        }),
+        prisma.certification.findMany({ include: { diamondItem: true } }),
+        prisma.repair.findMany({ include: { diamondItem: true, vendor: true } }),
+        prisma.transaction.findMany({
+          include: {
+            party: true,
+            ledger: { include: { stock: true } },
+            items: { include: { diamondItem: true } },
+          },
+          orderBy: { transactionDate: 'desc' },
+        }),
+        (async () => { try { return await prisma.setting.findMany(); } catch { return []; } })(),
+      ]);
+
+      // Stock color mapping
+      const stockColorMap = generateStockColorMap(stocks as any);
+      const getStockFill = (stockCode: string | undefined): ExcelJS.FillPattern | undefined => {
+        if (!stockCode) return undefined;
+        const hex = stockColorMap.get(stockCode);
+        if (!hex) return undefined;
+        return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex } };
+      };
+
+      // Active profile
+      const activeProfileSetting = settingsRows.find((s: any) => s.key === 'ACTIVE_PROFILE');
+      const activeProfile = activeProfileSetting?.value || 'Default';
+
+      // ═══════════════════════════════════════════════════════════
+      // 0. Export Summary Sheet
+      // ═══════════════════════════════════════════════════════════
+      const summarySheet = workbook.addWorksheet('Export Summary');
+      summarySheet.columns = [
+        { header: 'Property', key: 'property', width: 25 },
+        { header: 'Value', key: 'value', width: 40 },
+      ];
+      summarySheet.addRow({ property: 'Export Date', value: new Date().toISOString().split('T')[0] });
+      summarySheet.addRow({ property: 'Exported From', value: 'Diamond ERP v3.0' });
+      summarySheet.addRow({ property: 'Active Profile', value: activeProfile });
+      summarySheet.addRow({ property: 'Arrangement', value: arrangement === 'party' ? 'Party-wise' : arrangement === 'stock' ? 'Stock-wise' : 'Default Ledger Order' });
+      summarySheet.addRow({ property: 'Total Stocks', value: stocks.length });
+      summarySheet.addRow({ property: 'Total Transactions', value: transactions.length });
+      summarySheet.addRow({ property: 'Total Parties', value: parties.length });
+      summarySheet.addRow({ property: '', value: '' });
+      summarySheet.addRow({ property: 'Stock Color Legend', value: '' });
+
+      for (const [code, hex] of stockColorMap.entries()) {
+        const stockName = stocks.find(s => s.stockCode === code)?.name || code;
+        const row = summarySheet.addRow({ property: code, value: stockName });
+        row.getCell('property').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex } } as ExcelJS.Fill;
+        row.getCell('value').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex } } as ExcelJS.Fill;
+      }
+      summarySheet.commit();
+
+      // ═══════════════════════════════════════════════════════════
+      // 1. Diamonds Sheet (Chunked/Batched)
+      // ═══════════════════════════════════════════════════════════
       const diamondSheet = workbook.addWorksheet('Diamonds');
       diamondSheet.columns = [
         { header: 'Item Code', key: 'itemCode', width: 15 },
@@ -129,7 +196,7 @@ export class SettingsController {
         });
         if (batch.length === 0) break;
         batch.forEach(d => {
-          diamondSheet.addRow(sanitizeSpreadsheetRow({
+          const row = diamondSheet.addRow(sanitizeSpreadsheetRow({
             itemCode: d.itemCode,
             displayName: d.displayName,
             stockCode: d.stock?.stockCode,
@@ -149,38 +216,20 @@ export class SettingsController {
             ratePerCarat: Number(d.ratePerCarat),
             currentValue: Number(d.currentValue),
             status: d.status,
-          })).commit();
+          }));
+          const fill = getStockFill(d.stock?.stockCode);
+          if (fill) {
+            row.getCell('stockCode').fill = fill;
+          }
+          row.commit();
         });
         diamondSkip += batch.length;
       }
       diamondSheet.commit();
 
-      const [stocks, locations, parties, ledgers, certificates, repairs, transactions] = await Promise.all([
-        prisma.stock.findMany({ orderBy: { stockCode: 'asc' } }),
-        prisma.location.findMany({ include: { stock: true, parentLocation: true }, orderBy: { name: 'asc' } }),
-        prisma.party.findMany({ orderBy: { partyCode: 'asc' } }),
-        prisma.ledger.findMany({
-          include: {
-            stock: true,
-            transactions: {
-              include: { items: true },
-            },
-          },
-          orderBy: { name: 'asc' },
-        }),
-        prisma.certification.findMany({ include: { diamondItem: true } }),
-        prisma.repair.findMany({ include: { diamondItem: true, vendor: true } }),
-        prisma.transaction.findMany({
-          include: {
-            party: true,
-            ledger: { include: { stock: true } },
-            items: { include: { diamondItem: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-        }),
-      ]);
-
+      // ═══════════════════════════════════════════════════════════
       // 2. Stocks Sheet
+      // ═══════════════════════════════════════════════════════════
       const stockSheet = workbook.addWorksheet('Stocks');
       stockSheet.columns = [
         { header: 'Stock Code', key: 'stockCode', width: 15 },
@@ -188,10 +237,20 @@ export class SettingsController {
         { header: 'Currency', key: 'currency', width: 10 },
         { header: 'Is Active', key: 'isActive', width: 10 },
       ];
-      stocks.forEach(s => stockSheet.addRow(sanitizeSpreadsheetRow(s)).commit());
+      stocks.forEach(s => {
+        const row = stockSheet.addRow(sanitizeSpreadsheetRow(s));
+        const fill = getStockFill(s.stockCode);
+        if (fill) {
+          row.getCell('stockCode').fill = fill;
+          row.getCell('name').fill = fill;
+        }
+        row.commit();
+      });
       stockSheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 3. Locations Sheet
+      // ═══════════════════════════════════════════════════════════
       const locationSheet = workbook.addWorksheet('Locations');
       locationSheet.columns = [
         { header: 'Location Name', key: 'name', width: 25 },
@@ -200,16 +259,20 @@ export class SettingsController {
         { header: 'Parent Location', key: 'parentLocation', width: 25 },
       ];
       locations.forEach(loc => {
-        locationSheet.addRow(sanitizeSpreadsheetRow({
+        const row = locationSheet.addRow(sanitizeSpreadsheetRow({
           name: loc.name,
           stockCode: loc.stock?.stockCode,
           locationType: loc.locationType,
           parentLocation: loc.parentLocation?.name || '',
         }));
+        const fill = getStockFill(loc.stock?.stockCode);
+        if (fill) row.getCell('stockCode').fill = fill;
       });
       locationSheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 4. Parties Sheet
+      // ═══════════════════════════════════════════════════════════
       const partySheet = workbook.addWorksheet('Parties');
       partySheet.columns = [
         { header: 'Party Code', key: 'partyCode', width: 15 },
@@ -226,7 +289,9 @@ export class SettingsController {
       })));
       partySheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 5. Ledgers Sheet with Debit, Credit & Closing Balance
+      // ═══════════════════════════════════════════════════════════
       const ledgerSheet = workbook.addWorksheet('Ledgers');
       ledgerSheet.columns = [
         { header: 'Ledger Name', key: 'name', width: 25 },
@@ -261,7 +326,7 @@ export class SettingsController {
           });
         });
 
-        ledgerSheet.addRow(sanitizeSpreadsheetRow({
+        const row = ledgerSheet.addRow(sanitizeSpreadsheetRow({
           name: l.name,
           stockCode: l.stock?.stockCode,
           ledgerType: l.ledgerType,
@@ -274,10 +339,14 @@ export class SettingsController {
           closingCarat: openingCarat + totalDebitCarat - totalCreditCarat,
           closingValue: openingValue + totalDebitValue - totalCreditValue,
         }));
+        const fill = getStockFill(l.stock?.stockCode);
+        if (fill) row.getCell('stockCode').fill = fill;
       });
       ledgerSheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 6. Certificates Sheet
+      // ═══════════════════════════════════════════════════════════
       const certSheet = workbook.addWorksheet('Certificates');
       certSheet.columns = [
         { header: 'Report Number', key: 'reportNumber', width: 20 },
@@ -295,7 +364,9 @@ export class SettingsController {
       })));
       certSheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 7. Repairs Sheet
+      // ═══════════════════════════════════════════════════════════
       const repairSheet = workbook.addWorksheet('Repairs');
       repairSheet.columns = [
         { header: 'Item Code', key: 'itemCode', width: 15 },
@@ -313,7 +384,9 @@ export class SettingsController {
       })));
       repairSheet.commit();
 
-      // 8. Transactions Sheet with Debit, Credit & Closing Balance
+      // ═══════════════════════════════════════════════════════════
+      // 8. Transactions Sheet — uses shared ledger calculation
+      // ═══════════════════════════════════════════════════════════
       const txnSheet = workbook.addWorksheet('Transactions');
       txnSheet.columns = [
         { header: 'Transaction No', key: 'transactionNo', width: 20 },
@@ -322,6 +395,7 @@ export class SettingsController {
         { header: 'Transaction Date', key: 'transactionDate', width: 20 },
         { header: 'Transaction Type', key: 'transactionType', width: 15 },
         { header: 'Party Code', key: 'partyCode', width: 15 },
+        { header: 'Party Name', key: 'partyName', width: 25 },
         { header: 'Status', key: 'status', width: 15 },
         { header: 'Reference No', key: 'referenceNo', width: 15 },
         { header: 'Remarks', key: 'remarks', width: 25 },
@@ -339,50 +413,70 @@ export class SettingsController {
         { header: 'Payment Due', key: 'paymentDue', width: 15 },
       ];
 
-      const ledgerRunningBalances: Record<string, { carat: number; value: number }> = {};
-      ledgers.forEach(l => {
-        ledgerRunningBalances[l.id] = {
-          carat: Number(l.openingCarat || 0),
-          value: Number(l.openingValue || 0),
-        };
-      });
-
-      transactions.forEach(t => {
-        let debitCarats = 0;
-        let debitValue = 0;
-        let creditCarats = 0;
-        let creditValue = 0;
-
-        t.items?.forEach(i => {
-          if (i.itemAction === 'IN') {
-            debitCarats += Number(i.carat || 0);
-            debitValue += Number(i.totalValue || 0);
-          } else if (i.itemAction === 'OUT') {
-            creditCarats += Number(i.carat || 0);
-            creditValue += Number(i.totalValue || 0);
-          }
+      // Sort transactions by arrangement then compute running balances per ledger using shared service
+      let sortedTxns = [...transactions];
+      if (arrangement === 'party') {
+        sortedTxns.sort((a, b) => {
+          const pa = a.party?.name || '';
+          const pb = b.party?.name || '';
+          if (pa !== pb) return pa.localeCompare(pb);
+          const da = a.transactionDate?.getTime() || 0;
+          const db = b.transactionDate?.getTime() || 0;
+          return da - db;
         });
+      } else if (arrangement === 'stock') {
+        sortedTxns.sort((a, b) => {
+          const sa = a.ledger?.stock?.stockCode || '';
+          const sb = b.ledger?.stock?.stockCode || '';
+          if (sa !== sb) return sa.localeCompare(sb);
+          const da = a.transactionDate?.getTime() || 0;
+          const db = b.transactionDate?.getTime() || 0;
+          return da - db;
+        });
+      }
+      // default: keep desc order from DB query
 
-        const bal = ledgerRunningBalances[t.ledgerId] || { carat: 0, value: 0 };
-        bal.carat = bal.carat + debitCarats - creditCarats;
-        bal.value = bal.value + debitValue - creditValue;
+      // Compute running balances per ledger using shared service
+      const txnsByLedger = new Map<string, typeof transactions>();
+      for (const t of sortedTxns) {
+        const lid = t.ledgerId;
+        if (!txnsByLedger.has(lid)) txnsByLedger.set(lid, []);
+        txnsByLedger.get(lid)!.push(t);
+      }
 
-        txnSheet.addRow(sanitizeSpreadsheetRow({
+      // Build balanced map: txnId → balance data
+      const balanceMap = new Map<string, { caratIn: number; caratOut: number; valueIn: number; valueOut: number; balanceCarat: number; balanceValue: number }>();
+      for (const [lid, txns] of txnsByLedger.entries()) {
+        const ledger = ledgers.find(l => l.id === lid);
+        const openCarat = Number(ledger?.openingCarat || 0);
+        const openValue = Number(ledger?.openingValue || 0);
+        // Sort ASC for balance calculation
+        const asc = [...txns].sort((a, b) => (a.transactionDate?.getTime() || 0) - (b.transactionDate?.getTime() || 0));
+        const balanced = computeLedgerBalances(asc as any, openCarat, openValue);
+        balanced.forEach(bt => {
+          balanceMap.set(bt.id, { caratIn: bt.caratIn, caratOut: bt.caratOut, valueIn: bt.valueIn, valueOut: bt.valueOut, balanceCarat: bt.balanceCarat, balanceValue: bt.balanceValue });
+        });
+      }
+
+      sortedTxns.forEach(t => {
+        const bal = balanceMap.get(t.id) || { caratIn: 0, caratOut: 0, valueIn: 0, valueOut: 0, balanceCarat: 0, balanceValue: 0 };
+        const row = txnSheet.addRow(sanitizeSpreadsheetRow({
           transactionNo: t.transactionNo,
           ledgerName: t.ledger?.name,
           stockCode: t.ledger?.stock?.stockCode,
           transactionDate: t.transactionDate ? t.transactionDate.toISOString().split('T')[0] : '',
           transactionType: t.transactionType,
           partyCode: t.party?.partyCode,
+          partyName: t.party?.name || '',
           status: t.status,
           referenceNo: t.referenceNo,
           remarks: t.remarks,
-          debitCarats,
-          debitValue,
-          creditCarats,
-          creditValue,
-          closingBalCarat: bal.carat,
-          closingBalValue: bal.value,
+          debitCarats: bal.caratIn,
+          debitValue: bal.valueIn,
+          creditCarats: bal.caratOut,
+          creditValue: bal.valueOut,
+          closingBalCarat: bal.balanceCarat,
+          closingBalValue: bal.balanceValue,
           brokeragePercentage: Number(t.brokeragePercentage || 0),
           brokerageAmount: Number(t.brokerageAmount || 0),
           brokerageType: t.brokerageType || 'INCLUSIVE',
@@ -390,13 +484,18 @@ export class SettingsController {
           paymentDone: Number(t.paymentDone || 0),
           paymentDue: Number(t.paymentDue || 0),
         }));
+        const fill = getStockFill(t.ledger?.stock?.stockCode);
+        if (fill) row.getCell('stockCode').fill = fill;
       });
       txnSheet.commit();
 
+      // ═══════════════════════════════════════════════════════════
       // 9. Transaction Items Sheet
+      // ═══════════════════════════════════════════════════════════
       const txnItemSheet = workbook.addWorksheet('Transaction Items');
       txnItemSheet.columns = [
         { header: 'Transaction No', key: 'transactionNo', width: 20 },
+        { header: 'Stock Code', key: 'stockCode', width: 15 },
         { header: 'Item Code', key: 'itemCode', width: 15 },
         { header: 'Quantity', key: 'quantity', width: 10 },
         { header: 'Carat', key: 'carat', width: 10 },
@@ -404,10 +503,11 @@ export class SettingsController {
         { header: 'Total Value', key: 'totalValue', width: 15 },
         { header: 'Item Action', key: 'itemAction', width: 12 },
       ];
-      transactions.forEach(t => {
+      sortedTxns.forEach(t => {
         t.items?.forEach(i => {
-          txnItemSheet.addRow(sanitizeSpreadsheetRow({
+          const row = txnItemSheet.addRow(sanitizeSpreadsheetRow({
             transactionNo: t.transactionNo,
+            stockCode: t.ledger?.stock?.stockCode || '',
             itemCode: i.diamondItem?.itemCode || '',
             quantity: Number(i.quantity || 1),
             carat: Number(i.carat || 0),
@@ -415,6 +515,8 @@ export class SettingsController {
             totalValue: Number(i.totalValue || 0),
             itemAction: i.itemAction || 'IN',
           }));
+          const fill = getStockFill(t.ledger?.stock?.stockCode);
+          if (fill) row.getCell('stockCode').fill = fill;
         });
       });
       txnItemSheet.commit();

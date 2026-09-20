@@ -64,6 +64,11 @@ export class StockController {
                 polish: true,
                 status: true,
                 category: true,
+                shape: true,
+                color: true,
+                clarity: true,
+                cut: true,
+                location: { select: { name: true } },
               }
             }
           }
@@ -123,18 +128,40 @@ export class StockController {
           stockStatus = 'PARTIAL';
         }
 
+        // Bug #1/#2: Derive location and classification from actual diamond items
+        const locationNames = new Set<string>();
+        const shapes = new Map<string, number>();
+        const colors = new Map<string, number>();
+        const clarities = new Map<string, number>();
+        const cuts = new Map<string, number>();
+
+        for (const item of stock.diamondItems) {
+          if ((item as any).location?.name) locationNames.add((item as any).location.name);
+          const incr = (m: Map<string, number>, v: string | null) => { if (v) m.set(v, (m.get(v) || 0) + 1); };
+          incr(shapes, (item as any).shape);
+          incr(colors, (item as any).color);
+          incr(clarities, (item as any).clarity);
+          incr(cuts, (item as any).cut);
+        }
+
+        const mode = (m: Map<string, number>, fallback: string) => {
+          if (m.size === 0) return fallback;
+          if (m.size === 1) return m.keys().next().value || fallback;
+          return 'Mixed';
+        };
+
         return {
           id: stock.id,
           name: stock.name,
           stockName: stock.name,
           ledgers: stock.ledgers,
-          reportGroup: 'Standard',
-          location: 'Vault',
-          itemType: 'Mix',
-          shape: 'Mixed',
-          cut: 'Mixed',
-          clarity: 'Mixed',
-          color: 'Mixed',
+          reportGroup: stock.diamondItems.length > 0 ? (parcelCount > singleCount ? 'Parcel' : (roughCategoryCount > 0 ? 'Rough' : 'Standard')) : 'Standard',
+          location: locationNames.size === 1 ? [...locationNames][0] : (locationNames.size > 1 ? 'Multiple' : 'Not Set'),
+          itemType: parcelCount > 0 && singleCount > 0 ? 'Mix' : (parcelCount > 0 ? 'Parcel' : (singleCount > 0 ? 'Single' : 'Mix')),
+          shape: mode(shapes, 'Mixed'),
+          cut: mode(cuts, 'Mixed'),
+          clarity: mode(clarities, 'Mixed'),
+          color: mode(colors, 'Mixed'),
           caratWeight: caratWeight,
           caratRate: caratWeight > 0 ? totalValue / caratWeight : 0,
           totalValue: totalValue,
@@ -152,7 +179,7 @@ export class StockController {
           version: 1,
           createdAt: stock.createdAt,
           updatedAt: stock.updatedAt,
-          updatedBy: 'system'
+          updatedBy: 'system' // ponytail: no updatedBy column on Stock, keep as-is
         };
       });
 

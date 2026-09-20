@@ -102,6 +102,7 @@ export const SettingsPage: React.FC = () => {
       ];
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportArrangement, setExportArrangement] = useState<'default' | 'party' | 'stock'>('default');
   const directoryInputRef = React.useRef<HTMLInputElement>(null);
 
   // Phase 5 Backup & Recovery State
@@ -1750,13 +1751,25 @@ export const SettingsPage: React.FC = () => {
                       Supports 9 comprehensive tables: <strong>Stocks</strong>, <strong>Locations</strong>, <strong>Parties</strong>, <strong>Diamonds</strong>, <strong>Certificates</strong>, <strong>Repairs</strong>, <strong>Ledgers</strong>, <strong>Transactions</strong>, and <strong>Transaction Items</strong>.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-2 border-t border-outline-variant/40">
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-outline-variant/40">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-on-surface-variant font-semibold whitespace-nowrap">Arrangement:</span>
+                      <select
+                        value={exportArrangement}
+                        onChange={(e) => setExportArrangement(e.target.value as 'default' | 'party' | 'stock')}
+                        className="h-7 px-2 border border-outline-variant/60 rounded-lg bg-white text-xs font-medium focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary shadow-2xs"
+                      >
+                        <option value="default">Default Ledger Order</option>
+                        <option value="party">Party-wise</option>
+                        <option value="stock">Stock-wise</option>
+                      </select>
+                    </div>
                     <button 
                       type="button"
                       onClick={async () => {
                         setExporting(true);
                         try {
-                          const blob = await api.exportExcel();
+                          const blob = await api.exportExcel({ arrangement: exportArrangement });
                           downloadBlob(blob, `Diamond_Inventory_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
                         } catch(e: any) {
                           alert(e.message || 'Export failed');

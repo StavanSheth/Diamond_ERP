@@ -484,8 +484,8 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-inverse-surface/40 backdrop-blur-sm p-md overflow-y-auto">
-      <div className="bg-[#F8F9FA] w-full max-w-5xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] flex flex-col my-auto border border-outline-variant animate-fade-in-up">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-inverse-surface/40 backdrop-blur-sm p-md overflow-hidden">
+      <div className="bg-[#F8F9FA] w-full max-w-5xl max-h-[calc(100vh-2rem)] rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] flex flex-col border border-outline-variant animate-fade-in-up overflow-hidden">
         {/* Header */}
         <TransactionHeader 
           isEdit={!!editTransactionData} 
@@ -497,7 +497,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ open, stockI
         />
 
         {/* Body */}
-        <div className="flex-1 p-xl flex flex-col gap-xl overflow-y-auto max-h-[75vh]">
+        <div className="flex-1 min-h-0 p-xl flex flex-col gap-xl overflow-y-auto overscroll-contain">
           {error && (
             <div className="bg-error-container border border-error/20 rounded-xl px-md py-sm flex items-center gap-sm shadow-sm">
               <span className="material-symbols-outlined text-error text-[20px]">error</span>

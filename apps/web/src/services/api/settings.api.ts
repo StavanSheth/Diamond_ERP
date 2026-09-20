@@ -35,8 +35,10 @@ export const settingsApi = {
   },
 
   /** Export data to Excel */
-  exportExcel(): Promise<Blob> {
-    return requestBlob('/api/settings/export/excel');
+  exportExcel(options?: { arrangement?: 'default' | 'party' | 'stock' }): Promise<Blob> {
+    const params = options?.arrangement && options.arrangement !== 'default'
+      ? `?arrangement=${options.arrangement}` : '';
+    return requestBlob(`/api/settings/export/excel${params}`);
   },
 
   /** Download Excel template */
