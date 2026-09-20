@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, AuthenticationError } from '../../errors';
 import { sanitizeForSpreadsheet } from '@diamond-erp/shared-utils';
 import { getBackupsDir, getDatabasesDir } from '../../infrastructure/paths';
+import { userLifecycleService } from '../system/user-lifecycle/user-lifecycle.service';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
   const sanitized: Record<string, any> = {};
@@ -1659,97 +1660,30 @@ export class SettingsController {
   };
 
   /**
+   * POST /api/settings/users/:userId/deactivate
+   * Deactivates a user, strictly preserving their database and registry.
+   */
+  deactivateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = String(req.params.userId || req.params.id);
+      const performedBy = (req as any).user?.username || 'system';
+      const result = await userLifecycleService.deactivateUser(userId, performedBy);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
    * DELETE /api/settings/users/:userId
-   * Deletes a user and optionally their dedicated profile database file.
+   * Soft-deletes a user, strictly preserving their database and registry.
    */
   deleteUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const userId = String(req.params.userId);
-      const deleteDatabase = req.query.deleteDatabase === 'true' || req.body?.deleteDatabase === true;
-
-      const user = (await systemPrisma.user.findUnique({
-        where: { id: userId },
-        include: {
-          userProfiles: {
-            include: {
-              profile: {
-                include: {
-                  databaseRegistries: true,
-                },
-              },
-            },
-          },
-        },
-      })) as any;
-
-      if (!user) {
-        throw new ValidationError('User not found');
-      }
-
-      // Safeguard: Never delete the primary admin user Stavan
-      if (user.username?.toLowerCase() === 'stavan') {
-        throw new ValidationError('The primary administrator "stavan" cannot be deleted.');
-      }
-
-      const deletedDatabases: string[] = [];
-
-      // If requested, clean up dedicated profile databases owned ONLY by this user
-      if (deleteDatabase) {
-        for (const up of (user.userProfiles || [])) {
-          const profileId = up.profileId;
-          const otherAssociations = await systemPrisma.userProfile.count({
-            where: {
-              profileId,
-              userId: { not: userId },
-              isActive: true,
-            },
-          });
-
-          if (otherAssociations === 0) {
-            for (const reg of (up.profile?.databaseRegistries || [])) {
-              const dbFile = reg.canonicalPath;
-              const baseName = path.basename(dbFile).toLowerCase();
-
-              // Invariant: NEVER delete system.db, template.db, or Stavan.db!
-              if (
-                baseName !== 'system.db' &&
-                baseName !== 'template.db' &&
-                baseName !== 'stavan.db' &&
-                fs.existsSync(dbFile)
-              ) {
-                try {
-                  fs.unlinkSync(dbFile);
-                  deletedDatabases.push(dbFile);
-                  if (fs.existsSync(`${dbFile}-wal`)) fs.unlinkSync(`${dbFile}-wal`);
-                  if (fs.existsSync(`${dbFile}-shm`)) fs.unlinkSync(`${dbFile}-shm`);
-                } catch (delErr: any) {
-                  console.warn(`[SettingsController] Could not delete DB file ${dbFile}:`, delErr.message);
-                }
-              }
-
-              await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => {});
-            }
-
-            if (up.profile?.code) {
-              removeConfiguredProfile(up.profile.code);
-            }
-            await systemPrisma.profile.delete({ where: { id: profileId } }).catch(() => {});
-          }
-        }
-      }
-
-      // Clean up relations and user
-      await systemPrisma.session.deleteMany({ where: { userId } }).catch(() => {});
-      await systemPrisma.userProfile.deleteMany({ where: { userId } }).catch(() => {});
-      await systemPrisma.installationUser.deleteMany({ where: { userId } }).catch(() => {});
-      await systemPrisma.provisioningOperation.deleteMany({ where: { userId } }).catch(() => {});
-      await systemPrisma.user.delete({ where: { id: userId } });
-
-      res.json({
-        success: true,
-        message: `User "${user.username}" deleted successfully.`,
-        deletedDatabases,
-      });
+      const userId = String(req.params.userId || req.params.id);
+      const performedBy = (req as any).user?.username || 'system';
+      const result = await userLifecycleService.deleteUser(userId, performedBy);
+      res.json(result);
     } catch (error) {
       next(error);
     }

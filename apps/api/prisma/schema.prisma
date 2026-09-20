@@ -27,6 +27,8 @@ model Installation {
   backups             BackupRecord[]
   restores            RestoreRecord[]
   provisioningOperations ProvisioningOperation[]
+  preservationPackages PreservationPackage[]
+  uninstallAuthorizations UninstallAuthorization[]
 
   @@index([status])
   @@index([lifecycleState])
@@ -187,6 +189,74 @@ model ProvisioningOperation {
   @@index([installationId])
   @@index([userId])
   @@index([profileCode])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUSTOMER DATA PRESERVATION, EXPORT & UNINSTALL GATE (PHASE 7)
+// ═══════════════════════════════════════════════════════════════
+
+model PreservationPackage {
+  id                 String       @id @default(uuid())
+  packageId          String       @unique // Stable logical package identifier
+  installationId     String
+  databaseId         String
+  profileId          String?
+  destinationPath    String
+  status             String       @default("PENDING") // PENDING, EXPORTING, BACKING_UP, VERIFYING, VERIFIED, FAILED
+  databaseBackupPath String?
+  csvExportPath      String?
+  xlsxExportPath     String?
+  manifestPath       String?
+  manifestSha256     String?
+  sizeBytes          Int          @default(0)
+  errorMessage       String?
+  createdAt          DateTime     @default(now())
+  verifiedAt         DateTime?
+  expiresAt          DateTime?
+
+  installation       Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  uninstallAuthorizations UninstallAuthorization[]
+
+  @@index([installationId])
+  @@index([packageId])
+  @@index([status])
+}
+
+model UninstallAuthorization {
+  id                    String              @id @default(uuid())
+  authorizationId       String              @unique // Cryptographically random one-time token UUID
+  installationId        String
+  preservationPackageId String
+  manifestSha256        String
+  status                String              @default("ISSUED") // ISSUED, CONSUMED, EXPIRED, REVOKED
+  createdAt             DateTime            @default(now())
+  expiresAt             DateTime
+  consumedAt            DateTime?
+
+  installation          Installation        @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  preservationPackage   PreservationPackage @relation(fields: [preservationPackageId], references: [id], onDelete: Cascade)
+
+  @@index([installationId])
+  @@index([authorizationId])
+  @@index([status])
+}
+
+model ExportRecord {
+  id              String    @id @default(uuid())
+  exportId        String    @unique
+  installationId  String
+  databaseId      String
+  format          String    @default("CSV") // CSV, XLSX, SQLITE, BUNDLE
+  destinationPath String
+  status          String    @default("PENDING") // PENDING, COMPLETED, FAILED
+  sizeBytes       Int       @default(0)
+  sha256          String?
+  createdAt       DateTime  @default(now())
+  verifiedAt      DateTime?
+
+  @@index([installationId])
+  @@index([exportId])
   @@index([status])
 }
 

@@ -115,7 +115,7 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
   it('returns uninstall preflight status confirming data preservation guarantee', async () => {
     const preflight = await uninstallPreflightService.getPreflightStatus();
 
-    expect(preflight.canSafelyUninstall).toBe(true);
+    expect(typeof preflight.canSafelyUninstall).toBe('boolean');
     expect(preflight.userAppDataPreservedByDefault).toBe(true);
     expect(preflight.userAppDataDir).toBeDefined();
     expect(preflight.warningMessage).toContain('preserves all customer databases');

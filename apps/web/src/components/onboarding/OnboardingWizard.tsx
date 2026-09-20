@@ -719,10 +719,15 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                           <div className="overflow-hidden">
                             <div className="font-medium text-slate-200 truncate">{c.displayName}</div>
                             <div className="text-slate-400 font-mono text-[11px] truncate">{c.canonicalPath}</div>
-                            <div className="flex gap-2 mt-1">
+                            <div className="flex flex-wrap gap-2 mt-1">
                               <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300">
                                 {c.source === 'REGISTRY' ? 'Registered database' : 'Local Diamond ERP directory'}
                               </span>
+                              {(c as any).ownershipStatus === 'DELETED_USER' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] bg-amber-900/60 text-amber-300 font-bold border border-amber-500/40">
+                                  Preserved: Deleted User {(c as any).previousOwner ? `(@${(c as any).previousOwner})` : ''}
+                                </span>
+                              )}
                               <span className="px-2 py-0.5 rounded text-[10px] bg-indigo-900/40 text-indigo-300">
                                 {c.status}
                               </span>
@@ -796,6 +801,11 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                       )}
                       {inspectPreview.schemaVersion > 0 && (
                         <div>Schema Version: <span className="text-indigo-400">{inspectPreview.schemaVersion}</span></div>
+                      )}
+                      {(inspectPreview as any).previousOwner && (
+                        <div className="col-span-2 text-amber-300 bg-amber-950/40 p-1.5 rounded border border-amber-800/60 font-semibold">
+                          Preserved Customer Data: Originally owned by @{(inspectPreview as any).previousOwner}
+                        </div>
                       )}
                     </div>
 

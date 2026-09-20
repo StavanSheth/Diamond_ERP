@@ -43,6 +43,7 @@ export function createSettingsRouter(controller: SettingsController): Router {
 
   // User & Database Management
   if (controller.listUsers) router.get('/users', controller.listUsers);
+  if (controller.deactivateUser) router.post('/users/:userId/deactivate', controller.deactivateUser);
   if (controller.deleteUser) router.delete('/users/:userId', controller.deleteUser);
 
   // Factory reset

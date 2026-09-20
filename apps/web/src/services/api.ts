@@ -18,6 +18,7 @@ export * from './api/security.api';
 export * from './api/onboarding.api';
 export * from './api/backup.api';
 export * from './api/recovery.api';
+export * from './api/uninstall.api';
 
 import { stocksApi, buildFilterQueryString } from './api/stocks.api';
 import { ledgerApi } from './api/ledger.api';
@@ -31,6 +32,7 @@ import { securityApi } from './api/security.api';
 import { onboardingApi } from './api/onboarding.api';
 import { backupApi } from './api/backup.api';
 import { recoveryApi } from './api/recovery.api';
+import { uninstallApi } from './api/uninstall.api';
 import { AdvancedItemFilters } from '../types/stock';
 
 export { buildFilterQueryString, type AdvancedItemFilters };
@@ -120,4 +122,7 @@ export const api = {
   // Phase 5 Data Preservation & Recovery
   backup: backupApi,
   recovery: recoveryApi,
+
+  // Phase 7 Uninstall Safety Gate & Preservation
+  uninstall: uninstallApi,
 };

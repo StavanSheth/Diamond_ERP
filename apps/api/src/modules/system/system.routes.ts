@@ -7,6 +7,7 @@ import { backupRoutes } from './backup';
 import { recoveryRoutes } from './recovery';
 import { exportRoutes } from './export';
 import { uninstallRoutes } from './uninstall';
+import { userLifecycleRoutes } from './user-lifecycle';
 import { authenticate } from '../../middleware/auth';
 import { authorize } from '../../middleware/authorize';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
@@ -36,6 +37,7 @@ router.use('/security', securityRoutes);
 router.use('/backup', backupRoutes);
 router.use('/export', exportRoutes);
 router.use('/uninstall', uninstallRoutes);
+router.use('/users', userLifecycleRoutes);
 
 // ── Protected administrative system routes ─────────────────────────────
 // System routes manage Control DB resources (Installation, Device, DatabaseRegistry)

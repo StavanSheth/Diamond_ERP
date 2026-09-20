@@ -6,6 +6,7 @@ import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getBackupsDir,
   getDatabasesDir,
+  getExportDir,
   getControlDbPath,
   getDatabaseTemplatePath,
   getRestoreStagingDir,
@@ -33,6 +34,103 @@ export class RecoveryService {
   private activeRestoreLocks: Set<string> = new Set<string>();
 
   /**
+   * Resolves ownership status and previous owner metadata for recovery candidates.
+   */
+  private async resolveOwnership(
+    canonical: string,
+    manifest: any,
+    currentInstall: any
+  ): Promise<{
+    ownershipStatus: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'DELETED_USER' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
+    previousOwnerUsername?: string | null;
+    previousOwnerDisplayName?: string | null;
+  }> {
+    let ownershipStatus: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'DELETED_USER' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE' = 'UNKNOWN_SOURCE';
+    let previousOwnerUsername: string | null = null;
+    let previousOwnerDisplayName: string | null = null;
+
+    // 1. Check database registry and profiles
+    const reg = await systemPrisma.databaseRegistry.findFirst({
+      where: { canonicalPath: canonical },
+      include: {
+        profile: {
+          include: {
+            userProfiles: {
+              include: { user: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (reg?.profile) {
+      const activeUsers = reg.profile.userProfiles.filter((up) => up.isActive && up.user.isActive && !up.user.deletedAt);
+      const deletedUsers = reg.profile.userProfiles.filter((up) => !up.isActive || !up.user.isActive || up.user.deletedAt);
+
+      if (activeUsers.length === 0 && deletedUsers.length > 0) {
+        ownershipStatus = 'DELETED_USER';
+        previousOwnerUsername = deletedUsers[0].user.username;
+        previousOwnerDisplayName = deletedUsers[0].user.displayName;
+        return { ownershipStatus, previousOwnerUsername, previousOwnerDisplayName };
+      }
+    }
+
+    // 2. Check if candidate filename or manifest matches a profile with deleted users
+    const candidateBase = path.basename(canonical, path.extname(canonical));
+    const profile = await systemPrisma.profile.findFirst({
+      where: {
+        OR: [
+          { code: candidateBase },
+          { dbPath: { contains: candidateBase } },
+        ],
+      },
+      include: {
+        userProfiles: {
+          include: { user: true },
+        },
+      },
+    });
+
+    if (profile) {
+      const activeUsers = profile.userProfiles.filter((up) => up.isActive && up.user.isActive && !up.user.deletedAt);
+      const deletedUsers = profile.userProfiles.filter((up) => !up.isActive || !up.user.isActive || up.user.deletedAt);
+
+      if (activeUsers.length === 0 && deletedUsers.length > 0) {
+        ownershipStatus = 'DELETED_USER';
+        previousOwnerUsername = deletedUsers[0].user.username;
+        previousOwnerDisplayName = deletedUsers[0].user.displayName;
+        return { ownershipStatus, previousOwnerUsername, previousOwnerDisplayName };
+      }
+    }
+
+    // 3. Installation match
+    if (manifest?.installationId) {
+      if (manifest.installationId === currentInstall.installationId) {
+        ownershipStatus = 'CURRENT_INSTALLATION';
+      } else {
+        ownershipStatus = 'PREVIOUS_INSTALLATION';
+      }
+    } else if (reg) {
+      if (reg.installationId === currentInstall.id) {
+        ownershipStatus = 'CURRENT_INSTALLATION';
+      } else {
+        ownershipStatus = 'PREVIOUS_INSTALLATION';
+      }
+    } else {
+      const databasesDir = getDatabasesDir().toLowerCase();
+      const backupsDir = getBackupsDir().toLowerCase();
+      const candidateDir = path.dirname(canonical).toLowerCase();
+      if (candidateDir === databasesDir || candidateDir === backupsDir) {
+        ownershipStatus = 'UNKNOWN_SOURCE';
+      } else {
+        ownershipStatus = 'EXTERNAL_SOURCE';
+      }
+    }
+
+    return { ownershipStatus, previousOwnerUsername, previousOwnerDisplayName };
+  }
+
+  /**
    * Bounded discovery of recovery candidates from backups, databases, and registry.
    * NEVER walks whole drives recursively.
    */
@@ -48,6 +146,7 @@ export class RecoveryService {
     const roots: Array<{ dir: string; source: 'BACKUPS_DIR' | 'DATABASES_DIR' | 'EXTERNAL' }> = [
       { dir: getBackupsDir(), source: 'BACKUPS_DIR' },
       { dir: getDatabasesDir(), source: 'DATABASES_DIR' },
+      { dir: getExportDir(), source: 'BACKUPS_DIR' },
     ];
 
     if (additionalDirectory && fs.existsSync(additionalDirectory)) {
@@ -57,6 +156,8 @@ export class RecoveryService {
       }
     }
 
+    const currentInstall = await installationService.getOrCreateInstallation();
+
     // 1. Scan bounded directories (top-level only, no recursive drive walking)
     for (const root of roots) {
       if (!fs.existsSync(root.dir)) continue;
@@ -64,13 +165,29 @@ export class RecoveryService {
       try {
         const files = fs.readdirSync(root.dir);
         for (const file of files) {
-          if (file.endsWith('.partial')) continue;
-          if (!file.endsWith('.db') && !file.endsWith('.sqlite')) continue;
-
           const fullPath = path.join(root.dir, file);
+          let targetPath = fullPath;
+
+          // Check if directory is a preservation bundle
+          try {
+            if (fs.statSync(fullPath).isDirectory()) {
+              const nestedDb = path.join(fullPath, 'database_backup.db');
+              if (fs.existsSync(nestedDb)) {
+                targetPath = nestedDb;
+              } else {
+                continue;
+              }
+            } else {
+              if (file.endsWith('.partial')) continue;
+              if (!file.endsWith('.db') && !file.endsWith('.sqlite')) continue;
+            }
+          } catch {
+            continue;
+          }
+
           let canonical: string;
           try {
-            const pathRes = canonicalizeDatabasePath(fullPath);
+            const pathRes = canonicalizeDatabasePath(targetPath);
             if (!pathRes.valid) continue;
             canonical = pathRes.canonicalPath;
           } catch {
@@ -111,9 +228,15 @@ export class RecoveryService {
             details = validation.details || null;
           }
 
+          const ownershipInfo = await this.resolveOwnership(canonical, manifest, currentInstall);
+          if (ownershipInfo.ownershipStatus === 'DELETED_USER' && suitability === 'VALID') {
+            suitability = 'REQUIRES_CONFIRMATION';
+            details = `Belonged to deactivated/deleted user "${ownershipInfo.previousOwnerUsername}". Explicit reconnection required.`;
+          }
+
           candidates.push({
             candidateId: manifest?.backupId || `cand_${crypto.randomUUID()}`,
-            displayName: manifest?.database?.displayName || file,
+            displayName: manifest?.database?.displayName || path.basename(canonical),
             canonicalPath: canonical,
             source: root.source,
             status,
@@ -125,6 +248,9 @@ export class RecoveryService {
             schemaVersion,
             profileCode: manifest?.database?.profileCode || null,
             details,
+            ownershipStatus: ownershipInfo.ownershipStatus,
+            previousOwnerUsername: ownershipInfo.previousOwnerUsername,
+            previousOwnerDisplayName: ownershipInfo.previousOwnerDisplayName,
           });
         }
       } catch (dirErr) {
@@ -186,38 +312,12 @@ export class RecoveryService {
 
     // Ownership classification
     const currentInstall = await installationService.getOrCreateInstallation();
-    let ownershipStatus: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE' = 'UNKNOWN_SOURCE';
-
-    if (manifest?.installationId) {
-      if (manifest.installationId === currentInstall.installationId) {
-        ownershipStatus = 'CURRENT_INSTALLATION';
-      } else {
-        ownershipStatus = 'PREVIOUS_INSTALLATION';
-      }
-    } else {
-      const reg = await systemPrisma.databaseRegistry.findFirst({
-        where: { canonicalPath: canonical },
-      });
-      if (reg) {
-        if (reg.installationId === currentInstall.id) {
-          ownershipStatus = 'CURRENT_INSTALLATION';
-        } else {
-          ownershipStatus = 'PREVIOUS_INSTALLATION';
-        }
-      } else {
-        const databasesDir = getDatabasesDir().toLowerCase();
-        const backupsDir = getBackupsDir().toLowerCase();
-        const candidateDir = path.dirname(canonical).toLowerCase();
-        if (candidateDir === databasesDir || candidateDir === backupsDir) {
-          ownershipStatus = 'UNKNOWN_SOURCE';
-        } else {
-          ownershipStatus = 'EXTERNAL_SOURCE';
-        }
-      }
-    }
+    const ownershipInfo = await this.resolveOwnership(canonical, manifest, currentInstall);
+    let ownershipStatus = ownershipInfo.ownershipStatus;
 
     if (
       (ownershipStatus === 'PREVIOUS_INSTALLATION' ||
+        ownershipStatus === 'DELETED_USER' ||
         ownershipStatus === 'EXTERNAL_SOURCE' ||
         ownershipStatus === 'UNKNOWN_SOURCE') &&
       suitability === 'VALID'
@@ -236,11 +336,13 @@ export class RecoveryService {
       profileName: manifest?.database?.displayName || null,
       status: validation.status,
       suitability,
+      ownershipStatus,
+      previousOwnerUsername: ownershipInfo.previousOwnerUsername,
+      previousOwnerDisplayName: ownershipInfo.previousOwnerDisplayName,
       hasManifest,
       manifest,
       sqliteIntegrity: validation.integrityCheck,
       details: validation.details,
-      ownershipStatus,
       conflictReason,
     };
   }

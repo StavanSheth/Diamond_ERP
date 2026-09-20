@@ -29,6 +29,9 @@ export interface RecoveryCandidateDto {
   schemaVersion?: number;
   profileCode?: string | null;
   details?: string | null;
+  ownershipStatus?: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'DELETED_USER' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
+  previousOwnerUsername?: string | null;
+  previousOwnerDisplayName?: string | null;
 }
 
 export interface RecoveryCandidateDiscoveryResponseDto {
@@ -51,7 +54,9 @@ export interface RecoveryInspectionPreviewDto {
   profileName?: string | null;
   status: DatabaseStatus;
   suitability: DatabaseSuitability;
-  ownershipStatus?: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
+  ownershipStatus?: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'DELETED_USER' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
+  previousOwnerUsername?: string | null;
+  previousOwnerDisplayName?: string | null;
   hasManifest: boolean;
   manifest?: any;
   sqliteIntegrity: string;

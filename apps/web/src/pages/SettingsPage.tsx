@@ -114,12 +114,24 @@ export const SettingsPage: React.FC = () => {
   const [confirmOverwriteCheckbox, setConfirmOverwriteCheckbox] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
-  // User & Database Management State
+  // User & Database Management State (Phase 7 Lifecycle)
   const [usersList, setUsersList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
-  const [deleteDbCheckbox, setDeleteDbCheckbox] = useState(true);
+  const [deactivatingUserId, setDeactivatingUserId] = useState<string | null>(null);
   const [deleteUserModal, setDeleteUserModal] = useState<any | null>(null);
+
+  // Phase 7 Uninstall Safety Gate & Preservation State
+  const [preflightData, setPreflightData] = useState<any | null>(null);
+  const [loadingPreflight, setLoadingPreflight] = useState(false);
+  const [customDestinationDir, setCustomDestinationDir] = useState('');
+  const [preservationPackage, setPreservationPackage] = useState<any | null>(null);
+  const [creatingPreservation, setCreatingPreservation] = useState(false);
+  const [verifyingPreservation, setVerifyingPreservation] = useState(false);
+  const [uninstallAuth, setUninstallAuth] = useState<any | null>(null);
+  const [authorizingUninstall, setAuthorizingUninstall] = useState(false);
+  const [preservationMessage, setPreservationMessage] = useState<string | null>(null);
+  const [preservationError, setPreservationError] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     try {
@@ -135,13 +147,27 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleDeactivateUser = async (user: any) => {
+    if (!window.confirm(`Deactivate user @${user.username}? Their account will be deactivated, but their business database and data will remain preserved and discoverable.`)) return;
+    setDeactivatingUserId(user.id);
+    try {
+      const res = await api.uninstall.deactivateUser(user.id);
+      alert(res.message || 'User deactivated successfully.');
+      await fetchUsers();
+    } catch (err: any) {
+      alert(err.message || 'Failed to deactivate user');
+    } finally {
+      setDeactivatingUserId(null);
+    }
+  };
+
   const handleDeleteUser = async () => {
     if (!deleteUserModal) return;
     setDeletingUserId(deleteUserModal.id);
     try {
-      const res = await api.deleteUser(deleteUserModal.id, deleteDbCheckbox);
+      const res = await api.uninstall.deleteUser(deleteUserModal.id);
       if (res.success) {
-        alert(res.message || 'User deleted successfully.');
+        alert(res.message || 'User deleted successfully. Their database is preserved and remains discoverable for recovery.');
         setDeleteUserModal(null);
         await fetchUsers();
         const profileRes = await api.getProfiles();
@@ -154,6 +180,76 @@ export const SettingsPage: React.FC = () => {
       alert(err.message || 'Failed to delete user');
     } finally {
       setDeletingUserId(null);
+    }
+  };
+
+  const handleRunPreflight = async () => {
+    setLoadingPreflight(true);
+    setPreservationError(null);
+    try {
+      const preflight = await api.uninstall.getPreflight();
+      setPreflightData(preflight);
+    } catch (err: any) {
+      setPreservationError(err.message || 'Failed to execute uninstall preflight inspection');
+    } finally {
+      setLoadingPreflight(false);
+    }
+  };
+
+  const handleCreatePreservationPackage = async () => {
+    setCreatingPreservation(true);
+    setPreservationError(null);
+    setPreservationMessage(null);
+    try {
+      const pkg = await api.uninstall.createPreservationPackage({
+        destinationDir: customDestinationDir.trim() || undefined,
+        confirmPreservation: true,
+      });
+      setPreservationPackage(pkg);
+      setPreservationMessage(`Preservation package created: ${pkg.packageId}. Status: ${pkg.status}`);
+      await handleRunPreflight();
+    } catch (err: any) {
+      setPreservationError(err.message || 'Failed to create preservation package');
+    } finally {
+      setCreatingPreservation(false);
+    }
+  };
+
+  const handleVerifyPreservation = async () => {
+    if (!preservationPackage) return;
+    setVerifyingPreservation(true);
+    setPreservationError(null);
+    try {
+      const verification = await api.uninstall.verifyPreservation(preservationPackage.packageId);
+      if (verification.verified) {
+        setPreservationMessage('Preservation package verified successfully (Database, CSVs, and XLSX all validated).');
+      } else {
+        setPreservationError(`Verification failed: ${verification.error || 'Check failed'}`);
+      }
+      await handleRunPreflight();
+    } catch (err: any) {
+      setPreservationError(err.message || 'Verification error');
+    } finally {
+      setVerifyingPreservation(false);
+    }
+  };
+
+  const handleAuthorizeUninstall = async () => {
+    if (!preservationPackage) return;
+    setAuthorizingUninstall(true);
+    setPreservationError(null);
+    try {
+      const auth = await api.uninstall.authorizeUninstall({
+        preservationPackageId: preservationPackage.packageId,
+        confirmOneTimeAuthorization: true,
+      });
+      setUninstallAuth(auth);
+      setPreservationMessage(`Uninstall AUTHORIZED! One-time authorization token issued. Valid until: ${new Date(auth.expiresAt).toLocaleTimeString()}`);
+      await handleRunPreflight();
+    } catch (err: any) {
+      setPreservationError(err.message || 'Failed to issue uninstall authorization token');
+    } finally {
+      setAuthorizingUninstall(false);
     }
   };
 
@@ -1001,7 +1097,6 @@ export const SettingsPage: React.FC = () => {
                                   type="button"
                                   onClick={() => {
                                     setDeleteUserModal(usr);
-                                    setDeleteDbCheckbox(true);
                                   }}
                                   className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors shadow-2xs"
                                 >
@@ -1320,18 +1415,27 @@ export const SettingsPage: React.FC = () => {
                                       Primary Admin (Protected)
                                     </span>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setDeleteUserModal(u);
-                                        setDeleteDbCheckbox(true);
-                                      }}
-                                      className="px-2.5 py-1 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                      title="Delete this user and their database"
-                                    >
-                                      <span className="material-symbols-outlined text-[16px]">delete</span>
-                                      Delete User &amp; DB
-                                    </button>
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeactivateUser(u)}
+                                        disabled={deactivatingUserId === u.id || !u.isActive}
+                                        className="px-2 py-1 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                                        title="Deactivate this user (preserve database)"
+                                      >
+                                        <span className="material-symbols-outlined text-[14px]">pause_circle</span>
+                                        {u.isActive === false ? 'Inactive' : 'Deactivate'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeleteUserModal(u)}
+                                        className="px-2 py-1 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                        title="Delete this user (preserves database)"
+                                      >
+                                        <span className="material-symbols-outlined text-[14px]">person_remove</span>
+                                        Delete User
+                                      </button>
+                                    </div>
                                   )}
                                 </td>
                               </tr>
@@ -1339,6 +1443,165 @@ export const SettingsPage: React.FC = () => {
                           })}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {/* ══════════════════════════════════════════════════════════ */}
+            {/* SECTION 7.6: DATA PRESERVATION & UNINSTALL SAFETY GATE    */}
+            {/* ══════════════════════════════════════════════════════════ */}
+            <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+              <div className="h-1 bg-amber-600" />
+              <div className="p-lg flex flex-col gap-md">
+                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center shrink-0 shadow-2xs">
+                      <span className="material-symbols-outlined text-[18px]">security_update_good</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                        Pre-Uninstall Customer Data Preservation &amp; Safety Gate
+                      </h3>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        Mandatory multi-format backup (Database, CSVs, XLSX) and one-time authorization token required by Windows Installer
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRunPreflight}
+                    disabled={loadingPreflight}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-outline-variant/80 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                  >
+                    <span className={`material-symbols-outlined text-[16px] ${loadingPreflight ? 'animate-spin' : ''}`}>fact_check</span>
+                    Run Preflight Scan
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-md bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
+                  {preservationMessage && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2 font-medium">
+                      <span className="material-symbols-outlined text-[18px] text-emerald-700 shrink-0">check_circle</span>
+                      <span>{preservationMessage}</span>
+                    </div>
+                  )}
+
+                  {preservationError && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-900 rounded-lg text-xs flex items-center gap-2 font-medium">
+                      <span className="material-symbols-outlined text-[18px] text-rose-700 shrink-0">error</span>
+                      <span>{preservationError}</span>
+                    </div>
+                  )}
+
+                  {/* Preflight Summary Cards */}
+                  {preflightData && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Classification</div>
+                        <div className="text-xs font-bold text-slate-800 mt-1 flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${
+                            preflightData.classification === 'READY_FOR_UNINSTALL' || preflightData.classification === 'NO_CUSTOMER_DATA'
+                              ? 'bg-emerald-500'
+                              : 'bg-amber-500'
+                          }`} />
+                          {preflightData.classification}
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Active Customer DBs</div>
+                        <div className="text-xs font-bold text-slate-800 mt-1">
+                          {preflightData.activeDatabasesCount} database(s) detected
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Safety Gate Status</div>
+                        <div className="text-xs font-bold mt-1">
+                          {preflightData.canSafelyUninstall ? (
+                            <span className="text-emerald-700 font-semibold">Authorized for Windows Uninstall</span>
+                          ) : (
+                            <span className="text-amber-800 font-semibold">Preservation Required</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Export Destination Selector */}
+                  <div className="space-y-1.5 pt-2 border-t border-outline-variant/40">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Preservation Package Destination (Optional Custom Directory)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customDestinationDir}
+                        onChange={(e) => setCustomDestinationDir(e.target.value)}
+                        placeholder="Leave blank for default AppData/DiamondERP/exports"
+                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-outline-variant/70 rounded-lg text-xs font-mono text-slate-800"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 m-0">
+                      The package will contain verified SQLite backups, CSV sheets, Excel workbook, and cryptographic SHA-256 manifests.
+                    </p>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2 pt-3 border-t border-outline-variant/40">
+                    <button
+                      type="button"
+                      onClick={handleCreatePreservationPackage}
+                      disabled={creatingPreservation}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+                    >
+                      <span className={`material-symbols-outlined text-[16px] ${creatingPreservation ? 'animate-spin' : ''}`}>archive</span>
+                      {creatingPreservation ? 'Creating Package...' : '1. Create Preservation Package'}
+                    </button>
+
+                    {preservationPackage && (
+                      <button
+                        type="button"
+                        onClick={handleVerifyPreservation}
+                        disabled={verifyingPreservation}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+                      >
+                        <span className={`material-symbols-outlined text-[16px] ${verifyingPreservation ? 'animate-spin' : ''}`}>verified</span>
+                        {verifyingPreservation ? 'Verifying...' : '2. Verify Package'}
+                      </button>
+                    )}
+
+                    {preservationPackage && preservationPackage.status === 'VERIFIED' && (
+                      <button
+                        type="button"
+                        onClick={handleAuthorizeUninstall}
+                        disabled={authorizingUninstall || Boolean(uninstallAuth)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+                      >
+                        <span className={`material-symbols-outlined text-[16px] ${authorizingUninstall ? 'animate-spin' : ''}`}>key</span>
+                        {uninstallAuth ? 'Uninstall Authorized' : '3. Authorize Windows Uninstall'}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Token Status Display */}
+                  {uninstallAuth && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs space-y-1">
+                      <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-amber-700">lock_open</span>
+                        Windows Uninstaller Authorization Token Issued
+                      </div>
+                      <div className="text-[11px] text-amber-800 font-mono">
+                        Authorization ID: {uninstallAuth.authorizationId}
+                      </div>
+                      <div className="text-[11px] text-amber-800">
+                        Expires At: {new Date(uninstallAuth.expiresAt).toLocaleString()} (Single-Use Token)
+                      </div>
+                      <p className="text-[11px] text-amber-900 m-0 mt-1 font-semibold">
+                        The Windows installer (`Installer.exe /uninstall`) is now authorized to proceed. Customer databases and AppData are strictly preserved.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -1622,17 +1885,15 @@ export const SettingsPage: React.FC = () => {
               </div>
             )}
 
-            <label className="flex items-center gap-2 text-xs text-on-surface cursor-pointer p-2 rounded-lg bg-amber-50 border border-amber-200">
-              <input
-                type="checkbox"
-                checked={deleteDbCheckbox}
-                onChange={e => setDeleteDbCheckbox(e.target.checked)}
-                className="w-4 h-4 text-rose-600 rounded"
-              />
-              <span className="font-medium text-amber-900">
-                Also permanently delete dedicated SQLite database file(s) from disk
-              </span>
-            </label>
+            <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2">
+              <span className="material-symbols-outlined text-[18px] text-emerald-700 shrink-0">verified_user</span>
+              <div>
+                <span className="font-bold">Data Preservation Guarantee:</span>
+                <p className="m-0 mt-0.5 text-emerald-800">
+                  Deleting this user soft-deletes the user profile while strictly <strong>preserving</strong> their dedicated SQLite database file. It will remain discoverable in Recovery / Onboarding.
+                </p>
+              </div>
+            </div>
 
             <div className="flex items-center justify-end gap-md mt-sm">
               <button

@@ -1887,6 +1887,111 @@ namespace DiamondERP.Setup
                 }
             }
 
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string userDbDir = Path.Combine(localAppData, "DiamondERP");
+
+            // ── HARD UNINSTALL SAFETY GATE (PHASE 7) ─────────────────────────
+            // If customer databases or records exist in AppData, uninstallation is BLOCKED
+            // unless an authoritative, unexpired, unconsumed uninstall authorization token exists.
+            bool hasCustomerData = false;
+            string databasesDir = Path.Combine(userDbDir, "databases");
+            if (Directory.Exists(databasesDir))
+            {
+                try
+                {
+                    string[] dbs = Directory.GetFiles(databasesDir, "*.db");
+                    if (dbs.Length > 0) hasCustomerData = true;
+                }
+                catch { }
+            }
+            if (File.Exists(Path.Combine(userDbDir, "Stavan.db")) || File.Exists(Path.Combine(userDbDir, "system.db")))
+            {
+                hasCustomerData = true;
+            }
+
+            if (hasCustomerData)
+            {
+                string tokenPath = Path.Combine(userDbDir, "uninstall-authorization.json");
+                bool isAuthorized = false;
+                string blockReason = "No data preservation authorization token found in AppData.";
+
+                if (File.Exists(tokenPath))
+                {
+                    try
+                    {
+                        string tokenJson = File.ReadAllText(tokenPath);
+                        string authId = ExtractJsonValue(tokenJson, "authorizationId");
+                        string expiresAtStr = ExtractJsonValue(tokenJson, "expiresAt");
+                        string consumedAtStr = ExtractJsonValue(tokenJson, "consumedAt");
+                        string destPath = ExtractJsonValue(tokenJson, "preservationDestinationPath");
+
+                        DateTime expiresAt;
+                        if (string.IsNullOrEmpty(authId))
+                        {
+                            blockReason = "Authorization token format is invalid (missing authorizationId).";
+                        }
+                        else if (!string.IsNullOrEmpty(consumedAtStr) && consumedAtStr != "null")
+                        {
+                            blockReason = "Authorization token has already been consumed (single-use).";
+                        }
+                        else if (!string.IsNullOrEmpty(expiresAtStr) && DateTime.TryParse(expiresAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out expiresAt) && expiresAt < DateTime.UtcNow)
+                        {
+                            blockReason = "Authorization token has expired.";
+                        }
+                        else if (!string.IsNullOrEmpty(destPath) && !Directory.Exists(destPath))
+                        {
+                            blockReason = "Preservation package directory could not be located on disk.";
+                        }
+                        else
+                        {
+                            isAuthorized = true;
+                            // Mark token consumed atomically to enforce single-use invariant
+                            try
+                            {
+                                string updatedJson = tokenJson.Replace("\"consumedAt\": null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")));
+                                if (!updatedJson.Contains("consumedAt\": \""))
+                                {
+                                    updatedJson = updatedJson.TrimEnd('}', ' ', '\r', '\n') + string.Format(",\n  \"consumedAt\": \"{0}\"\n}}", DateTime.UtcNow.ToString("o"));
+                                }
+                                File.WriteAllText(tokenPath, updatedJson);
+                            }
+                            catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        blockReason = "Error parsing authorization token: " + ex.Message;
+                    }
+                }
+
+                if (!isAuthorized)
+                {
+                    if (!silent)
+                    {
+                        MessageBox.Show(
+                            "UNINSTALL BLOCKED BY DATA PRESERVATION SAFETY GATE\n\n" +
+                            "Active business databases and transactions were detected in your AppData directory.\n\n" +
+                            "Reason: " + blockReason + "\n\n" +
+                            "To protect customer data from accidental loss, you must complete the Pre-Uninstall Data Preservation Wizard in Diamond ERP before uninstalling.\n\n" +
+                            "Steps to proceed:\n" +
+                            "1. Open Diamond ERP\n" +
+                            "2. Go to Settings -> Data Preservation & Uninstall Wizard\n" +
+                            "3. Click 'Create & Verify Preservation Package' (exports CSV, XLSX, and Database Backup)\n" +
+                            "4. Click 'Authorize Uninstall'\n" +
+                            "5. Run the uninstaller again.",
+                            "DiamondERP Uninstall Gate — Action Required",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("Error: Uninstall blocked by Phase 7 Safety Gate: " + blockReason);
+                    }
+                    return;
+                }
+            }
+
             EnsureAppNotRunning(!silent, installDir);
 
             try
@@ -1921,8 +2026,6 @@ namespace DiamondERP.Setup
                 catch { }
 
                 // 4. Clean up application installation files (strictly preserving customer AppData)
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string userDbDir = Path.Combine(localAppData, "DiamondERP");
                 string canonicalInstallDir = Path.GetFullPath(installDir);
 
                 if (!canonicalInstallDir.Equals(userDbDir, StringComparison.OrdinalIgnoreCase) &&
@@ -1984,6 +2087,19 @@ namespace DiamondERP.Setup
                     Console.Error.WriteLine("Error during uninstallation: " + ex.Message);
                 }
             }
+        }
+
+        private static string ExtractJsonValue(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return null;
+            string pattern = "\"" + key + "\"\\s*:\\s*\"?([^\"\\,\\}\\\r\\\n]+)\"?";
+            var match = System.Text.RegularExpressions.Regex.Match(json, pattern);
+            if (match.Success && match.Groups.Count > 1)
+            {
+                string val = match.Groups[1].Value.Trim().Trim('"');
+                return val == "null" ? null : val;
+            }
+            return null;
         }
     }
 }

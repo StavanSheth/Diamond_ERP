@@ -43,6 +43,9 @@ export const PRISTINE_TABLE_CLASSIFICATION: Record<string, TableCategory> = {
   Session: TableCategory.SYSTEM_CONFIGURATION,
   IdempotencyKey: TableCategory.SYSTEM_CONFIGURATION,
   ProvisioningOperation: TableCategory.SYSTEM_CONFIGURATION,
+  PreservationPackage: TableCategory.SYSTEM_CONFIGURATION,
+  UninstallAuthorization: TableCategory.SYSTEM_CONFIGURATION,
+  ExportRecord: TableCategory.SYSTEM_CONFIGURATION,
 
   // Reference / Tenant Definitions
   Profile: TableCategory.REFERENCE_DATA,
