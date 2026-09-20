@@ -21,6 +21,12 @@ export const settingsApi = {
     return request('/api/settings/profile', { method: 'POST', body: JSON.stringify({ profileName }) });
   },
 
+  deleteProfile(profileCode: string, deleteDatabase = true): Promise<{ success: boolean; message?: string; deletedDatabases?: string[] }> {
+    return request(`/api/settings/profiles/${profileCode}?deleteDatabase=${deleteDatabase}`, {
+      method: 'DELETE',
+    });
+  },
+
   factoryReset(confirmPassword?: string): Promise<any> {
     return request('/api/settings/factory-reset', {
       method: 'POST',

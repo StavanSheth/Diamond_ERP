@@ -87,9 +87,11 @@ const configuredProfiles = new Map<string, CanonicalProfile>();
 export const FORBIDDEN_PROFILE_NAMES = new Set(['system', 'template', 'test']);
 
 function initConfiguredProfiles() {
+  const currentCfg = readConfig();
+  configuredProfiles.clear();
   const allowed = new Set<string>([
     defaultProfile,
-    ...(config.allowedProfiles || []),
+    ...(currentCfg.allowedProfiles || []),
   ]);
 
   if (process.env.CONFIGURED_PROFILES) {
@@ -134,6 +136,22 @@ function initConfiguredProfiles() {
 }
 
 initConfiguredProfiles();
+
+export function removeConfiguredProfile(profileCode: string): void {
+  const key = profileCode.toLowerCase();
+  configuredProfiles.delete(key);
+  const entry = clientRegistry.get(key);
+  if (entry) {
+    clientRegistry.delete(key);
+    entry.client.$disconnect().catch(() => {});
+  }
+  const currentCfg = readConfig();
+  const allowed = (currentCfg.allowedProfiles || []).filter(p => p.toLowerCase() !== key);
+  saveConfig({
+    activeProfile: currentCfg.activeProfile.toLowerCase() === key ? defaultProfile : currentCfg.activeProfile,
+    allowedProfiles: allowed.length > 0 ? allowed : [defaultProfile],
+  });
+}
 
 /**
  * Register a canonical profile programmatically and ensure DB exists.
@@ -208,6 +226,7 @@ export function getCanonicalProfile(code: string): CanonicalProfile | undefined 
  * Return all registered canonical profile codes (including newly discovered DBs on disk).
  */
 export function getAllProfiles(): string[] {
+  initConfiguredProfiles();
   try {
     const files = fs.readdirSync(DB_DIR);
     for (const f of files) {

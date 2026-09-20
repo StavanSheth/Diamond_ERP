@@ -333,9 +333,8 @@ export const SettingsPage: React.FC = () => {
                       aria-checked={isAppLockEnabled}
                       onClick={async () => {
                         if (isAppLockEnabled) {
-                          if (window.confirm(t('Turn OFF App Lock? The application will no longer lock after inactivity.'))) {
-                            await disableAppLock();
-                          }
+                          await disableAppLock();
+                          handleChange('appLock_enabled', 'false');
                         } else {
                           try {
                             setDeviceRegistrationStatus(t('Prompting device lock...'));
@@ -344,10 +343,12 @@ export const SettingsPage: React.FC = () => {
                               timeoutMinutes: sessionTimeoutMinutes,
                               credentialId: cred?.credentialId,
                             });
+                            handleChange('appLock_enabled', 'true');
                             setDeviceRegistrationStatus(null);
                           } catch (err: any) {
                             console.warn('Device lock notice:', err);
                             await enableAppLock({ timeoutMinutes: sessionTimeoutMinutes });
+                            handleChange('appLock_enabled', 'true');
                             setDeviceRegistrationStatus(null);
                           }
                         }
@@ -557,11 +558,10 @@ export const SettingsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={async () => {
-                            if (window.confirm(t('Are you sure you want to turn OFF App Lock? The application will no longer lock after inactivity.'))) {
-                              await disableAppLock();
-                            }
+                            await disableAppLock();
+                            handleChange('appLock_enabled', 'false');
                           }}
-                          className="flex items-center gap-1.5 text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-md py-1.5 rounded-lg font-bold text-xs transition-colors"
+                          className="flex items-center gap-1.5 text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-md py-1.5 rounded-lg font-bold text-xs transition-colors cursor-pointer"
                         >
                           <span className="material-symbols-outlined text-[16px]">lock_open</span>
                           {t('Turn Off App Lock')}
@@ -634,11 +634,35 @@ export const SettingsPage: React.FC = () => {
                       });
                       setNewProfileModalOpen(true);
                     }}
-                    className="mt-4 sm:mt-auto px-md py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs transition-colors flex items-center gap-1.5 shadow-xs shrink-0"
+                    className="mt-4 sm:mt-auto px-md py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs transition-colors flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
                   >
                     <span className="material-symbols-outlined text-[16px]">add_business</span>
                     New Profile
                   </button>
+
+                  {activeProfile.toLowerCase() !== 'stavan' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm(`Permanently delete profile "${activeProfile}" and its database file?`)) return;
+                        try {
+                          await api.deleteProfile(activeProfile, true);
+                          alert(`Profile "${activeProfile}" deleted successfully.`);
+                          await api.switchProfile('Stavan');
+                          switchProfile('Stavan');
+                          setActiveProfile('Stavan');
+                          window.location.reload();
+                        } catch (err: any) {
+                          alert(err.message || 'Failed to delete profile');
+                        }
+                      }}
+                      className="mt-4 sm:mt-auto px-md py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-lg font-bold text-xs transition-colors flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
+                      title="Delete this workspace profile and database"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">delete</span>
+                      Delete Profile &amp; DB
+                    </button>
+                  )}
                 </div>
               </div>
             </section>
@@ -1173,6 +1197,120 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   </div>
                 )}
+              </div>
+            </section>
+
+            {/* ══════════════════════════════════════════════════════════ */}
+            {/* SECTION 7.5: USER & DEDICATED DATABASE MANAGEMENT          */}
+            {/* ══════════════════════════════════════════════════════════ */}
+            <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+              <div className="h-1 bg-rose-600" />
+              <div className="p-lg flex flex-col gap-md">
+                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-700 flex items-center justify-center shrink-0 shadow-2xs">
+                      <span className="material-symbols-outlined text-[18px]">manage_accounts</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                        User &amp; Dedicated Database Management
+                      </h3>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        View registered application users and permanently delete user accounts with their isolated SQLite database files
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchUsers}
+                    disabled={loadingUsers}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-outline-variant/80 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                  >
+                    <span className={`material-symbols-outlined text-[16px] ${loadingUsers ? 'animate-spin' : ''}`}>sync</span>
+                    Refresh Users
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-md">
+                  {loadingUsers ? (
+                    <div className="p-4 text-center text-xs text-slate-400">Loading user accounts...</div>
+                  ) : usersList.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
+                      No users found.
+                    </div>
+                  ) : (
+                    <div className="border border-outline-variant/60 rounded-xl overflow-hidden bg-white shadow-2xs">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-on-surface-variant text-[10px] uppercase font-bold tracking-wider">
+                            <th className="py-2.5 px-3 border-b border-outline-variant/60">User / Account</th>
+                            <th className="py-2.5 px-3 border-b border-outline-variant/60">Role</th>
+                            <th className="py-2.5 px-3 border-b border-outline-variant/60">Assigned Workspace &amp; Database</th>
+                            <th className="py-2.5 px-3 border-b border-outline-variant/60 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usersList.map((u) => {
+                            const isStavan = u.username?.toLowerCase() === 'stavan';
+                            return (
+                              <tr key={u.id} className="border-b border-outline-variant/40 last:border-0 hover:bg-slate-50 transition-colors">
+                                <td className="py-3 px-3 text-xs">
+                                  <div className="font-bold text-slate-900">{u.displayName || u.username}</div>
+                                  <div className="font-mono text-[11px] text-slate-500">@{u.username}</div>
+                                </td>
+                                <td className="py-3 px-3 text-xs">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                    isStavan
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-indigo-100 text-indigo-800'
+                                  }`}>
+                                    {u.role}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-xs">
+                                  {u.profiles && u.profiles.length > 0 ? (
+                                    <div className="flex flex-col gap-1">
+                                      {u.profiles.map((p: any) => (
+                                        <div key={p.profileId} className="flex items-center gap-1.5 font-mono text-[11px] text-slate-600">
+                                          <span className="font-semibold text-slate-800">[{p.code}]</span>
+                                          <span className="truncate max-w-[260px] text-[10px] text-slate-500" title={p.dbPath || 'No database file'}>
+                                            {p.dbPath ? p.dbPath : 'No database file'}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 text-[11px] italic">No assigned workspace</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-right">
+                                  {isStavan ? (
+                                    <span className="text-[11px] font-bold text-slate-400 italic px-2 py-1 bg-slate-100 rounded">
+                                      Primary Admin (Protected)
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeleteUserModal(u);
+                                        setDeleteDbCheckbox(true);
+                                      }}
+                                      className="px-2.5 py-1 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                      title="Delete this user and their database"
+                                    >
+                                      <span className="material-symbols-outlined text-[16px]">delete</span>
+                                      Delete User &amp; DB
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             </section>
 

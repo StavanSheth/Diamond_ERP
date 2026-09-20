@@ -34,6 +34,7 @@ export function createSettingsRouter(controller: SettingsController): Router {
 
   router.get('/profiles', controller.getProfiles);
   router.post('/profiles', controller.createProfile);
+  if (controller.deleteProfile) router.delete('/profiles/:profileCode', controller.deleteProfile);
   router.post('/profile', controller.switchProfile);
 
   // Database backup and SQLite WAL maintenance

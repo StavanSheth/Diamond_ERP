@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, AuthenticationError } from '../../errors';
@@ -688,6 +688,82 @@ export class SettingsController {
         success: true,
         message: `Profile "${cleanName}" created successfully`,
         data: { active: cleanName, profiles: allProfiles },
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  deleteProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const profileCode = String(req.params.profileCode);
+      const deleteDatabase = req.query.deleteDatabase === 'true' || req.body?.deleteDatabase === true;
+
+      if (profileCode.toLowerCase() === 'stavan') {
+        throw new ValidationError('The primary profile "Stavan" cannot be deleted.');
+      }
+      if (FORBIDDEN_PROFILE_NAMES.has(profileCode.toLowerCase())) {
+        throw new ValidationError(`Cannot delete reserved profile "${profileCode}".`);
+      }
+
+      removeConfiguredProfile(profileCode);
+
+      const profile = await systemPrisma.profile.findFirst({
+        where: { code: { equals: profileCode } },
+        include: { databaseRegistries: true, userProfiles: true },
+      });
+
+      const deletedDatabases: string[] = [];
+
+      if (profile) {
+        if (deleteDatabase) {
+          for (const reg of profile.databaseRegistries) {
+            const dbFile = reg.canonicalPath;
+            const baseName = path.basename(dbFile).toLowerCase();
+            if (
+              baseName !== 'system.db' &&
+              baseName !== 'template.db' &&
+              baseName !== 'stavan.db' &&
+              fs.existsSync(dbFile)
+            ) {
+              try {
+                fs.unlinkSync(dbFile);
+                deletedDatabases.push(dbFile);
+                if (fs.existsSync(`${dbFile}-wal`)) fs.unlinkSync(`${dbFile}-wal`);
+                if (fs.existsSync(`${dbFile}-shm`)) fs.unlinkSync(`${dbFile}-shm`);
+              } catch (delErr: any) {
+                console.warn(`[SettingsController] Could not delete DB file ${dbFile}:`, delErr.message);
+              }
+            }
+            await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => {});
+          }
+        }
+        await systemPrisma.userProfile.deleteMany({ where: { profileId: profile.id } }).catch(() => {});
+        await systemPrisma.profile.delete({ where: { id: profile.id } }).catch(() => {});
+      }
+
+      // Also check if any standalone file exists on disk
+      if (deleteDatabase) {
+        const directFile = path.resolve(getDatabasesDir(), `${profileCode}.db`);
+        if (
+          path.basename(directFile).toLowerCase() !== 'stavan.db' &&
+          path.basename(directFile).toLowerCase() !== 'system.db' &&
+          path.basename(directFile).toLowerCase() !== 'template.db' &&
+          fs.existsSync(directFile)
+        ) {
+          try {
+            fs.unlinkSync(directFile);
+            deletedDatabases.push(directFile);
+            if (fs.existsSync(`${directFile}-wal`)) fs.unlinkSync(`${directFile}-wal`);
+            if (fs.existsSync(`${directFile}-shm`)) fs.unlinkSync(`${directFile}-shm`);
+          } catch {}
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Profile "${profileCode}" deleted successfully.`,
+        deletedDatabases,
       });
     } catch (error) {
       next(error);
@@ -1654,6 +1730,9 @@ export class SettingsController {
               await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => {});
             }
 
+            if (up.profile?.code) {
+              removeConfiguredProfile(up.profile.code);
+            }
             await systemPrisma.profile.delete({ where: { id: profileId } }).catch(() => {});
           }
         }
