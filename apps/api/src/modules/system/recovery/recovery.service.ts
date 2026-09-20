@@ -98,27 +98,24 @@ export class RecoveryService {
       },
     });
 
-    const candidateBase = path.basename(canonical, path.extname(canonical));
-    const sourceBase = sourceDbPath ? path.basename(sourceDbPath, path.extname(sourceDbPath)) : null;
-
     const profile =
       reg?.profile ||
-      (await systemPrisma.profile.findFirst({
-        where: {
-          OR: [
-            ...(resolvedProfileId ? [{ id: resolvedProfileId }] : []),
-            { code: candidateBase },
-            { dbPath: { contains: candidateBase } },
-            ...(sourceBase ? [{ code: sourceBase }, { dbPath: { contains: sourceBase } }] : []),
-            ...(sourceDbPath ? [{ dbPath: sourceDbPath }] : []),
-          ],
-        },
-        include: {
-          userProfiles: {
-            include: { user: true },
-          },
-        },
-      }));
+      (resolvedProfileId || sourceDbPath
+        ? await systemPrisma.profile.findFirst({
+            where: {
+              OR: [
+                ...(resolvedProfileId ? [{ id: resolvedProfileId }] : []),
+                ...(sourceDbPath ? [{ dbPath: sourceDbPath }] : []),
+                { dbPath: canonical },
+              ],
+            },
+            include: {
+              userProfiles: {
+                include: { user: true },
+              },
+            },
+          })
+        : null);
 
     if (profile) {
       const activeUsers = profile.userProfiles.filter((up) => up.isActive && up.user.isActive && !up.user.deletedAt);
@@ -479,6 +476,17 @@ export class RecoveryService {
       },
     });
 
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'RESTORE',
+        entityId: restoreId,
+        eventType: 'RECOVERY_STARTED',
+        description: `Recovery preparation started for candidate: ${canonicalCandidate}`,
+        metadata: JSON.stringify({ restoreId, candidatePath: canonicalCandidate, targetProfileCode }),
+        performedBy: 'system',
+      },
+    }).catch(() => {});
+
     return {
       restoreId,
       candidatePath: canonicalCandidate,
@@ -580,6 +588,17 @@ export class RecoveryService {
     }
     this.activeRestoreLocks.add(canonicalTarget);
 
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'RESTORE',
+        entityId: req.restoreId,
+        eventType: 'RECOVERY_CONFIRMED',
+        description: `Recovery confirmed for restore operation ${req.restoreId}`,
+        metadata: JSON.stringify({ restoreId: req.restoreId, targetUserId: req.targetUserId, targetProfileCode: req.targetProfileCode }),
+        performedBy,
+      },
+    }).catch(() => {});
+
     let rollbackBackupPath: string | null = null;
     let rollbackBackupCreated = false;
     let swapOldPath: string | null = null;
@@ -657,6 +676,17 @@ export class RecoveryService {
             errorMessage: verifyErr?.message || 'Post-restore verification failed; rolled back.',
           },
         });
+
+        await systemPrisma.auditEvent.create({
+          data: {
+            entityType: 'RESTORE',
+            entityId: req.restoreId,
+            eventType: 'RECOVERY_ROLLED_BACK',
+            description: `Recovery rolled back due to post-activation verification failure: ${verifyErr?.message}`,
+            metadata: JSON.stringify({ restoreId: req.restoreId, error: verifyErr?.message }),
+            performedBy,
+          },
+        }).catch(() => {});
 
         throw new ConflictError(
           `Restoration failed post-activation checks. Current database was safely rolled back from backup.`
@@ -784,7 +814,18 @@ export class RecoveryService {
         },
       });
 
-      // 8. Log audit event
+      // 8. Log audit events
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'RESTORE',
+          entityId: req.restoreId,
+          eventType: 'RECOVERY_COMPLETED',
+          description: `Recovery completed successfully to ${canonicalTarget}`,
+          metadata: JSON.stringify({ restoreId: req.restoreId, targetPath: canonicalTarget }),
+          performedBy,
+        },
+      }).catch(() => {});
+
       await systemPrisma.auditEvent.create({
         data: {
           entityType: 'RESTORE',
@@ -808,6 +849,18 @@ export class RecoveryService {
         rollbackBackupCreated,
         rollbackBackupPath,
       };
+    } catch (err: any) {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'RESTORE',
+          entityId: req.restoreId,
+          eventType: 'RECOVERY_FAILED',
+          description: `Recovery failed for operation ${req.restoreId}: ${err?.message}`,
+          metadata: JSON.stringify({ restoreId: req.restoreId, error: err?.message }),
+          performedBy,
+        },
+      }).catch(() => {});
+      throw err;
     } finally {
       // Clean up swap file if somehow still existing on error
       if (swapOldPath && fs.existsSync(swapOldPath)) {

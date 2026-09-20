@@ -80,7 +80,7 @@ describe('Diamond ERP V3 — Phase 4: Lifecycle Orchestration & State Machine Ve
 
       // 4. USER_DISCOVERY -> DATABASE_DISCOVERY via user creation/selection
       const suffix = Date.now().toString();
-      await onboardingService.createBusinessUser({
+      const userRes = await onboardingService.createBusinessUser({
         username: `orchestration_user_${suffix}`,
         password: 'Password123456!',
         displayName: 'Orchestration Admin',
@@ -92,6 +92,7 @@ describe('Diamond ERP V3 — Phase 4: Lifecycle Orchestration & State Machine Ve
 
       // 5. DATABASE_DISCOVERY -> DATABASE_VALIDATION -> DATABASE_SETUP via new DB creation
       const dbRes = await onboardingService.createNewDatabase({
+        userId: userRes.user.id,
         displayName: `Orchestration_DB_${suffix}`,
       });
       createdTestFiles.push(path.resolve(getDatabasesDir(), `orchestration_db_${suffix}.db`));

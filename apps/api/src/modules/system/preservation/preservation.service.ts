@@ -152,6 +152,7 @@ export class PreservationService {
       userId: string | null;
       username: string | null;
       schemaVersion: number;
+      ownershipState?: 'CURRENT_INSTALLATION' | 'PREVIOUS_INSTALLATION' | 'DELETED_USER' | 'EXTERNAL_SOURCE' | 'UNKNOWN_SOURCE';
     }
 
     const databasesToPreserve: DbPreserveItem[] = [];
@@ -195,8 +196,7 @@ export class PreservationService {
 
       for (const reg of activeRegistries) {
         if (!fs.existsSync(reg.canonicalPath)) {
-          logger.warn(`Registered database missing on disk: ${reg.canonicalPath}, skipping from preservation`);
-          continue;
+          throw new NotFoundError(`Registered customer database missing on disk: ${reg.canonicalPath}. Cannot complete preservation.`);
         }
         const lower = reg.canonicalPath.toLowerCase();
         if (lower === controlDb || lower === templateDb) continue;
@@ -241,6 +241,48 @@ export class PreservationService {
         }
       } catch (err) {
         logger.warn(`[PreservationService] Customer data detection lookup error: ${String(err)}`);
+      }
+
+      // Discover deleted-user databases that remain customer-owned / recoverable
+      try {
+        const deletedUserProfiles = await systemPrisma.userProfile.findMany({
+          where: {
+            user: {
+              OR: [{ deletedAt: { not: null } }, { isActive: false }],
+            },
+          },
+          include: {
+            user: true,
+            profile: {
+              include: {
+                databaseRegistries: true,
+              },
+            },
+          },
+        });
+
+        for (const up of deletedUserProfiles) {
+          if (!up.profile) continue;
+          const candidateDb = up.profile.dbPath || up.profile.databaseRegistries?.[0]?.canonicalPath;
+          if (!candidateDb || !fs.existsSync(candidateDb)) continue;
+          const lower = candidateDb.toLowerCase();
+          if (lower === controlDb || lower === templateDb) continue;
+          if (seenPaths.has(lower)) continue;
+          seenPaths.add(lower);
+
+          databasesToPreserve.push({
+            canonicalPath: candidateDb,
+            databaseId: up.profile.databaseRegistries?.[0]?.databaseId || `db_${up.profile.code}`,
+            profileId: up.profile.id,
+            profileCode: up.profile.code || path.basename(candidateDb, '.db'),
+            userId: up.user.id,
+            username: up.user.username,
+            schemaVersion: up.profile.schemaVersion || 1,
+            ownershipState: 'DELETED_USER',
+          });
+        }
+      } catch (delErr) {
+        logger.warn(`[PreservationService] Deleted user database discovery error: ${String(delErr)}`);
       }
     }
 
@@ -487,10 +529,14 @@ export class PreservationService {
             userId: dbItem.userId,
             username: dbItem.username,
             canonicalPath: dbItem.canonicalPath,
+            ownershipState: dbItem.ownershipState || 'CURRENT_INSTALLATION',
             backupPath: path.posix.join('databases', dbFolderName, 'database_backup.db'),
             backupManifest: path.posix.join('databases', dbFolderName, 'database_backup.db.manifest.json'),
+            backupSha256: dbBackupSha256,
             csvDir: path.posix.join('csv', dbFolderName),
+            csvPath: path.posix.join('csv', dbFolderName),
             xlsxFile: path.posix.join('xlsx', dbXlsxFileName),
+            xlsxPath: path.posix.join('xlsx', dbXlsxFileName),
             sha256: dbBackupSha256,
             schemaVersion: dbItem.schemaVersion,
             sizeBytes: dbBackupStat.size,

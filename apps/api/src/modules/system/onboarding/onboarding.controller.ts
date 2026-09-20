@@ -23,13 +23,17 @@ const attachDatabaseSchema = z.object({
   displayName: z.string().max(100).optional(),
   profileCode: z.string().max(50).optional(),
   profileName: z.string().max(100).optional(),
+  userId: z.string().optional(),
+  targetUserId: z.string().optional(),
   confirmAttachment: z.boolean(),
 });
 
 const createDatabaseSchema = z.object({
+  userId: z.string().min(1, 'Target user ID is required'),
   displayName: z.string().min(1, 'Database display name is required').max(100),
   profileCode: z.string().max(50).optional(),
   profileName: z.string().max(100).optional(),
+  provisioningOperationId: z.string().optional(),
 });
 
 const setupPinSchema = z.object({

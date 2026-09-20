@@ -287,6 +287,7 @@ describe('Diamond ERP V3 — Phase 4: First-Run Onboarding, User & Database Disc
 
       const dbName = `New_Office_${Date.now()}`;
       const result = await onboardingService.createNewDatabase({
+        userId: user.id,
         displayName: dbName,
       });
 
@@ -298,6 +299,14 @@ describe('Diamond ERP V3 — Phase 4: First-Run Onboarding, User & Database Disc
     });
 
     it('fails safely when template.db is missing and does NOT create empty database', async () => {
+      const user = await authService.createUser(
+        `miss_user_${Date.now()}`,
+        'Password123456!',
+        'Miss User',
+        'ADMIN'
+      );
+      await installationService.associateUser(installId, user.id);
+
       // Simulate missing template by overriding environment variable to a non-existent path
       const originalEnv = process.env.DIAMOND_TEMPLATE_DB;
       process.env.DIAMOND_TEMPLATE_DB = path.resolve(getDatabasesDir(), 'non_existent_template.db');
@@ -309,6 +318,7 @@ describe('Diamond ERP V3 — Phase 4: First-Run Onboarding, User & Database Disc
       try {
         await expect(
           onboardingService.createNewDatabase({
+            userId: user.id,
             displayName: dbName,
           })
         ).rejects.toThrow(/template\.db/i);
@@ -369,10 +379,18 @@ describe('Diamond ERP V3 — Phase 4: First-Run Onboarding, User & Database Disc
     });
 
     it('handles concurrent new database creation with identical profile name deterministically', async () => {
+      const user = await authService.createUser(
+        `race_prov_${Date.now()}`,
+        'Password123456!',
+        'Race Prov User',
+        'ADMIN'
+      );
+      await installationService.associateUser(installId, user.id);
+
       const dbName = `Race_DB_${Date.now()}`;
       const [r1, r2] = await Promise.allSettled([
-        onboardingService.createNewDatabase({ displayName: dbName }),
-        onboardingService.createNewDatabase({ displayName: dbName }),
+        onboardingService.createNewDatabase({ userId: user.id, displayName: dbName }),
+        onboardingService.createNewDatabase({ userId: user.id, displayName: dbName }),
       ]);
 
       const successes = [r1, r2].filter((r) => r.status === 'fulfilled');
@@ -458,6 +476,7 @@ describe('Diamond ERP V3 — Phase 4: First-Run Onboarding, User & Database Disc
 
       // 5. Create database (which advances to DATABASE_SETUP)
       const db = await onboardingService.createNewDatabase({
+        userId: user.id,
         displayName: `Final_Ready_DB_${Date.now()}`,
       });
       createdTestFiles.push(db.registry.canonicalPath);

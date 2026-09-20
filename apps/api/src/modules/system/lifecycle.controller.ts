@@ -19,6 +19,12 @@ const updateStateSchema = z.object({
     'READY',
   ]),
   isReset: z.boolean().optional(),
+  resetReason: z.enum([
+    'ADMINISTRATIVE_RESET',
+    'RECOVERY_RESET',
+    'FAILED_ONBOARDING_RECOVERY',
+    'DEVELOPMENT_TEST_RESET',
+  ]).optional(),
 });
 
 const registerDeviceSchema = z.object({
@@ -114,8 +120,19 @@ export class LifecycleController {
         });
         return;
       }
+      if (parsed.data.lifecycleState === 'NOT_INITIALIZED') {
+        if (!parsed.data.isReset || !parsed.data.resetReason) {
+          res.status(400).json({
+            success: false,
+            error: 'Controlled reset policy violation',
+            message: 'Resetting lifecycle to NOT_INITIALIZED requires isReset=true and a valid resetReason.',
+          });
+          return;
+        }
+      }
       const updated = await installationService.updateLifecycleState(parsed.data.lifecycleState, {
         isReset: parsed.data.isReset,
+        resetReason: parsed.data.resetReason,
         enforceInvariants: true,
       });
       res.json({ success: true, data: updated });
@@ -181,6 +198,8 @@ export class LifecycleController {
    */
   registerDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      if (!(await this.checkBootstrapAccess(req, res))) return;
+
       const parsed = registerDatabaseSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -251,6 +270,8 @@ export class LifecycleController {
    */
   associateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      if (!(await this.checkBootstrapAccess(req, res))) return;
+
       const parsed = associateUserSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -261,8 +282,15 @@ export class LifecycleController {
         return;
       }
       const install = await installationService.getOrCreateInstallation();
-      const installationId = parsed.data.installationId || install.id;
-      const result = await installationService.associateUser(installationId, parsed.data.userId);
+      if (parsed.data.installationId && parsed.data.installationId !== install.id && parsed.data.installationId !== install.installationId) {
+        res.status(409).json({
+          success: false,
+          error: 'Conflict',
+          message: 'Target installation ID does not match current local installation.',
+        });
+        return;
+      }
+      const result = await installationService.associateUser(install.id, parsed.data.userId);
       res.status(201).json({ success: true, data: result });
     } catch (error) {
       next(error);
@@ -274,6 +302,8 @@ export class LifecycleController {
    */
   disassociateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      if (!(await this.checkBootstrapAccess(req, res))) return;
+
       const parsed = associateUserSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
@@ -284,8 +314,15 @@ export class LifecycleController {
         return;
       }
       const install = await installationService.getOrCreateInstallation();
-      const installationId = parsed.data.installationId || install.id;
-      await installationService.disassociateUser(installationId, parsed.data.userId);
+      if (parsed.data.installationId && parsed.data.installationId !== install.id && parsed.data.installationId !== install.installationId) {
+        res.status(409).json({
+          success: false,
+          error: 'Conflict',
+          message: 'Target installation ID does not match current local installation.',
+        });
+        return;
+      }
+      await installationService.disassociateUser(install.id, parsed.data.userId);
       res.json({ success: true, message: 'User disassociated from installation' });
     } catch (error) {
       next(error);

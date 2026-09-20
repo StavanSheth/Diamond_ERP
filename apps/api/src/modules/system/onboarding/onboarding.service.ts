@@ -725,21 +725,26 @@ export class OnboardingService {
         });
       }
 
-      // 3. Link all associated business users to this profile
+      // 3. Link designated business user to this profile (isolate to target user)
       const installUsers = await tx.installationUser.findMany({
         where: { installationId: install.id },
       });
-      for (const installUser of installUsers) {
+      const designatedUserId = input.targetUserId || input.userId;
+      const targetUserIds = designatedUserId
+        ? [designatedUserId]
+        : installUsers.map((u) => u.userId);
+
+      for (const uid of targetUserIds) {
         await tx.userProfile.upsert({
           where: {
             userId_profileId: {
-              userId: installUser.userId,
+              userId: uid,
               profileId: profile.id,
             },
           },
           update: { isActive: true },
           create: {
-            userId: installUser.userId,
+            userId: uid,
             profileId: profile.id,
             role: 'ADMIN',
             isActive: true,
@@ -816,18 +821,27 @@ export class OnboardingService {
 
     const install = await installationService.getOrCreateInstallation();
 
-    // Fix #1: Authoritative target user resolution
-    let targetUserId = input.userId?.trim();
-    if (!targetUserId) {
-      const latestInstallUser = await systemPrisma.installationUser.findFirst({
-        where: { installationId: install.id },
-        orderBy: { createdAt: 'desc' },
-      });
-      targetUserId = latestInstallUser?.userId;
-    }
-
+    // Authoritative target user enforcement: Never infer or fall back to installation-wide users
+    const targetUserId = input.userId?.trim();
     if (!targetUserId) {
       throw new ValidationError('A valid target userId is strictly required for provisioning a new database.');
+    }
+
+    const user = await systemPrisma.user.findUnique({ where: { id: targetUserId } });
+    if (!user || !user.isActive || user.deletedAt) {
+      throw new ValidationError(`Target user "${targetUserId}" not found, inactive, or soft-deleted.`);
+    }
+
+    const installUser = await systemPrisma.installationUser.findUnique({
+      where: {
+        installationId_userId: {
+          installationId: install.id,
+          userId: targetUserId,
+        },
+      },
+    });
+    if (!installUser) {
+      throw new ConflictError(`Target user "${targetUserId}" does not belong to the current local installation.`);
     }
 
     const provisioned = await databaseProvisioningService.provisionBlankDatabase({

@@ -62,6 +62,18 @@ export interface RegisterDeviceRequest {
   osVersion?: string;
 }
 
+export type LifecycleResetReason =
+  | 'ADMINISTRATIVE_RESET'
+  | 'RECOVERY_RESET'
+  | 'FAILED_ONBOARDING_RECOVERY'
+  | 'DEVELOPMENT_TEST_RESET';
+
+export interface UpdateLifecycleStateRequestDto {
+  lifecycleState: LifecycleState;
+  isReset?: boolean;
+  resetReason?: LifecycleResetReason;
+}
+
 export interface LifecycleStatusResponse {
   installationId: string;
   appVersion: string;

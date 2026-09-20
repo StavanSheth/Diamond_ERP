@@ -111,6 +111,8 @@ export interface AttachDatabaseRequest {
   profileCode?: string;
   profileName?: string;
   confirmAttachment: boolean;
+  userId?: string;
+  targetUserId?: string;
 }
 
 export interface CreateBusinessUserResponseDto {
@@ -126,7 +128,7 @@ export interface CreateDatabaseRequest {
   displayName: string;
   profileCode?: string;
   profileName?: string;
-  userId?: string;
+  userId: string;
   provisioningOperationId?: string;
 }
 

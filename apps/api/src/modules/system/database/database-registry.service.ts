@@ -1,11 +1,13 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { systemPrisma, ensureProfileDbFile } from '../../../infrastructure/database/prisma';
+import { getControlDbPath, getDatabaseTemplatePath } from '../../../infrastructure/paths';
 import { canonicalizeDatabasePath } from './database-path.util';
 import { databaseValidationService } from './database-validation.service';
 import { installationService } from '../installation.service';
 import { logger } from '../../../infrastructure/logging';
-import { ValidationError, NotFoundError } from '../../../errors';
+import { ValidationError, NotFoundError, ConflictError } from '../../../errors';
 import type { DatabaseRegistryDto, DatabaseStatus } from '@diamond-erp/contracts';
 
 export interface RegisterDatabaseInput {
@@ -33,12 +35,38 @@ export class DatabaseRegistryService {
 
     const { canonicalPath } = pathResult;
 
+    // Guard: Prevent control or template database from being registered as customer database
+    const baseName = path.basename(canonicalPath).toLowerCase();
+    const controlDbCanonical = path.resolve(getControlDbPath()).toLowerCase();
+    const templateDbPath = getDatabaseTemplatePath();
+    const templateCanonical = templateDbPath ? path.resolve(templateDbPath).toLowerCase() : null;
+
+    if (
+      baseName === 'system.db' ||
+      baseName === 'template.db' ||
+      baseName === 'system.sqlite' ||
+      canonicalPath.toLowerCase() === controlDbCanonical ||
+      (templateCanonical && canonicalPath.toLowerCase() === templateCanonical)
+    ) {
+      throw new ValidationError(`Cannot register internal control or template database "${baseName}" as a customer database.`);
+    }
+
+    const currentInstall = await installationService.getOrCreateInstallation();
+    if (input.installationId && input.installationId !== currentInstall.id && input.installationId !== currentInstall.installationId) {
+      throw new ConflictError('Cannot register database: Installation ID does not match current local installation.');
+    }
+    const installId = currentInstall.id;
+
     // Check if canonical path already registered
     const existing = await systemPrisma.databaseRegistry.findUnique({
       where: { canonicalPath },
     });
 
     if (existing) {
+      if (existing.installationId && existing.installationId !== currentInstall.id) {
+        throw new ConflictError('Cannot register database: Database is already registered under another installation.');
+      }
+
       // Re-verify file existence on disk
       const fileExists = fs.existsSync(canonicalPath);
       const effectiveStatus = fileExists ? existing.status : 'MISSING';
@@ -68,8 +96,6 @@ export class DatabaseRegistryService {
     const databaseId = crypto.randomUUID();
     const displayName = input.displayName || canonicalPath.split(/[\\/]/).pop()?.replace(/\.db$/, '') || 'Database';
 
-    const installId = input.installationId || (await installationService.getOrCreateInstallation()).id;
-
     try {
       const created = await systemPrisma.databaseRegistry.create({
         data: {
@@ -84,6 +110,17 @@ export class DatabaseRegistryService {
           lastValidatedAt: new Date(),
         },
       });
+
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: created.databaseId,
+          eventType: 'DATABASE_REGISTERED',
+          description: `Registered database ${created.displayName} at ${canonicalPath}`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({ databaseId: created.databaseId, canonicalPath, profileId: created.profileId }),
+        },
+      }).catch(() => {});
 
       logger.info(`Registered database in control registry: ${created.displayName} [${created.databaseId}] -> ${canonicalPath}`);
       return this.mapToDto(created);

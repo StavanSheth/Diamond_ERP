@@ -27,6 +27,15 @@ export const LIFECYCLE_STAGES: LifecycleState[] = [
   'READY',
 ];
 
+export const VALID_LIFECYCLE_RESET_REASONS = [
+  'ADMINISTRATIVE_RESET',
+  'RECOVERY_RESET',
+  'FAILED_ONBOARDING_RECOVERY',
+  'DEVELOPMENT_TEST_RESET',
+] as const;
+
+export type LifecycleResetReason = (typeof VALID_LIFECYCLE_RESET_REASONS)[number];
+
 export class InstallationService {
   public getInstallationIdFilePath(): string {
     return path.join(getConfigDir(), '.installation-id');
@@ -85,7 +94,7 @@ export class InstallationService {
       }
       const newId = crypto.randomUUID();
       fs.writeFileSync(filePath, newId, { encoding: 'utf-8', mode: 0o600 });
-      logger.info(`Generated and persisted local device ID: ${newId}`);
+      logger.info(`Generated and persisted new device ID: ${newId}`);
       return newId;
     } catch (err) {
       logger.error(`Failed to persist device ID to ${filePath}: ${(err as Error).message}`);
@@ -172,10 +181,20 @@ export class InstallationService {
   /**
    * Check if a state transition is permitted.
    */
-  canTransition(current: LifecycleState, target: LifecycleState, options?: { isReset?: boolean }): boolean {
+  canTransition(
+    current: LifecycleState,
+    target: LifecycleState,
+    options?: { isReset?: boolean; resetReason?: string }
+  ): boolean {
     if (!LIFECYCLE_STAGES.includes(target)) return false;
     if (current === target) return true;
-    if (target === 'NOT_INITIALIZED') return true; // Reset always allowed
+    if (target === 'NOT_INITIALIZED') {
+      return (
+        !!options?.isReset &&
+        !!options?.resetReason &&
+        VALID_LIFECYCLE_RESET_REASONS.includes(options.resetReason as any)
+      );
+    }
     if (options?.isReset && target === 'DATABASE_DISCOVERY') return true; // Controlled recovery allowed
 
     const currentIndex = LIFECYCLE_STAGES.indexOf(current);
@@ -190,10 +209,22 @@ export class InstallationService {
    */
   async updateLifecycleState(
     targetState: LifecycleState,
-    options?: { isReset?: boolean; enforceInvariants?: boolean }
+    options?: { isReset?: boolean; resetReason?: string; enforceInvariants?: boolean }
   ): Promise<InstallationDto> {
     if (!LIFECYCLE_STAGES.includes(targetState)) {
       throw new ValidationError(`Invalid lifecycle state: "${targetState}". Allowed: ${LIFECYCLE_STAGES.join(', ')}`);
+    }
+
+    if (targetState === 'NOT_INITIALIZED') {
+      if (
+        !options?.isReset ||
+        !options?.resetReason ||
+        !VALID_LIFECYCLE_RESET_REASONS.includes(options.resetReason as any)
+      ) {
+        throw new ConflictError(
+          `Controlled reset policy violation: Resetting to NOT_INITIALIZED requires explicit isReset and valid resetReason (${VALID_LIFECYCLE_RESET_REASONS.join(', ')}).`
+        );
+      }
     }
 
     const current = await this.getOrCreateInstallation();
@@ -387,6 +418,37 @@ export class InstallationService {
     });
 
     logger.info(`Lifecycle state updated: ${current.lifecycleState} → ${targetState} (Installation: ${updated.installationId})`);
+
+    if (targetState === 'NOT_INITIALIZED') {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'Installation',
+          entityId: current.id,
+          eventType: 'LIFECYCLE_RESET',
+          description: `Lifecycle reset from ${current.lifecycleState} to NOT_INITIALIZED. Reason: ${options?.resetReason}`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            previousState: current.lifecycleState,
+            targetState: 'NOT_INITIALIZED',
+            resetReason: options?.resetReason,
+          }),
+        },
+      }).catch(() => {});
+    } else {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'Installation',
+          entityId: current.id,
+          eventType: 'LIFECYCLE_STATE_TRANSITION',
+          description: `Lifecycle state updated: ${current.lifecycleState} → ${targetState} (Installation: ${updated.installationId})`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            previousState: current.lifecycleState,
+            targetState,
+          }),
+        },
+      }).catch(() => {});
+    }
 
     return {
       id: updated.id,
@@ -630,25 +692,39 @@ export class InstallationService {
    * Associate an ERP business user with this local installation.
    */
   async associateUser(installationId: string, userId: string): Promise<InstallationUserDto> {
-    const install = await systemPrisma.installation.findUnique({ where: { id: installationId } });
-    if (!install) {
-      throw new NotFoundError(`Installation not found: ${installationId}`);
+    const install = await this.getOrCreateInstallation();
+    if (installationId !== install.id && installationId !== install.installationId) {
+      throw new ConflictError('Cannot associate user: Target installation ID does not match current local installation.');
     }
     const user = await systemPrisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundError(`User not found: ${userId}`);
     }
+    if (!user.isActive || user.deletedAt) {
+      throw new ConflictError(`Cannot associate inactive or deleted user "${user.username}". User must be explicitly reactivated first.`);
+    }
 
     const record = await systemPrisma.installationUser.upsert({
       where: {
-        installationId_userId: { installationId, userId },
+        installationId_userId: { installationId: install.id, userId },
       },
       update: {},
       create: {
-        installationId,
+        installationId: install.id,
         userId,
       },
     });
+
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'InstallationUser',
+        entityId: record.id,
+        eventType: 'USER_ASSOCIATED',
+        description: `User @${user.username} (${user.id}) associated with installation ${install.installationId}`,
+        performedBy: 'SYSTEM',
+        metadata: JSON.stringify({ installationId: install.id, userId }),
+      },
+    }).catch(() => {});
 
     return {
       id: record.id,
@@ -662,9 +738,33 @@ export class InstallationService {
    * Disassociate an ERP business user from this local installation without deleting user or DB.
    */
   async disassociateUser(installationId: string, userId: string): Promise<void> {
-    await systemPrisma.installationUser.deleteMany({
-      where: { installationId, userId },
+    const install = await this.getOrCreateInstallation();
+    if (installationId !== install.id && installationId !== install.installationId) {
+      throw new ConflictError('Cannot disassociate user: Target installation ID does not match current local installation.');
+    }
+
+    const existing = await systemPrisma.installationUser.findUnique({
+      where: { installationId_userId: { installationId: install.id, userId } },
+      include: { user: true },
     });
+    if (!existing) {
+      throw new NotFoundError(`User "${userId}" is not associated with this installation.`);
+    }
+
+    await systemPrisma.installationUser.deleteMany({
+      where: { installationId: install.id, userId },
+    });
+
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'InstallationUser',
+        entityId: existing.id,
+        eventType: 'USER_DISASSOCIATED',
+        description: `User @${existing.user?.username || userId} disassociated from installation ${install.installationId}`,
+        performedBy: 'SYSTEM',
+        metadata: JSON.stringify({ installationId: install.id, userId }),
+      },
+    }).catch(() => {});
   }
 
   /**

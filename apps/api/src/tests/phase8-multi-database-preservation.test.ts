@@ -31,6 +31,20 @@ describe('Phase 8 — Multi-Database Customer Data Preservation (P0)', () => {
     fs.mkdirSync(customExportDir, { recursive: true });
 
     install = await installationService.getOrCreateInstallation();
+
+    // Clean up any stale database registries whose physical files no longer exist
+    const staleRegistries = await systemPrisma.databaseRegistry.findMany({
+      where: { status: 'ACTIVE' },
+    });
+    for (const reg of staleRegistries) {
+      if (!fs.existsSync(reg.canonicalPath)) {
+        await systemPrisma.databaseRegistry.update({
+          where: { id: reg.id },
+          data: { status: 'MISSING' },
+        });
+      }
+    }
+
     const templateDb = getDatabaseTemplatePath();
 
     // Create 3 physical customer databases from template
@@ -185,5 +199,19 @@ describe('Phase 8 — Multi-Database Customer Data Preservation (P0)', () => {
     expect(vResult.verified).toBe(false);
     expect(vResult.status).toBe('FAILED');
     expect(vResult.error).toContain('checksum mismatch');
+  });
+
+  afterAll(async () => {
+    for (const dbPath of Object.values(dbPaths)) {
+      if (fs.existsSync(dbPath)) {
+        try { fs.unlinkSync(dbPath); } catch {}
+      }
+    }
+    await systemPrisma.databaseRegistry.deleteMany({
+      where: { canonicalPath: { in: Object.values(dbPaths).map((p) => path.resolve(p)) } },
+    });
+    if (fs.existsSync(testRoot)) {
+      try { fs.rmSync(testRoot, { recursive: true, force: true }); } catch {}
+    }
   });
 });

@@ -57,6 +57,13 @@ describe('Diamond ERP V3 — Phase 8 Master Full Lifecycle E2E Test (34-Step Con
       if (fs.existsSync(shm)) try { fs.unlinkSync(shm); } catch {}
     }
 
+    await systemPrisma.databaseRegistry.deleteMany({
+      where: { canonicalPath: { in: [path.resolve(dbPathA), path.resolve(dbPathB)] } },
+    });
+    await systemPrisma.profile.deleteMany({
+      where: { code: { in: [profileCodeA, profileCodeB] } },
+    });
+
     if (fs.existsSync(scratchDir)) {
       try {
         fs.rmSync(scratchDir, { recursive: true, force: true });

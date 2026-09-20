@@ -144,17 +144,6 @@ export const SettingsPage: React.FC = () => {
     setBrowsingDestination(true);
     setPreservationError(null);
     try {
-      if ('showDirectoryPicker' in window) {
-        try {
-          await (window as any).showDirectoryPicker();
-        } catch (pickerErr: any) {
-          if (pickerErr.name === 'AbortError') {
-            setBrowsingDestination(false);
-            return;
-          }
-        }
-      }
-
       const browseRes = await api.uninstall.browseDestination();
       if (browseRes.selectedPath) {
         setCustomDestinationDir(browseRes.selectedPath);
