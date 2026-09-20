@@ -1,7 +1,9 @@
 import fs from 'fs';
+import path from 'path';
 import { PrismaClient } from '@prisma/client';
 import { canonicalizeDatabasePath } from './database-path.util';
 import { logger } from '../../../infrastructure/logging';
+import { getControlDbPath, getDatabaseTemplatePath } from '../../../infrastructure/paths';
 import type { DatabaseValidationResultDto } from '@diamond-erp/contracts';
 
 const SQLITE_HEADER = Buffer.from('SQLite format 3\0');
@@ -54,6 +56,42 @@ export class DatabaseValidationService {
     }
 
     const { canonicalPath } = pathResult;
+
+    // Guard: Reject Control Database (system.db)
+    const controlDbCanonical = path.resolve(getControlDbPath()).toLowerCase();
+    if (canonicalPath.toLowerCase() === controlDbCanonical) {
+      return {
+        status: 'INVALID',
+        canonicalPath,
+        isValid: false,
+        tableCount: 0,
+        schemaVersion: 0,
+        integrityCheck: 'control_db',
+        tablesFound: [],
+        missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'CONTROL_DB',
+        details: 'The system control database (system.db) cannot be attached as an ERP business database.',
+        error: 'DATABASE_IS_CONTROL_DB',
+      };
+    }
+
+    // Guard: Reject Template Database (template.db)
+    const templateDbPath = getDatabaseTemplatePath();
+    if (templateDbPath && canonicalPath.toLowerCase() === path.resolve(templateDbPath).toLowerCase()) {
+      return {
+        status: 'INVALID',
+        canonicalPath,
+        isValid: false,
+        tableCount: 0,
+        schemaVersion: 0,
+        integrityCheck: 'template_db',
+        tablesFound: [],
+        missingRequiredTables: REQUIRED_ERP_TABLES,
+        detectedType: 'TEMPLATE_DB',
+        details: 'The schema template (template.db) is immutable and cannot be attached as an active business database.',
+        error: 'DATABASE_IS_TEMPLATE',
+      };
+    }
 
     // 1. File-level validation
     if (!fs.existsSync(canonicalPath)) {
@@ -238,15 +276,61 @@ export class DatabaseValidationService {
         };
       }
 
-      // Check schema version from Profile table if available
+      // Check schema version from Profile table if available, with PRAGMA user_version fallback
       let schemaVersion = 1;
       try {
         const profRecord = await readOnlyClient.$queryRawUnsafe<any[]>('SELECT schemaVersion FROM "Profile" LIMIT 1;');
-        if (profRecord?.[0]?.schemaVersion) {
+        if (profRecord?.[0]?.schemaVersion !== undefined && profRecord[0].schemaVersion !== null) {
           schemaVersion = Number(profRecord[0].schemaVersion);
+        } else {
+          const userVer = await readOnlyClient.$queryRawUnsafe<any[]>('PRAGMA user_version;');
+          if (userVer?.[0]?.user_version) {
+            schemaVersion = Number(userVer[0].user_version);
+          }
         }
       } catch {
-        // Default to version 1
+        try {
+          const userVer = await readOnlyClient.$queryRawUnsafe<any[]>('PRAGMA user_version;');
+          if (userVer?.[0]?.user_version) {
+            schemaVersion = Number(userVer[0].user_version);
+          }
+        } catch {
+          // Default to version 1
+        }
+      }
+
+      // Schema version compatibility bounds:
+      // Minimum supported: version 1
+      // Maximum supported: version 10 (future version guard)
+      if (schemaVersion < 1) {
+        return {
+          status: 'UNSUPPORTED',
+          canonicalPath,
+          isValid: false,
+          tableCount: tablesFound.length,
+          schemaVersion,
+          integrityCheck: 'ok',
+          tablesFound,
+          missingRequiredTables: [],
+          detectedType: 'UNSUPPORTED_VERSION',
+          details: `Unsupported database schema version: ${schemaVersion}. Minimum supported version is 1.`,
+          error: 'Unsupported schema version',
+        };
+      }
+      if (schemaVersion > 10) {
+        return {
+          status: 'UNSUPPORTED',
+          canonicalPath,
+          isValid: false,
+          tableCount: tablesFound.length,
+          schemaVersion,
+          integrityCheck: 'ok',
+          tablesFound,
+          missingRequiredTables: [],
+          detectedType: 'UNSUPPORTED_VERSION',
+          details: `Database schema version (${schemaVersion}) is newer than supported by this application version.`,
+          error: 'Future schema version',
+        };
       }
 
       const detectedType = isBackupPath

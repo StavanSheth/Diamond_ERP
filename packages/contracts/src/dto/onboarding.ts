@@ -7,7 +7,8 @@ export type DatabaseSuitability =
   | 'UNSUPPORTED'
   | 'CORRUPTED'
   | 'INVALID'
-  | 'CONFLICT';
+  | 'CONFLICT'
+  | 'MISSING';
 
 export interface OnboardingStatusDto {
   lifecycleState: LifecycleState;

@@ -91,6 +91,8 @@ export function canonicalizeDatabasePath(rawPath: string): PathValidationResult 
     ? path.resolve(path.normalize(trimmed))
     : path.resolve(databasesDir, path.normalize(trimmed));
 
+  let canonical = resolved;
+
   // Guard 5: Verify whether path points to a directory
   if (fs.existsSync(resolved)) {
     try {
@@ -103,6 +105,13 @@ export function canonicalizeDatabasePath(rawPath: string): PathValidationResult 
           isExternal: !resolved.startsWith(databasesDir),
         };
       }
+
+      // Windows native path normalization: resolve exact filesystem casing
+      try {
+        canonical = fs.realpathSync.native(resolved);
+      } catch {
+        canonical = resolved;
+      }
     } catch (err) {
       return {
         valid: false,
@@ -113,11 +122,11 @@ export function canonicalizeDatabasePath(rawPath: string): PathValidationResult 
     }
   }
 
-  const isExternal = !resolved.startsWith(databasesDir);
+  const isExternal = !canonical.startsWith(databasesDir);
 
   return {
     valid: true,
-    canonicalPath: resolved,
+    canonicalPath: canonical,
     isExternal,
   };
 }

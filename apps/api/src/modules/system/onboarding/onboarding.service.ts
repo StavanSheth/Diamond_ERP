@@ -250,6 +250,23 @@ export class OnboardingService {
 
     await installationService.associateUser(install.id, user.id);
 
+    // Audit event for explicit user association
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'User',
+        entityId: user.id,
+        eventType: 'USER_ASSOCIATED',
+        description: `User "${user.username}" explicitly associated with installation ${install.installationId}`,
+        performedBy: user.id,
+        metadata: JSON.stringify({
+          userId: user.id,
+          username: user.username,
+          installationId: install.id,
+          associatedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
     // If currently at USER_DISCOVERY, advance state machine
     if (install.lifecycleState === 'USER_DISCOVERY') {
       await installationService.updateLifecycleState('DATABASE_DISCOVERY');
@@ -291,6 +308,22 @@ export class OnboardingService {
     // 2. Associate with installation
     await installationService.associateUser(install.id, created.id);
 
+    // Audit event
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'User',
+        entityId: created.id,
+        eventType: 'USER_ASSOCIATED',
+        description: `New user "${created.username}" created and associated with installation ${install.installationId}`,
+        performedBy: created.id,
+        metadata: JSON.stringify({
+          userId: created.id,
+          username: created.username,
+          installationId: install.id,
+        }),
+      },
+    });
+
     // 3. Advance lifecycle state if at USER_DISCOVERY
     if (install.lifecycleState === 'USER_DISCOVERY') {
       await installationService.updateLifecycleState('DATABASE_DISCOVERY');
@@ -323,7 +356,7 @@ export class OnboardingService {
       const lower = canonical.toLowerCase();
       if (lower === controlDbCanonical || lower === templateDbCanonical) continue;
 
-      candidatesMap.set(canonical, {
+      candidatesMap.set(lower, {
         displayName: reg.displayName,
         canonicalPath: canonical,
         source: 'REGISTRY',
@@ -350,8 +383,8 @@ export class OnboardingService {
             const lower = canonical.toLowerCase();
             if (lower === controlDbCanonical || lower === templateDbCanonical) continue;
 
-            if (!candidatesMap.has(canonical)) {
-              candidatesMap.set(canonical, {
+            if (!candidatesMap.has(lower)) {
+              candidatesMap.set(lower, {
                 displayName: file.replace(/\.db$/, ''),
                 canonicalPath: canonical,
                 source: 'LOCAL_DIR',
@@ -367,6 +400,8 @@ export class OnboardingService {
       }
     }
 
+    logger.info(`Discovered ${candidatesMap.size} database candidates for installation ${install.installationId}`);
+
     return {
       candidates: Array.from(candidatesMap.values()),
     };
@@ -374,13 +409,24 @@ export class OnboardingService {
 
   /**
    * Inspect a candidate database path in a strictly READ-ONLY manner.
-   * Classifies suitability: VALID, REQUIRES_CONFIRMATION, UNSUPPORTED, CORRUPTED, INVALID, CONFLICT.
+   * Classifies suitability: VALID, REQUIRES_CONFIRMATION, UNSUPPORTED, CORRUPTED, INVALID, CONFLICT, MISSING.
    */
   async inspectDatabaseCandidate(candidatePath: string): Promise<DatabaseAttachmentPreviewDto> {
     const install = await installationService.getOrCreateInstallation();
     const pathResult = canonicalizeDatabasePath(candidatePath);
 
     if (!pathResult.valid) {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: candidatePath,
+          eventType: 'DATABASE_REJECTED',
+          description: `Database inspection rejected for invalid path: ${pathResult.error}`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({ candidatePath, error: pathResult.error }),
+        },
+      }).catch(() => {});
+
       return {
         canonicalPath: candidatePath,
         displayName: path.basename(candidatePath),
@@ -400,6 +446,17 @@ export class OnboardingService {
     // Guard 1: Reject Control Database (system.db)
     const controlDbCanonical = path.resolve(getControlDbPath()).toLowerCase();
     if (canonical.toLowerCase() === controlDbCanonical) {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: canonical,
+          eventType: 'DATABASE_CONFLICT_DETECTED',
+          description: 'Attempt to inspect/attach Control DB (system.db) as business database was blocked.',
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({ canonicalPath: canonical, conflictReason: 'DATABASE_IS_CONTROL_DB' }),
+        },
+      }).catch(() => {});
+
       return {
         canonicalPath: canonical,
         displayName,
@@ -416,6 +473,17 @@ export class OnboardingService {
     // Guard 2: Reject Template Database (template.db)
     const templateDbPath = getDatabaseTemplatePath();
     if (templateDbPath && canonical.toLowerCase() === path.resolve(templateDbPath).toLowerCase()) {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: canonical,
+          eventType: 'DATABASE_CONFLICT_DETECTED',
+          description: 'Attempt to inspect/attach schema template (template.db) as business database was blocked.',
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({ canonicalPath: canonical, conflictReason: 'DATABASE_IS_TEMPLATE' }),
+        },
+      }).catch(() => {});
+
       return {
         canonicalPath: canonical,
         displayName,
@@ -436,6 +504,21 @@ export class OnboardingService {
     });
 
     if (existingReg && existingReg.installationId !== install.id) {
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: existingReg.databaseId,
+          eventType: 'DATABASE_CONFLICT_DETECTED',
+          description: `Ownership conflict: database is registered under foreign installation ${existingReg.installationId}`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            databaseId: existingReg.databaseId,
+            registeredInstallationId: existingReg.installationId,
+            currentInstallationId: install.id,
+          }),
+        },
+      }).catch(() => {});
+
       return {
         canonicalPath: canonical,
         displayName: existingReg.displayName,
@@ -459,6 +542,22 @@ export class OnboardingService {
       if (validation.status === 'CORRUPTED') suitability = 'CORRUPTED';
       else if (validation.status === 'UNSUPPORTED') suitability = 'UNSUPPORTED';
 
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: canonical,
+          eventType: 'DATABASE_REJECTED',
+          description: `Database inspection failed validation: ${validation.error} (${validation.details})`,
+          performedBy: 'SYSTEM',
+          metadata: JSON.stringify({
+            canonicalPath: canonical,
+            status: validation.status,
+            suitability,
+            error: validation.error,
+          }),
+        },
+      }).catch(() => {});
+
       return {
         canonicalPath: canonical,
         displayName,
@@ -475,6 +574,21 @@ export class OnboardingService {
     }
 
     // Valid Diamond ERP database: Requires explicit user confirmation before attachment!
+    await systemPrisma.auditEvent.create({
+      data: {
+        entityType: 'DatabaseRegistry',
+        entityId: canonical,
+        eventType: 'DATABASE_INSPECTED',
+        description: `Database candidate inspected successfully: ${displayName} [${canonical}]`,
+        performedBy: 'SYSTEM',
+        metadata: JSON.stringify({
+          canonicalPath: canonical,
+          tableCount: validation.tableCount,
+          schemaVersion: validation.schemaVersion,
+        }),
+      },
+    }).catch(() => {});
+
     return {
       canonicalPath: canonical,
       displayName: existingReg?.displayName || displayName,
@@ -571,11 +685,11 @@ export class OnboardingService {
         });
       }
 
-      // 3. Link associated business user to this profile
-      const installUser = await tx.installationUser.findFirst({
+      // 3. Link all associated business users to this profile
+      const installUsers = await tx.installationUser.findMany({
         where: { installationId: install.id },
       });
-      if (installUser) {
+      for (const installUser of installUsers) {
         await tx.userProfile.upsert({
           where: {
             userId_profileId: {
@@ -593,14 +707,29 @@ export class OnboardingService {
         });
       }
 
-      // 4. Audit event
+      // 4. Audit events
+      await tx.auditEvent.create({
+        data: {
+          entityType: 'DatabaseRegistry',
+          entityId: registry.databaseId,
+          eventType: 'DATABASE_ATTACHMENT_CONFIRMED',
+          description: `User explicitly confirmed attachment of database: ${registry.displayName} -> ${canonical}`,
+          performedBy: installUsers[0]?.userId || 'SYSTEM',
+          metadata: JSON.stringify({
+            canonicalPath: canonical,
+            databaseId: registry.databaseId,
+            confirmed: true,
+          }),
+        },
+      });
+
       await tx.auditEvent.create({
         data: {
           entityType: 'DatabaseRegistry',
           entityId: registry.databaseId,
           eventType: 'DATABASE_ATTACHED',
           description: `Existing database attached: ${registry.displayName} -> ${canonical}`,
-          performedBy: installUser?.userId || 'SYSTEM',
+          performedBy: installUsers[0]?.userId || 'SYSTEM',
           metadata: JSON.stringify({
             canonicalPath: canonical,
             databaseId: registry.databaseId,
@@ -699,11 +828,11 @@ export class OnboardingService {
           },
         });
 
-        // Link associated user
-        const installUser = await tx.installationUser.findFirst({
+        // Link all associated users
+        const installUsers = await tx.installationUser.findMany({
           where: { installationId: install.id },
         });
-        if (installUser) {
+        for (const installUser of installUsers) {
           await tx.userProfile.upsert({
             where: {
               userId_profileId: {
@@ -728,7 +857,7 @@ export class OnboardingService {
             entityId: registry.databaseId,
             eventType: 'DATABASE_CREATED',
             description: `New database created from template: ${displayName} -> ${targetDbPath}`,
-            performedBy: installUser?.userId || 'SYSTEM',
+            performedBy: installUsers[0]?.userId || 'SYSTEM',
             metadata: JSON.stringify({
               targetDbPath,
               databaseId: registry.databaseId,
