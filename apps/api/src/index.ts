@@ -26,6 +26,7 @@ import { enforceContentType } from './middleware/content-type';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
 import prisma, { systemPrisma, disconnectAllClients } from './infrastructure/database/prisma';
 import { recoveryService } from './modules/system/recovery/recovery.service';
+import { preservationService } from './modules/system/preservation/preservation.service';
 
 /**
  * Bootstrap and start the application.
@@ -155,6 +156,9 @@ async function bootstrap(): Promise<void> {
   fileStorageService.ensureUploadsDir();
   await recoveryService.reconcileInterruptedRestores().catch((err) => {
     logger.error('[Startup] Failed to reconcile interrupted operations:', err);
+  });
+  await preservationService.reconcileInterruptedPreservations().catch((err) => {
+    logger.error('[Startup] Failed to reconcile interrupted preservations:', err);
   });
 
   // 7. Swagger UI (only in development)

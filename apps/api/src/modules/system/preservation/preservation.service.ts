@@ -25,6 +25,7 @@ import type {
   PreservationPackageDto,
   PreservationVerificationDto,
 } from '@diamond-erp/contracts';
+import { buildExportQueries } from '../export/export-entity-registry';
 
 export class PreservationService {
   /**
@@ -263,17 +264,8 @@ export class PreservationService {
         data: { status: 'EXPORTING' },
       });
 
-      const tableEntities: Array<{ name: string; query: () => Promise<any[]> }> = [
-        { name: 'Stock', query: () => (client as any).stock.findMany() },
-        { name: 'Ledger', query: () => (client as any).ledger.findMany() },
-        { name: 'Party', query: () => (client as any).party.findMany() },
-        { name: 'DiamondItem', query: () => (client as any).diamondItem.findMany() },
-        { name: 'Certification', query: () => (client as any).certification.findMany() },
-        { name: 'Repair', query: () => (client as any).repair.findMany() },
-        { name: 'Transaction', query: () => (client as any).transaction.findMany() },
-        { name: 'TransactionItem', query: () => (client as any).transactionItem.findMany() },
-        { name: 'Location', query: () => (client as any).location.findMany() },
-      ];
+      // Defined business entities to export from authoritative registry
+      const tableEntities = buildExportQueries(client);
 
       const csvFiles: Array<{ fileName: string; tableName: string; rowCount: number; sha256: string; sizeBytes: number }> = [];
       let totalRows = 0;
@@ -891,6 +883,53 @@ export class PreservationService {
       details,
       entityRowCounts,
     };
+  }
+
+  /**
+   * Reconciles preservation packages left in transient/in-progress states
+   * (PENDING, BACKING_UP, EXPORTING, VERIFYING) due to crash, power loss, or service restart.
+   * Marks them FAILED and cleans up incomplete staging.
+   */
+  public async reconcileInterruptedPreservations(): Promise<{ reconciledCount: number }> {
+    let reconciledCount = 0;
+    try {
+      const interrupted = await systemPrisma.preservationPackage.findMany({
+        where: {
+          status: { in: ['PENDING', 'BACKING_UP', 'EXPORTING', 'VERIFYING'] },
+        },
+      });
+
+      for (const pkg of interrupted) {
+        logger.warn(`[PreservationService] Reconciling interrupted preservation package ${pkg.packageId} (was ${pkg.status})`);
+        await systemPrisma.preservationPackage.update({
+          where: { id: pkg.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: 'Operation was interrupted by system shutdown or restart before completion.',
+          },
+        });
+        reconciledCount++;
+
+        if (pkg.destinationPath && fs.existsSync(pkg.destinationPath)) {
+          const exportDir = getExportDir();
+          if (pkg.destinationPath.startsWith(exportDir)) {
+            try {
+              const manifestPath = path.join(pkg.destinationPath, 'preservation-manifest.json');
+              if (!fs.existsSync(manifestPath)) {
+                fs.rmSync(pkg.destinationPath, { recursive: true, force: true });
+                logger.info(`[PreservationService] Cleaned up incomplete preservation directory: ${pkg.destinationPath}`);
+              }
+            } catch (err) {
+              logger.warn(`[PreservationService] Could not clean up partial dir ${pkg.destinationPath}: ${String(err)}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.error(`[PreservationService] Error reconciling interrupted preservations: ${String(err)}`);
+    }
+
+    return { reconciledCount };
   }
 }
 

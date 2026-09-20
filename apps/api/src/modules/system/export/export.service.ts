@@ -21,6 +21,7 @@ import type {
   ExportVerificationDto,
   ExportResponseDto,
 } from '@diamond-erp/contracts';
+import { buildExportQueries } from './export-entity-registry';
 
 export class ExportService {
   /**
@@ -137,18 +138,8 @@ export class ExportService {
     let totalRows = 0;
     let totalSizeBytes = 0;
 
-    // Defined business entities to export (strictly omitting User, Session, DeviceSecurity)
-    const tableEntities: Array<{ name: string; query: () => Promise<any[]> }> = [
-      { name: 'Stock', query: () => (client as any).stock.findMany() },
-      { name: 'Ledger', query: () => (client as any).ledger.findMany() },
-      { name: 'Party', query: () => (client as any).party.findMany() },
-      { name: 'DiamondItem', query: () => (client as any).diamondItem.findMany() },
-      { name: 'Certification', query: () => (client as any).certification.findMany() },
-      { name: 'Repair', query: () => (client as any).repair.findMany() },
-      { name: 'Transaction', query: () => (client as any).transaction.findMany() },
-      { name: 'TransactionItem', query: () => (client as any).transactionItem.findMany() },
-      { name: 'Location', query: () => (client as any).location.findMany() },
-    ];
+    // Defined business entities to export from authoritative registry (strictly omitting System/User/Session/Security)
+    const tableEntities = buildExportQueries(client);
 
     const requiredEntities = req.tables && req.tables.length > 0
       ? tableEntities.filter((e) => req.tables!.includes(e.name))

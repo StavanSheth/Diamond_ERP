@@ -4,7 +4,7 @@ import path from 'path';
 import { exportService } from '../modules/system/export/export.service';
 import { uninstallPreflightService } from '../modules/system/uninstall/uninstall-preflight.service';
 import { systemPrisma } from '../infrastructure/database/prisma';
-import { getDatabaseTemplatePath } from '../infrastructure/paths';
+import { getDatabaseTemplatePath, getDataDir } from '../infrastructure/paths';
 import { installationService } from '../modules/system/installation.service';
 import { ValidationError } from '../errors';
 
@@ -20,6 +20,13 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
     }
     const templateDb = getDatabaseTemplatePath() || path.resolve('apps/api/Stavan.db');
     fs.copyFileSync(templateDb, testDbPath);
+
+    await systemPrisma.uninstallAuthorization.deleteMany({});
+    await systemPrisma.preservationPackage.deleteMany({});
+    const tokenFile = path.join(getDataDir(), 'uninstall-authorization.json');
+    if (fs.existsSync(tokenFile)) {
+      try { fs.unlinkSync(tokenFile); } catch {}
+    }
 
     // Clean up any stale active registry records whose files no longer exist on disk
     const staleRegistries = await systemPrisma.databaseRegistry.findMany({
@@ -51,9 +58,15 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
 
   afterAll(async () => {
     try {
+      await systemPrisma.uninstallAuthorization.deleteMany({});
+      await systemPrisma.preservationPackage.deleteMany({});
       await systemPrisma.databaseRegistry.deleteMany({
         where: { databaseId: 'db_test_export' },
       });
+      const tokenFile = path.join(getDataDir(), 'uninstall-authorization.json');
+      if (fs.existsSync(tokenFile)) {
+        try { fs.unlinkSync(tokenFile); } catch {}
+      }
     } catch {}
     if (fs.existsSync(testScratchDir)) {
       try {

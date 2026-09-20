@@ -1902,13 +1902,46 @@ namespace DiamondERP.Setup
                 try
                 {
                     string[] dbs = Directory.GetFiles(databasesDir, "*.db");
-                    if (dbs.Length > 0) hasCustomerData = true;
+                    string[] sqlites = Directory.GetFiles(databasesDir, "*.sqlite");
+                    if (dbs.Length > 0 || sqlites.Length > 0) hasCustomerData = true;
                 }
                 catch { }
             }
             if (File.Exists(Path.Combine(userDbDir, "Stavan.db")) || File.Exists(Path.Combine(userDbDir, "system.db")))
             {
                 hasCustomerData = true;
+            }
+            string exportsDir = Path.Combine(userDbDir, "exports");
+            if (Directory.Exists(exportsDir))
+            {
+                try
+                {
+                    if (Directory.GetFileSystemEntries(exportsDir).Length > 0) hasCustomerData = true;
+                }
+                catch { }
+            }
+            string backupsDir = Path.Combine(userDbDir, "backups");
+            if (Directory.Exists(backupsDir))
+            {
+                try
+                {
+                    if (Directory.GetFiles(backupsDir, "*.db").Length > 0) hasCustomerData = true;
+                }
+                catch { }
+            }
+            string statusFile = Path.Combine(userDbDir, "customer-data-status.json");
+            if (File.Exists(statusFile))
+            {
+                try
+                {
+                    string statusJson = File.ReadAllText(statusFile);
+                    string hasCustVal = ExtractJsonValue(statusJson, "hasCustomerData");
+                    if (hasCustVal != null && hasCustVal.Equals("true", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasCustomerData = true;
+                    }
+                }
+                catch { }
             }
 
             if (hasCustomerData)

@@ -4,13 +4,11 @@ import crypto from 'crypto';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getDataDir,
-  getDatabasesDir,
-  getControlDbPath,
-  getDatabaseTemplatePath,
   ensureAllDataDirs,
 } from '../../../infrastructure/paths';
 import { installationService } from '../installation.service';
 import { preservationService } from '../preservation/preservation.service';
+import { customerDataDetectionService } from './customer-data-detection.service';
 import { ConflictError, NotFoundError } from '../../../errors';
 import { logger } from '../../../infrastructure/logging';
 import type {
@@ -29,83 +27,10 @@ export class UninstallPreflightService {
   async getPreflightStatus(): Promise<UninstallPreflightDto> {
     ensureAllDataDirs();
     const install = await installationService.getOrCreateInstallation();
-    const databasesDir = getDatabasesDir();
     const userAppDataDir = getDataDir();
-    const controlDb = getControlDbPath().toLowerCase();
-    const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
 
-    const databases: Array<{
-      databaseId: string;
-      displayName: string;
-      canonicalPath: string;
-      sizeBytes: number;
-      hasRecentBackup: boolean;
-      latestBackupAt?: string | null;
-    }> = [];
-
-    const seenPaths = new Set<string>();
-
-    // 1. Registered databases
-    const registries = await systemPrisma.databaseRegistry.findMany({
-      where: { installationId: install.id, status: 'ACTIVE' },
-    });
-
-    for (const reg of registries) {
-      if (!fs.existsSync(reg.canonicalPath)) continue;
-      const lower = reg.canonicalPath.toLowerCase();
-      if (lower === controlDb || lower === templateDb) continue;
-      if (seenPaths.has(lower)) continue;
-      seenPaths.add(lower);
-
-      const sizeBytes = fs.statSync(reg.canonicalPath).size;
-
-      // Find latest backup
-      const latestBackup = await systemPrisma.backupRecord.findFirst({
-        where: { databaseId: reg.databaseId, status: 'VERIFIED' },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      databases.push({
-        databaseId: reg.databaseId,
-        displayName: reg.displayName,
-        canonicalPath: reg.canonicalPath,
-        sizeBytes,
-        hasRecentBackup: !!latestBackup,
-        latestBackupAt: latestBackup?.verifiedAt ? latestBackup.verifiedAt.toISOString() : null,
-      });
-    }
-
-    // 2. Scan databases directory for any unregistered physical customer databases
-    if (fs.existsSync(databasesDir)) {
-      try {
-        const files = fs.readdirSync(databasesDir);
-        for (const file of files) {
-          if (!file.endsWith('.db') && !file.endsWith('.sqlite')) continue;
-          const fullPath = path.resolve(databasesDir, file);
-          const lower = fullPath.toLowerCase();
-          if (lower === controlDb || lower === templateDb) continue;
-          if (seenPaths.has(lower)) continue;
-          seenPaths.add(lower);
-
-          const stat = fs.statSync(fullPath);
-          const latestBackup = await systemPrisma.backupRecord.findFirst({
-            where: { status: 'VERIFIED' },
-            orderBy: { createdAt: 'desc' },
-          });
-
-          databases.push({
-            databaseId: `db_${path.basename(fullPath, path.extname(fullPath))}`,
-            displayName: path.basename(fullPath),
-            canonicalPath: fullPath,
-            sizeBytes: stat.size,
-            hasRecentBackup: !!latestBackup,
-            latestBackupAt: latestBackup?.verifiedAt ? latestBackup.verifiedAt.toISOString() : null,
-          });
-        }
-      } catch (err) {
-        logger.warn(`[UninstallPreflightService] Error scanning databases dir: ${String(err)}`);
-      }
-    }
+    const detection = await customerDataDetectionService.detectCustomerData();
+    const databases = detection.databases;
 
     const totalBackupsCount = await systemPrisma.backupRecord.count({
       where: { status: 'VERIFIED' },

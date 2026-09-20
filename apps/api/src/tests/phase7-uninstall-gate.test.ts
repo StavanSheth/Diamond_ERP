@@ -54,9 +54,15 @@ describe('Phase 7 — Uninstall Preflight & Hard Safety Gate', () => {
 
   afterAll(async () => {
     try {
+      await systemPrisma.uninstallAuthorization.deleteMany({});
+      await systemPrisma.preservationPackage.deleteMany({});
       await systemPrisma.databaseRegistry.deleteMany({
         where: { databaseId: 'dbreg_uninstall_gate_001' },
       });
+      const tokenPath = path.join(getDataDir(), 'uninstall-authorization.json');
+      if (fs.existsSync(tokenPath)) {
+        fs.unlinkSync(tokenPath);
+      }
     } catch {}
 
     if (fs.existsSync(testDir)) {
