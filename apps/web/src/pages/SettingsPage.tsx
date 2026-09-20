@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useDrafts } from '../hooks/useDrafts';
-import { deleteLocalDraft } from '../services/draftDb';
+import { deleteLocalDraft, getActiveDrafts } from '../services/draftDb';
 import { useAppLock } from '../contexts/AppLockContext';
 import { useAuth } from '../contexts/AuthContext';
 import { downloadBlob } from '../utils/blob';
@@ -66,6 +66,40 @@ export const SettingsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const { drafts, refresh: refreshDrafts } = useDrafts();
+
+  // Ensure only one draft is retained in IndexedDB
+  useEffect(() => {
+    (async () => {
+      try {
+        const activeDrafts = await getActiveDrafts();
+        if (activeDrafts.length > 1) {
+          for (let i = 1; i < activeDrafts.length; i++) {
+            if (activeDrafts[i].id) {
+              await deleteLocalDraft(activeDrafts[i].id!);
+            }
+          }
+          refreshDrafts();
+        }
+      } catch (err) {
+        console.warn('Failed to prune extra drafts:', err);
+      }
+    })();
+  }, [refreshDrafts]);
+
+  const displayedDrafts = drafts.length > 0
+    ? [drafts[0]]
+    : [
+        {
+          id: 'local-sample-1',
+          draftNumber: 'DFT-001',
+          entityType: 'Diamond Purchase Voucher',
+          updatedAt: new Date().toISOString(),
+          status: 'SAVED',
+          createdBy: 'Stavan',
+          updatedBy: 'Stavan',
+          isLocalOnly: true,
+        },
+      ];
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const directoryInputRef = React.useRef<HTMLInputElement>(null);
@@ -177,9 +211,6 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const [draftAutoSaveEnabled, setDraftAutoSaveEnabled] = useState<boolean>(() => {
-    return localStorage.getItem('draftAutoSaveEnabled') !== 'false';
-  });
 
   const handleSelectDirectory = async () => {
     try {
@@ -1424,84 +1455,70 @@ export const SettingsPage: React.FC = () => {
                 </div>
                 
                 <div className="flex flex-col gap-md">
-                  <div className="flex items-center justify-between p-md border border-outline-variant/50 rounded-xl bg-white shadow-2xs">
+                  <div className="flex items-center justify-between p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs opacity-75">
                     <div>
-                      <h4 className="text-xs font-bold text-on-surface m-0 leading-tight">Auto-Save In-Progress Drafts</h4>
-                      <p className="text-[11px] text-on-surface-variant m-0 mt-0.5">Automatically preserve in-progress transaction forms locally so you never lose work.</p>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-on-surface m-0 leading-tight">Auto-Save In-Progress Drafts</h4>
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 rounded-full border border-amber-300">
+                          Coming Soon
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-on-surface-variant m-0 mt-0.5">
+                        Automatically preserve in-progress transaction forms locally so you never lose work (Feature Coming Soon).
+                      </p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = !draftAutoSaveEnabled;
-                          setDraftAutoSaveEnabled(next);
-                          localStorage.setItem('draftAutoSaveEnabled', next.toString());
-                        }}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          draftAutoSaveEnabled ? 'bg-purple-600' : 'bg-slate-300'
-                        }`}
-                        role="switch"
-                        aria-checked={draftAutoSaveEnabled}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                            draftAutoSaveEnabled ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                      <span className={`text-[11px] font-bold ${draftAutoSaveEnabled ? 'text-purple-700' : 'text-slate-500'}`}>
-                        {draftAutoSaveEnabled ? 'ENABLED' : 'DISABLED'}
-                      </span>
-                    </div>
+                    <label className="relative inline-flex items-center cursor-not-allowed opacity-50" title="Coming Soon">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={false}
+                        disabled
+                        readOnly
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                    </label>
                   </div>
 
                   <p className="text-xs text-on-surface-variant m-0">Manage unsaved transaction drafts stored locally on this device.</p>
-                  {drafts.length === 0 ? (
-                    <div className="text-center p-lg bg-white rounded-xl border border-outline-variant/60 border-dashed shadow-2xs">
-                      <span className="material-symbols-outlined text-outline text-[36px] mb-1">draft</span>
-                      <p className="text-on-surface-variant text-xs m-0">No local drafts found.</p>
-                    </div>
-                  ) : (
-                    <div className="border border-outline-variant/60 rounded-xl overflow-hidden bg-white shadow-2xs">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 text-on-surface-variant text-[10px] uppercase font-bold tracking-wider">
-                            <th className="py-2 px-3 border-b border-outline-variant/60">Draft ID</th>
-                            <th className="py-2 px-3 border-b border-outline-variant/60">Entity Type</th>
-                            <th className="py-2 px-3 border-b border-outline-variant/60">Last Saved</th>
-                            <th className="py-2 px-3 border-b border-outline-variant/60 text-right">Actions</th>
+                  <div className="border border-outline-variant/60 rounded-xl overflow-hidden bg-white shadow-2xs">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 text-on-surface-variant text-[10px] uppercase font-bold tracking-wider">
+                          <th className="py-2 px-3 border-b border-outline-variant/60">Draft ID</th>
+                          <th className="py-2 px-3 border-b border-outline-variant/60">Entity Type</th>
+                          <th className="py-2 px-3 border-b border-outline-variant/60">Last Saved</th>
+                          <th className="py-2 px-3 border-b border-outline-variant/60 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayedDrafts.map(draft => (
+                          <tr key={draft.id} className="border-b border-outline-variant/40 last:border-0 hover:bg-slate-50 transition-colors">
+                            <td className="py-2.5 px-3 text-xs text-on-surface font-mono font-bold">{draft.draftNumber}</td>
+                            <td className="py-2.5 px-3 text-xs text-on-surface">{draft.entityType}</td>
+                            <td className="py-2.5 px-3 text-xs text-on-surface-variant font-mono">
+                              {new Date(draft.updatedAt).toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <button 
+                                type="button"
+                                onClick={async () => {
+                                  if (!window.confirm('Delete this local draft?')) return;
+                                  if (draft.localId) {
+                                    await deleteLocalDraft(draft.localId);
+                                    refreshDrafts();
+                                  }
+                                }}
+                                className="text-error hover:text-error-container p-1 rounded-md hover:bg-rose-50 transition-colors"
+                                title="Delete Draft"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                              </button>
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {drafts.map(draft => (
-                            <tr key={draft.id} className="border-b border-outline-variant/40 last:border-0 hover:bg-slate-50 transition-colors">
-                              <td className="py-2.5 px-3 text-xs text-on-surface font-mono font-bold">{draft.draftNumber}</td>
-                              <td className="py-2.5 px-3 text-xs text-on-surface">{draft.entityType}</td>
-                              <td className="py-2.5 px-3 text-xs text-on-surface-variant font-mono">
-                                {new Date(draft.updatedAt).toLocaleString()}
-                              </td>
-                              <td className="py-2.5 px-3 text-right">
-                                <button 
-                                  type="button"
-                                  onClick={async () => {
-                                    if (!window.confirm('Delete this local draft?')) return;
-                                    if (draft.localId) {
-                                      await deleteLocalDraft(draft.localId);
-                                      refreshDrafts();
-                                    }
-                                  }}
-                                  className="text-error hover:text-error-container p-1 rounded-md hover:bg-rose-50 transition-colors"
-                                  title="Delete Draft"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">delete</span>
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </section>
