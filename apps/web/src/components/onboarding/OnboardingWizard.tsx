@@ -86,6 +86,25 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
   }, []);
 
   if (loading) return null;
+  if (error && !status) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-md p-6 text-center">
+        <div className="max-w-md w-full bg-surface border border-outline/20 rounded-2xl p-8 shadow-2xl space-y-4">
+          <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mx-auto text-xl font-bold">!</div>
+          <h2 className="text-xl font-bold text-on-surface">Backend Connection Error</h2>
+          <p className="text-sm text-on-surface-variant">{error}</p>
+          <p className="text-xs text-on-surface-variant/70">Ensure the backend API server is running on port 3002 (<code>npm run dev:api</code>).</p>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); fetchStatus(); }}
+            className="w-full py-2.5 px-4 bg-primary text-on-primary font-medium rounded-xl hover:bg-primary/90 transition-colors cursor-pointer"
+          >
+            Retry Connection
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!status || status.ready === true) {
     return null;
   }
