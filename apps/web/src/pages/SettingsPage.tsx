@@ -189,6 +189,9 @@ export const SettingsPage: React.FC = () => {
     try {
       const preflight = await api.uninstall.getPreflight();
       setPreflightData(preflight);
+      if (preflight.lastPreservationDestination && !customDestinationDir) {
+        setCustomDestinationDir(preflight.lastPreservationDestination);
+      }
     } catch (err: any) {
       setPreservationError(err.message || 'Failed to execute uninstall preflight inspection');
     } finally {
@@ -1543,7 +1546,22 @@ export const SettingsPage: React.FC = () => {
                         placeholder="Leave blank for default AppData/DiamondERP/exports"
                         className="flex-1 px-3 py-1.5 bg-slate-50 border border-outline-variant/70 rounded-lg text-xs font-mono text-slate-800"
                       />
+                      {preflightData?.lastPreservationDestination && customDestinationDir !== preflightData.lastPreservationDestination && (
+                        <button
+                          type="button"
+                          onClick={() => setCustomDestinationDir(preflightData.lastPreservationDestination)}
+                          className="px-2 py-1 text-[11px] bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-medium"
+                          title="Restore last saved destination"
+                        >
+                          Use Last
+                        </button>
+                      )}
                     </div>
+                    {preflightData?.lastPreservationDestination && (
+                      <p className="text-[11px] text-indigo-600 m-0 font-mono">
+                        Saved destination: {preflightData.lastPreservationDestination}
+                      </p>
+                    )}
                     <p className="text-[11px] text-slate-500 m-0">
                       The package will contain verified SQLite backups, CSV sheets, Excel workbook, and cryptographic SHA-256 manifests.
                     </p>

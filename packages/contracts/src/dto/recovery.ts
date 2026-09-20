@@ -88,6 +88,8 @@ export interface ConfirmRestoreRequest {
   confirmDestructiveOverwrite: boolean;
   confirmForeignInstallation?: boolean;
   targetProfileCode: string;
+  targetUserId?: string;
+  reactivateUser?: boolean;
 }
 
 export interface RestoreOperationResponseDto {

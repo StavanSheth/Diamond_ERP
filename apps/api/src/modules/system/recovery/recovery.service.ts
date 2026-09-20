@@ -600,12 +600,40 @@ export class RecoveryService {
         swapOldPath = null;
       }
 
-      // 5. Update or Register active database in DatabaseRegistry
+      // 5. Update or Register active database in DatabaseRegistry and Profile
       const install = await installationService.getOrCreateInstallation();
+
+      let targetProfile = await systemPrisma.profile.findFirst({
+        where: { code: targetProfileCode },
+      });
+
+      if (!targetProfile) {
+        targetProfile = await systemPrisma.profile.create({
+          data: {
+            code: targetProfileCode,
+            name: `${targetProfileCode} Profile`,
+            dbPath: canonicalTarget,
+            isActive: true,
+            status: 'ACTIVE',
+          },
+        });
+      } else {
+        targetProfile = await systemPrisma.profile.update({
+          where: { id: targetProfile.id },
+          data: {
+            dbPath: canonicalTarget,
+            isActive: true,
+            status: 'ACTIVE',
+            lastValidatedAt: new Date(),
+          },
+        });
+      }
+
       await systemPrisma.databaseRegistry.upsert({
         where: { canonicalPath: canonicalTarget },
         update: {
           status: 'ACTIVE',
+          profileId: targetProfile.id,
           lastValidatedAt: new Date(),
           schemaVersion: restoreRecord.schemaVersion,
         },
@@ -616,10 +644,57 @@ export class RecoveryService {
           schemaVersion: restoreRecord.schemaVersion,
           status: 'ACTIVE',
           databaseType: 'LOCAL_PROFILE',
+          profileId: targetProfile.id,
           installationId: install.id,
           lastValidatedAt: new Date(),
         },
       });
+
+      // If target user is provided, associate or reactivate them
+      if (req.targetUserId) {
+        const targetUser = await systemPrisma.user.findUnique({
+          where: { id: req.targetUserId },
+        });
+
+        if (targetUser) {
+          if (req.reactivateUser && (!targetUser.isActive || targetUser.deletedAt)) {
+            await systemPrisma.user.update({
+              where: { id: targetUser.id },
+              data: { isActive: true, deletedAt: null },
+            });
+          }
+
+          await systemPrisma.userProfile.upsert({
+            where: {
+              userId_profileId: {
+                userId: targetUser.id,
+                profileId: targetProfile.id,
+              },
+            },
+            update: { isActive: true, role: 'ADMIN' },
+            create: {
+              userId: targetUser.id,
+              profileId: targetProfile.id,
+              role: 'ADMIN',
+              isActive: true,
+            },
+          });
+
+          await systemPrisma.installationUser.upsert({
+            where: {
+              installationId_userId: {
+                installationId: install.id,
+                userId: targetUser.id,
+              },
+            },
+            update: {},
+            create: {
+              installationId: install.id,
+              userId: targetUser.id,
+            },
+          });
+        }
+      }
 
       // 6. Clean up staging folder
       try {

@@ -138,10 +138,19 @@ export class UninstallPreflightService {
 
     const pendingOperationsCount = pendingRestores + pendingBackups + pendingPreservations;
 
-    // Classification State Machine
+    // Classification State Machine (per Section 16 of specification)
     let classification: UninstallPreflightClassification = 'NO_CUSTOMER_DATA';
     let canSafelyUninstall = false;
     let warningMessage: string | null = null;
+
+    const activeAuth = await systemPrisma.uninstallAuthorization.findFirst({
+      where: {
+        installationId: install.id,
+        status: 'ISSUED',
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
     if (databases.length === 0) {
       classification = 'NO_CUSTOMER_DATA';
@@ -151,15 +160,24 @@ export class UninstallPreflightService {
       classification = 'BLOCKED';
       canSafelyUninstall = false;
       warningMessage = `Uninstall blocked: ${pendingOperationsCount} operations currently in progress. Complete or cancel them before proceeding.`;
-    } else if (latestPreservation && fs.existsSync(latestPreservation.destinationPath)) {
+    } else if (activeAuth) {
       classification = 'READY_FOR_UNINSTALL';
       canSafelyUninstall = true;
-      warningMessage = 'Customer data verified and preserved. Diamond ERP uninstaller strictly preserves all customer databases in AppData by default.';
+      warningMessage = 'Uninstall authorization is active and verified. You may proceed with Windows uninstallation.';
+    } else if (latestPreservation && fs.existsSync(latestPreservation.destinationPath)) {
+      classification = 'PRESERVATION_VERIFIED';
+      canSafelyUninstall = false;
+      warningMessage = 'Customer data verified and preserved. Authorization is required before uninstallation can proceed.';
     } else {
       classification = 'CUSTOMER_DATA_PRESENT';
       canSafelyUninstall = false;
       warningMessage = 'Customer databases detected. Diamond ERP uninstaller strictly preserves all customer databases in AppData by default. A verified preservation package (export & backup) is required before uninstallation can proceed.';
     }
+
+    const lastDestSetting = await systemPrisma.setting.findUnique({
+      where: { key: 'lastPreservationDestination' },
+    }).catch(() => null);
+    const lastPreservationDestination = lastDestSetting?.value || null;
 
     return {
       canSafelyUninstall,
@@ -177,6 +195,7 @@ export class UninstallPreflightService {
       latestPreservationVerifiedAt: latestPreservation?.verifiedAt
         ? latestPreservation.verifiedAt.toISOString()
         : null,
+      lastPreservationDestination,
       applicationVersion: install.appVersion,
       installationId: install.installationId,
       pendingOperationsCount,
@@ -214,6 +233,7 @@ export class UninstallPreflightService {
 
     // 3. Generate one-time cryptographic token
     const authorizationId = crypto.randomUUID();
+    const nonce = crypto.randomBytes(16).toString('hex');
     const createdAt = new Date();
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour validity window
 
@@ -235,7 +255,7 @@ export class UninstallPreflightService {
       },
     });
 
-    // 4. Write machine-readable uninstall-authorization.json into AppData for the Windows installer
+    // 4. Write machine-readable uninstall-authorization.json into AppData for the Windows installer atomically
     const tokenFilePath = path.join(getDataDir(), 'uninstall-authorization.json');
     const tokenPayload = {
       authorizationId,
@@ -246,11 +266,17 @@ export class UninstallPreflightService {
       preservationDestinationPath: pkg.destinationPath,
       preservationManifestHash: pkg.manifestSha256,
       verifiedAt: pkg.verifiedAt ? pkg.verifiedAt.toISOString() : createdAt.toISOString(),
+      nonce,
       consumedAt: null,
       status: 'ISSUED',
     };
 
-    fs.writeFileSync(tokenFilePath, JSON.stringify(tokenPayload, null, 2), 'utf-8');
+    const tmpTokenFilePath = `${tokenFilePath}.tmp_${crypto.randomUUID()}`;
+    const fd = fs.openSync(tmpTokenFilePath, 'w');
+    fs.writeSync(fd, JSON.stringify(tokenPayload, null, 2), 0, 'utf-8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fs.renameSync(tmpTokenFilePath, tokenFilePath);
 
     await systemPrisma.auditEvent.create({
       data: {
@@ -270,6 +296,9 @@ export class UninstallPreflightService {
       installationId: install.installationId,
       preservationPackageId: pkg.packageId,
       manifestSha256: pkg.manifestSha256 || '',
+      preservationDestinationPath: pkg.destinationPath,
+      preservationManifestHash: pkg.manifestSha256 || '',
+      nonce,
       status: 'ISSUED',
       createdAt: createdAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
@@ -280,47 +309,132 @@ export class UninstallPreflightService {
 
   /**
    * Validates the machine-readable authorization token.
+   * Performs deep independent verification:
+   * - Token exists and valid JSON
+   * - Not consumed, not expired, status == 'ISSUED'
+   * - installationId matches current installation
+   * - Destination directory exists
+   * - preservation-manifest.json exists and SHA256 checksum matches
+   * - PackageId in manifest matches authorization
+   * - Control DB authorization record (if present) is not CONSUMED/REVOKED
    */
-  async checkAuthorizationToken(): Promise<{ valid: boolean; token?: any; reason?: string }> {
+  async checkAuthorizationToken(): Promise<{ valid: boolean; token?: any; reason?: string; error?: string }> {
     const tokenFilePath = path.join(getDataDir(), 'uninstall-authorization.json');
     if (!fs.existsSync(tokenFilePath)) {
-      return { valid: false, reason: 'uninstall-authorization.json file does not exist in AppData.' };
+      const msg = 'uninstall-authorization.json file does not exist in AppData.';
+      return { valid: false, reason: msg, error: msg };
     }
 
     let token: any;
     try {
       token = JSON.parse(fs.readFileSync(tokenFilePath, 'utf-8'));
     } catch {
-      return { valid: false, reason: 'Corrupted uninstall-authorization.json file.' };
+      const msg = 'Corrupted uninstall-authorization.json file.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    if (!token.authorizationId) {
+      const msg = 'Authorization token is missing authorizationId.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    if (token.status !== 'ISSUED') {
+      const msg = `Authorization token status is "${token.status}", must be "ISSUED".`;
+      return { valid: false, reason: msg, error: msg };
     }
 
     if (token.consumedAt) {
-      return { valid: false, reason: 'Uninstall authorization has already been consumed (single-use).' };
+      const msg = 'Uninstall authorization has already been consumed (single-use).';
+      return { valid: false, reason: msg, error: msg };
     }
 
     if (new Date(token.expiresAt).getTime() < Date.now()) {
-      return { valid: false, reason: 'Uninstall authorization has expired.' };
+      const msg = 'Uninstall authorization has expired.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    const install = await installationService.getOrCreateInstallation();
+    if (token.installationId && token.installationId !== install.installationId) {
+      const msg = 'Authorization installation ID does not match current machine installation.';
+      return { valid: false, reason: msg, error: msg };
     }
 
     if (!token.preservationDestinationPath || !fs.existsSync(token.preservationDestinationPath)) {
-      return { valid: false, reason: 'Referenced preservation package destination directory does not exist.' };
+      const msg = 'Referenced preservation package destination directory does not exist.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    const manifestPath = path.join(token.preservationDestinationPath, 'preservation-manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      const msg = 'Preservation manifest file missing from destination directory.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    const actualManifestSha = crypto.createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex');
+    const expectedManifestSha = token.preservationManifestHash || token.manifestSha256;
+    if (expectedManifestSha && expectedManifestSha !== actualManifestSha) {
+      const msg = 'Preservation manifest SHA-256 mismatch (manifest tampered with or modified).';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    try {
+      const manifestJson = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      if (token.preservationPackageId && manifestJson.packageId !== token.preservationPackageId) {
+        const msg = 'Preservation package ID does not match manifest.';
+        return { valid: false, reason: msg, error: msg };
+      }
+    } catch {
+      const msg = 'Corrupt preservation manifest in package.';
+      return { valid: false, reason: msg, error: msg };
+    }
+
+    // Also verify database status if accessible
+    const dbAuth = await systemPrisma.uninstallAuthorization.findUnique({
+      where: { authorizationId: token.authorizationId },
+    }).catch(() => null);
+
+    if (dbAuth) {
+      if (dbAuth.status === 'CONSUMED' || dbAuth.consumedAt) {
+        const msg = 'Authorization has already been marked CONSUMED in control plane.';
+        return { valid: false, reason: msg, error: msg };
+      }
+      if (dbAuth.status === 'REVOKED') {
+        const msg = 'Authorization has been REVOKED.';
+        return { valid: false, reason: msg, error: msg };
+      }
     }
 
     return { valid: true, token };
   }
 
   /**
-   * Consumes the authorization token so it can never be re-used.
+   * Consumes the authorization token atomically so it can never be re-used.
    */
   async consumeAuthorizationToken(authorizationId?: string): Promise<boolean> {
     const tokenFilePath = path.join(getDataDir(), 'uninstall-authorization.json');
     if (fs.existsSync(tokenFilePath)) {
       try {
         const token = JSON.parse(fs.readFileSync(tokenFilePath, 'utf-8'));
+        if (token.consumedAt || token.status === 'CONSUMED') {
+          return false;
+        }
         token.consumedAt = new Date().toISOString();
         token.status = 'CONSUMED';
-        fs.writeFileSync(tokenFilePath, JSON.stringify(token, null, 2), 'utf-8');
-      } catch {}
+
+        const tmpFilePath = `${tokenFilePath}.tmp_${crypto.randomUUID()}`;
+        const fd = fs.openSync(tmpFilePath, 'w');
+        fs.writeSync(fd, JSON.stringify(token, null, 2), 0, 'utf-8');
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+
+        fs.renameSync(tmpFilePath, tokenFilePath);
+
+        if (!authorizationId && token.authorizationId) {
+          authorizationId = token.authorizationId;
+        }
+      } catch (err) {
+        logger.warn(`[UninstallPreflightService] Error atomically updating authorization file: ${err}`);
+      }
     }
 
     if (authorizationId) {
@@ -329,6 +443,16 @@ export class UninstallPreflightService {
         data: {
           consumedAt: new Date(),
           status: 'CONSUMED',
+        },
+      }).catch(() => {});
+
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'UNINSTALL',
+          entityId: authorizationId,
+          eventType: 'UNINSTALL_AUTHORIZATION_CONSUMED',
+          description: `Uninstall authorization ${authorizationId} consumed.`,
+          performedBy: 'system',
         },
       }).catch(() => {});
     }

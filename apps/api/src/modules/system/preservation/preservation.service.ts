@@ -2,10 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
+import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
+  getDataDir,
   getDatabasesDir,
   getExportDir,
   getControlDbPath,
@@ -25,6 +27,75 @@ import type {
 } from '@diamond-erp/contracts';
 
 export class PreservationService {
+  /**
+   * Authoritative validation of preservation destination directory according to Windows ERP safety rules:
+   * 1. Not system root (e.g. C:\ or \)
+   * 2. Not Windows system directory (e.g. C:\Windows or %WINDIR%)
+   * 3. Not active database file or databases directory
+   * 4. Not control database or template database
+   * 5. Real writability test using .diamond-erp-write-test-<uuid>.tmp with fsync & delete
+   */
+  public validateDestinationDirectory(destinationRoot: string, canonicalSource: string): void {
+    const controlDb = getControlDbPath().toLowerCase();
+    const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
+    const normDest = path.resolve(destinationRoot);
+    const lowerDest = normDest.toLowerCase();
+
+    // 1. Root directory check (e.g. C:\ or \)
+    const parsed = path.parse(normDest);
+    if (parsed.root.toLowerCase() === lowerDest || lowerDest === '\\' || lowerDest === '/') {
+      throw new ValidationError('Preservation destination cannot be the system root directory.');
+    }
+
+    // 2. Windows system directory check
+    const winDir = (process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows').toLowerCase();
+    if (lowerDest.startsWith(winDir)) {
+      throw new ValidationError('Preservation destination cannot be inside the Windows system directory.');
+    }
+
+    // 3. Source DB file & database source directory
+    if (lowerDest === canonicalSource.toLowerCase()) {
+      throw new ValidationError('Preservation destination cannot be the source database file.');
+    }
+    const sourceDir = path.dirname(canonicalSource).toLowerCase();
+    if (lowerDest === sourceDir) {
+      throw new ValidationError('Preservation destination cannot be the database source directory.');
+    }
+
+    // 4. Control DB & template DB
+    if (lowerDest === controlDb || lowerDest === templateDb) {
+      throw new ValidationError('Preservation destination cannot be system or template databases.');
+    }
+
+    // 5. Customer databases directory
+    const dedicatedDbsDir = path.join(getDataDir(), 'databases').toLowerCase();
+    if (lowerDest === dedicatedDbsDir || lowerDest.startsWith(dedicatedDbsDir + path.sep)) {
+      throw new ValidationError('Preservation destination cannot be inside the customer database directory.');
+    }
+    if (path.basename(getDatabasesDir().toLowerCase()) === 'databases') {
+      const dbsDir = getDatabasesDir().toLowerCase();
+      if (lowerDest === dbsDir || lowerDest.startsWith(dbsDir + path.sep)) {
+        throw new ValidationError('Preservation destination cannot be inside the customer database directory.');
+      }
+    }
+
+    // 6. Test writability with actual write, flush (fsync), close, delete (.diamond-erp-write-test-<uuid>.tmp)
+    try {
+      if (!fs.existsSync(normDest)) {
+        fs.mkdirSync(normDest, { recursive: true });
+      }
+      const testFile = path.join(normDest, `.diamond-erp-write-test-${crypto.randomUUID()}.tmp`);
+      const fd = fs.openSync(testFile, 'w');
+      fs.writeSync(fd, 'diamond_erp_preservation_write_test\n');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fs.unlinkSync(testFile);
+    } catch (permErr: any) {
+      throw new ConflictError(
+        `Preservation destination directory "${normDest}" is not writable: ${permErr.message}`
+      );
+    }
+  }
   private calculateSha256(filePath: string): string {
     const fileBuffer = fs.readFileSync(filePath);
     return crypto.createHash('sha256').update(fileBuffer).digest('hex');
@@ -115,26 +186,7 @@ export class PreservationService {
 
     // 2. Validate destination directory
     let destinationRoot = req.destinationDir ? path.resolve(req.destinationDir) : getExportDir();
-    if (destinationRoot.toLowerCase() === canonicalSource.toLowerCase()) {
-      throw new ValidationError('Preservation destination cannot be the source database file.');
-    }
-    if (destinationRoot.toLowerCase() === controlDb || destinationRoot.toLowerCase() === templateDb) {
-      throw new ValidationError('Preservation destination cannot be system or template databases.');
-    }
-
-    try {
-      if (!fs.existsSync(destinationRoot)) {
-        fs.mkdirSync(destinationRoot, { recursive: true });
-      }
-      // Test writability
-      const testFile = path.join(destinationRoot, `.test_write_${Date.now()}`);
-      fs.writeFileSync(testFile, 'write_test', 'utf-8');
-      fs.unlinkSync(testFile);
-    } catch (permErr: any) {
-      throw new ConflictError(
-        `Preservation destination directory "${destinationRoot}" is not writable: ${permErr.message}`
-      );
-    }
+    this.validateDestinationDirectory(destinationRoot, canonicalSource);
 
     const packageId = `pkg_${crypto.randomUUID()}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -235,10 +287,22 @@ export class PreservationService {
         let rows: any[] = [];
         try {
           rows = await entity.query();
-        } catch (queryErr: any) {
+        } catch {
           throw new ConflictError(
             `Preservation export failed: could not read table "${entity.name}". All-or-nothing preservation aborted.`
           );
+        }
+
+        let columnNames: string[] = [];
+        try {
+          const colInfo = await client.$queryRawUnsafe<Array<{ name: string }>>(
+            `PRAGMA table_info("${entity.name}")`
+          );
+          columnNames = colInfo
+            .map((c) => c.name)
+            .filter((k) => !/password|pin|hash|secret|token/i.test(k));
+        } catch {
+          // fallback if table_info is unavailable
         }
 
         const sanitizedRows = rows.map((row) => {
@@ -250,10 +314,17 @@ export class PreservationService {
           return clean;
         });
 
-        // 1. Write CSV
+        if (columnNames.length === 0) {
+          columnNames = sanitizedRows.length > 0 ? Object.keys(sanitizedRows[0]) : ['id'];
+        }
+
+        // 1. Write CSV with mandatory header columns even for 0 records
         const csvFileName = `${entity.name}.csv`;
         const csvPath = path.join(csvDir, csvFileName);
-        const csvOutput = sanitizedRows.length > 0 ? stringify(sanitizedRows, { header: true }) : '';
+        const csvOutput = stringify(sanitizedRows, {
+          header: true,
+          columns: columnNames,
+        });
         fs.writeFileSync(csvPath, csvOutput, 'utf-8');
 
         const csvStat = fs.statSync(csvPath);
@@ -266,15 +337,15 @@ export class PreservationService {
           sizeBytes: csvStat.size,
         });
 
-        // 2. Add Worksheet to XLSX
+        // 2. Add Worksheet to XLSX with mandatory header columns
         const sheet = workbook.addWorksheet(entity.name);
+        const columns = columnNames.map((key) => ({
+          header: key,
+          key,
+          width: Math.max(key.length + 4, 12),
+        }));
+        sheet.columns = columns;
         if (sanitizedRows.length > 0) {
-          const columns = Object.keys(sanitizedRows[0]).map((key) => ({
-            header: key,
-            key,
-            width: Math.max(key.length + 4, 12),
-          }));
-          sheet.columns = columns;
           sheet.addRows(sanitizedRows);
         }
 
@@ -391,6 +462,15 @@ export class PreservationService {
           performedBy,
         },
       });
+
+      // Persist last valid destination in Setting
+      try {
+        await systemPrisma.setting.upsert({
+          where: { key: 'lastPreservationDestination' },
+          update: { value: destinationRoot },
+          create: { key: 'lastPreservationDestination', value: destinationRoot },
+        });
+      } catch {}
 
       logger.info(`[PreservationService] Preservation package ${packageId} created and 100% verified at ${bundleDir}`);
 
@@ -592,6 +672,10 @@ export class PreservationService {
       };
     }
 
+    const entityRowCounts: Record<string, number> = {};
+    const details: string[] = [];
+
+    // 2. Deep CSV verification: file exists, size > 0, UTF-8 readable, parse with csv-parse, verify headers & row count & SHA256
     for (const fileItem of exportManifest.csv?.files || []) {
       const csvFilePath = path.join(csvDir, fileItem.fileName);
       if (!fs.existsSync(csvFilePath)) {
@@ -606,6 +690,70 @@ export class PreservationService {
           error: `Required CSV export missing: ${fileItem.fileName}`,
         };
       }
+
+      const stat = fs.statSync(csvFilePath);
+      if (stat.size <= 0) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: false,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `CSV export file is empty: ${fileItem.fileName}`,
+        };
+      }
+
+      let content: string;
+      try {
+        content = fs.readFileSync(csvFilePath, 'utf-8');
+      } catch (readErr: any) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: false,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `CSV file not readable as UTF-8 (${fileItem.fileName}): ${readErr.message}`,
+        };
+      }
+
+      let records: any[];
+      try {
+        records = parse(content, {
+          columns: true,
+          skip_empty_lines: true,
+          relax_column_count: false,
+        });
+      } catch (parseErr: any) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: false,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `CSV syntax error in ${fileItem.fileName}: ${parseErr.message}`,
+        };
+      }
+
+      if (typeof fileItem.rowCount === 'number' && records.length !== fileItem.rowCount) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: false,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `CSV row count mismatch on ${fileItem.fileName}: manifest=${fileItem.rowCount}, actual=${records.length}`,
+        };
+      }
+
       const actualSha = this.calculateSha256(csvFilePath);
       if (fileItem.sha256 && fileItem.sha256 !== actualSha) {
         return {
@@ -619,9 +767,13 @@ export class PreservationService {
           error: `CSV checksum mismatch on ${fileItem.fileName}`,
         };
       }
+
+      const entityKey = fileItem.entityName || fileItem.fileName;
+      entityRowCounts[entityKey] = records.length;
+      details.push(`CSV ${fileItem.fileName}: ${records.length} records verified`);
     }
 
-    // 3. Verify XLSX file
+    // 3. Deep XLSX verification: file exists, size > 0, SHA256 match, workbook opens, sheets exist, header row, row counts match
     const xlsxFilePath = path.join(bundleDir, 'xlsx', 'business_data.xlsx');
     if (!fs.existsSync(xlsxFilePath)) {
       return {
@@ -633,6 +785,20 @@ export class PreservationService {
         xlsxVerified: false,
         manifestVerified: true,
         error: 'business_data.xlsx missing from bundle',
+      };
+    }
+
+    const xlsxStat = fs.statSync(xlsxFilePath);
+    if (xlsxStat.size <= 0) {
+      return {
+        packageId: manifest.packageId,
+        verified: false,
+        status: 'FAILED',
+        databaseBackupVerified: true,
+        csvVerified: true,
+        xlsxVerified: false,
+        manifestVerified: true,
+        error: 'business_data.xlsx workbook file is empty',
       };
     }
 
@@ -650,6 +816,69 @@ export class PreservationService {
       };
     }
 
+    const workbook = new ExcelJS.Workbook();
+    try {
+      await workbook.xlsx.readFile(xlsxFilePath);
+    } catch (xlsxErr: any) {
+      return {
+        packageId: manifest.packageId,
+        verified: false,
+        status: 'FAILED',
+        databaseBackupVerified: true,
+        csvVerified: true,
+        xlsxVerified: false,
+        manifestVerified: true,
+        error: `ExcelJS failed to open workbook business_data.xlsx: ${xlsxErr.message}`,
+      };
+    }
+
+    for (const fileItem of exportManifest.csv?.files || []) {
+      const sheetName = fileItem.entityName;
+      if (!sheetName) continue;
+      const worksheet = workbook.getWorksheet(sheetName);
+      if (!worksheet) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: true,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `Required worksheet "${sheetName}" missing in business_data.xlsx`,
+        };
+      }
+
+      const headerRow = worksheet.getRow(1);
+      if (!headerRow || headerRow.actualCellCount <= 0) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: true,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `Worksheet "${sheetName}" is missing header columns.`,
+        };
+      }
+
+      const dataRows = Math.max(0, worksheet.actualRowCount - 1);
+      if (typeof fileItem.rowCount === 'number' && dataRows !== fileItem.rowCount) {
+        return {
+          packageId: manifest.packageId,
+          verified: false,
+          status: 'FAILED',
+          databaseBackupVerified: true,
+          csvVerified: true,
+          xlsxVerified: false,
+          manifestVerified: true,
+          error: `Worksheet "${sheetName}" row count mismatch: manifest=${fileItem.rowCount}, actual=${dataRows}`,
+        };
+      }
+      details.push(`XLSX sheet "${sheetName}": ${dataRows} rows verified`);
+    }
+
     return {
       packageId: manifest.packageId,
       verified: true,
@@ -659,6 +888,8 @@ export class PreservationService {
       xlsxVerified: true,
       manifestVerified: true,
       verifiedAt: new Date().toISOString(),
+      details,
+      entityRowCounts,
     };
   }
 }

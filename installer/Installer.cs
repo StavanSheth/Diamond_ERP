@@ -5,6 +5,8 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -1921,41 +1923,101 @@ namespace DiamondERP.Setup
                     {
                         string tokenJson = File.ReadAllText(tokenPath);
                         string authId = ExtractJsonValue(tokenJson, "authorizationId");
+                        string installationId = ExtractJsonValue(tokenJson, "installationId");
+                        string pkgId = ExtractJsonValue(tokenJson, "preservationPackageId");
                         string expiresAtStr = ExtractJsonValue(tokenJson, "expiresAt");
                         string consumedAtStr = ExtractJsonValue(tokenJson, "consumedAt");
                         string destPath = ExtractJsonValue(tokenJson, "preservationDestinationPath");
+                        string manifestHash = ExtractJsonValue(tokenJson, "preservationManifestHash");
+                        if (string.IsNullOrEmpty(manifestHash))
+                        {
+                            manifestHash = ExtractJsonValue(tokenJson, "manifestSha256");
+                        }
+                        string status = ExtractJsonValue(tokenJson, "status");
 
                         DateTime expiresAt;
                         if (string.IsNullOrEmpty(authId))
                         {
                             blockReason = "Authorization token format is invalid (missing authorizationId).";
                         }
+                        else if (!string.IsNullOrEmpty(status) && !status.Equals("ISSUED", StringComparison.OrdinalIgnoreCase))
+                        {
+                            blockReason = "Authorization token status is not ISSUED (Status: " + status + ").";
+                        }
                         else if (!string.IsNullOrEmpty(consumedAtStr) && consumedAtStr != "null")
                         {
                             blockReason = "Authorization token has already been consumed (single-use).";
                         }
-                        else if (!string.IsNullOrEmpty(expiresAtStr) && DateTime.TryParse(expiresAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out expiresAt) && expiresAt < DateTime.UtcNow)
+                        else if (string.IsNullOrEmpty(expiresAtStr) || !DateTime.TryParse(expiresAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out expiresAt) || expiresAt < DateTime.UtcNow)
                         {
                             blockReason = "Authorization token has expired.";
                         }
-                        else if (!string.IsNullOrEmpty(destPath) && !Directory.Exists(destPath))
+                        else if (!string.IsNullOrEmpty(installationId))
                         {
-                            blockReason = "Preservation package directory could not be located on disk.";
-                        }
-                        else
-                        {
-                            isAuthorized = true;
-                            // Mark token consumed atomically to enforce single-use invariant
-                            try
+                            string installIdFile = Path.Combine(userDbDir, "config", ".installation-id");
+                            if (File.Exists(installIdFile))
                             {
-                                string updatedJson = tokenJson.Replace("\"consumedAt\": null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")));
-                                if (!updatedJson.Contains("consumedAt\": \""))
+                                string storedInstallId = File.ReadAllText(installIdFile).Trim();
+                                if (!string.IsNullOrEmpty(storedInstallId) && !storedInstallId.Equals(installationId.Trim(), StringComparison.OrdinalIgnoreCase))
                                 {
-                                    updatedJson = updatedJson.TrimEnd('}', ' ', '\r', '\n') + string.Format(",\n  \"consumedAt\": \"{0}\"\n}}", DateTime.UtcNow.ToString("o"));
+                                    blockReason = "Authorization installation ID does not match this machine's installation identity.";
                                 }
-                                File.WriteAllText(tokenPath, updatedJson);
                             }
-                            catch { }
+                        }
+
+                        if (blockReason == "No data preservation authorization token found in AppData.")
+                        {
+                            if (string.IsNullOrEmpty(destPath) || !Directory.Exists(destPath))
+                            {
+                                blockReason = "Preservation package directory could not be located on disk: " + destPath;
+                            }
+                            else
+                            {
+                                string manifestFile = Path.Combine(destPath, "preservation-manifest.json");
+                                if (!File.Exists(manifestFile))
+                                {
+                                    blockReason = "preservation-manifest.json missing inside preservation package: " + destPath;
+                                }
+                                else
+                                {
+                                    string computedSha = ComputeFileSha256Hex(manifestFile);
+                                    if (!string.IsNullOrEmpty(manifestHash) && !computedSha.Equals(manifestHash.Trim(), StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        blockReason = "Preservation manifest SHA-256 mismatch (manifest was tampered with or corrupted).";
+                                    }
+                                    else
+                                    {
+                                        string manifestJson = File.ReadAllText(manifestFile);
+                                        string manifestPkgId = ExtractJsonValue(manifestJson, "packageId");
+                                        if (!string.IsNullOrEmpty(pkgId) && !string.IsNullOrEmpty(manifestPkgId) && !pkgId.Equals(manifestPkgId, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            blockReason = "Preservation package ID mismatch between authorization and manifest.";
+                                        }
+                                        else
+                                        {
+                                            isAuthorized = true;
+                                            // Atomically mark token consumed with exclusive temp file write
+                                            try
+                                            {
+                                                string tmpTokenPath = tokenPath + ".tmp_" + Guid.NewGuid().ToString("N");
+                                                string updatedJson = tokenJson;
+                                                updatedJson = updatedJson.Replace("\"status\": \"ISSUED\"", "\"status\": \"CONSUMED\"");
+                                                updatedJson = updatedJson.Replace("\"status\":\"ISSUED\"", "\"status\":\"CONSUMED\"");
+                                                updatedJson = updatedJson.Replace("\"consumedAt\": null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")));
+                                                updatedJson = updatedJson.Replace("\"consumedAt\":null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")));
+                                                if (!updatedJson.Contains("consumedAt\": \""))
+                                                {
+                                                    updatedJson = updatedJson.TrimEnd('}', ' ', '\r', '\n') + string.Format(",\n  \"consumedAt\": \"{0}\",\n  \"status\": \"CONSUMED\"\n}}", DateTime.UtcNow.ToString("o"));
+                                                }
+                                                File.WriteAllText(tmpTokenPath, updatedJson);
+                                                File.Copy(tmpTokenPath, tokenPath, true);
+                                                try { File.Delete(tmpTokenPath); } catch { }
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -2086,6 +2148,31 @@ namespace DiamondERP.Setup
                 {
                     Console.Error.WriteLine("Error during uninstallation: " + ex.Message);
                 }
+            }
+        }
+
+        private static string ComputeFileSha256Hex(string filePath)
+        {
+            if (!File.Exists(filePath)) return string.Empty;
+            try
+            {
+                using (var sha256 = SHA256.Create())
+                {
+                    using (var stream = File.OpenRead(filePath))
+                    {
+                        byte[] hash = sha256.ComputeHash(stream);
+                        StringBuilder sb = new StringBuilder(hash.Length * 2);
+                        for (int i = 0; i < hash.Length; i++)
+                        {
+                            sb.Append(hash[i].ToString("x2"));
+                        }
+                        return sb.ToString();
+                    }
+                }
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
 

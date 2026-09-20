@@ -36,6 +36,10 @@ describe('Phase 7 — Uninstall Preflight & Hard Safety Gate', () => {
     }
     instId = inst.id;
 
+    // Clean any previous authorizations / preservation packages for test isolation
+    await systemPrisma.uninstallAuthorization.deleteMany({});
+    await systemPrisma.preservationPackage.deleteMany({});
+
     // Register test customer database in registry
     await systemPrisma.databaseRegistry.create({
       data: {

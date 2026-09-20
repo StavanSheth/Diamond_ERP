@@ -40,6 +40,7 @@ export interface UninstallPreflightDto {
   preservationPackageCount?: number;
   latestPreservationPackageId?: string | null;
   latestPreservationVerifiedAt?: string | null;
+  lastPreservationDestination?: string | null;
   warningMessage?: string | null;
   applicationVersion?: string;
   installationId?: string;
@@ -95,6 +96,8 @@ export interface PreservationVerificationDto {
   manifestVerified: boolean;
   verifiedAt?: string | null;
   error?: string | null;
+  details?: string[];
+  entityRowCounts?: Record<string, number>;
 }
 
 export interface AuthorizeUninstallRequest {
@@ -107,6 +110,9 @@ export interface UninstallAuthorizationDto {
   installationId: string;
   preservationPackageId: string;
   manifestSha256: string;
+  preservationDestinationPath?: string;
+  preservationManifestHash?: string;
+  nonce?: string;
   status: 'ISSUED' | 'CONSUMED' | 'EXPIRED' | 'REVOKED';
   createdAt: string;
   expiresAt: string;

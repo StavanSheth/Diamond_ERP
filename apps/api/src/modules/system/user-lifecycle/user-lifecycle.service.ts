@@ -130,7 +130,19 @@ export class UserLifecycleService {
         data: { revokedAt: now },
       });
 
-      // 5. Explicitly record audit event
+      // 5. Update profile description with ownership traceability
+      for (const up of user.userProfiles) {
+        if (up.profile) {
+          await tx.profile.update({
+            where: { id: up.profile.id },
+            data: {
+              description: `Previously owned by: ${user.username} (${user.displayName || user.username}) [deleted at ${now.toISOString()}]`,
+            },
+          }).catch(() => {});
+        }
+      }
+
+      // 6. Explicitly record audit event
       await tx.auditEvent.create({
         data: {
           entityType: 'USER',
@@ -141,7 +153,10 @@ export class UserLifecycleService {
           metadata: JSON.stringify({
             userId,
             username: user.username,
+            displayName: user.displayName || user.username,
             deletedAt: now.toISOString(),
+            profileIds: user.userProfiles.map((up) => up.profileId),
+            profileCodes: user.userProfiles.map((up) => up.profile?.code).filter(Boolean),
             preservedRegistries: user.userProfiles.flatMap((up) =>
               (up.profile?.databaseRegistries || []).map((r) => r.canonicalPath)
             ),
