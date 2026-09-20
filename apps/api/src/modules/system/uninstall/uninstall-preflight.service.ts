@@ -1,9 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getDataDir,
+  getDatabasesDir,
+  getControlDbPath,
+  getExportDir,
   ensureAllDataDirs,
 } from '../../../infrastructure/paths';
 import { installationService } from '../installation.service';
@@ -17,6 +21,8 @@ import type {
   UninstallExportRequest,
   UninstallExportResponseDto,
   UninstallAuthorizationDto,
+  ValidateDestinationResponseDto,
+  BrowseDestinationResponseDto,
 } from '@diamond-erp/contracts';
 
 export class UninstallPreflightService {
@@ -407,6 +413,145 @@ export class UninstallPreflightService {
       sizeBytes: res.sizeBytes,
       databasesBackedUp: 1,
       verifiedAt: res.verifiedAt || new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Dedicated preservation destination validator
+   */
+  async validateDestination(destinationDir: string): Promise<ValidateDestinationResponseDto> {
+    if (!destinationDir || typeof destinationDir !== 'string' || !destinationDir.trim()) {
+      return {
+        valid: false,
+        canonicalPath: '',
+        exists: false,
+        writable: false,
+        error: 'Destination path cannot be blank.',
+      };
+    }
+
+    const canonical = path.resolve(destinationDir.trim());
+    const controlDb = getControlDbPath().toLowerCase();
+    const databasesDir = getDatabasesDir().toLowerCase();
+
+    // Invariant: Destination cannot be identical to databases directory, control DB, or a DB file
+    if (canonical.toLowerCase() === controlDb || canonical.toLowerCase() === databasesDir) {
+      return {
+        valid: false,
+        canonicalPath: canonical,
+        exists: fs.existsSync(canonical),
+        writable: false,
+        error: 'Preservation destination cannot be the active databases directory or control database.',
+      };
+    }
+
+    if (canonical.toLowerCase().endsWith('.db')) {
+      return {
+        valid: false,
+        canonicalPath: canonical,
+        exists: fs.existsSync(canonical),
+        writable: false,
+        error: 'Preservation destination must be a folder, not a database file.',
+      };
+    }
+
+    // When databasesDir is a dedicated subfolder (e.g. %LOCALAPPDATA%\DiamondERP\databases)
+    if (databasesDir.endsWith('databases') && canonical.toLowerCase().startsWith(databasesDir + path.sep)) {
+      return {
+        valid: false,
+        canonicalPath: canonical,
+        exists: fs.existsSync(canonical),
+        writable: false,
+        error: 'Preservation destination cannot be inside the active databases directory.',
+      };
+    }
+
+    const exists = fs.existsSync(canonical);
+
+    try {
+      if (exists) {
+        const stat = fs.statSync(canonical);
+        if (!stat.isDirectory()) {
+          return {
+            valid: false,
+            canonicalPath: canonical,
+            exists: true,
+            writable: false,
+            error: 'Destination path must be a directory, not a regular file.',
+          };
+        }
+      } else {
+        fs.mkdirSync(canonical, { recursive: true });
+      }
+
+      // Probe write permissions
+      const probeFile = path.join(canonical, `.probe_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`);
+      fs.writeFileSync(probeFile, 'DIAMOND_PRESERVATION_WRITE_TEST');
+      fs.unlinkSync(probeFile);
+
+      return {
+        valid: true,
+        canonicalPath: canonical,
+        exists: true,
+        writable: true,
+        message: 'Destination directory is valid and writable.',
+      };
+    } catch (err: any) {
+      return {
+        valid: false,
+        canonicalPath: canonical,
+        exists,
+        writable: false,
+        error: `Destination directory is not writable: ${err.message || String(err)}`,
+      };
+    }
+  }
+
+  /**
+   * Native Windows destination selection / directory picker helper.
+   */
+  async browseDestination(): Promise<BrowseDestinationResponseDto> {
+    const userHome = os.homedir();
+    const suggestedPaths = [
+      path.join(userHome, 'Documents', 'DiamondERP Backup'),
+      path.join(userHome, 'Desktop', 'DiamondERP Backup'),
+      path.join(userHome, 'DiamondERP Backup'),
+      getExportDir(),
+    ];
+
+    if (process.platform === 'win32' && !process.env.CI && process.env.NODE_ENV !== 'test') {
+      try {
+        const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = "Select Diamond ERP Preservation Destination"
+$dialog.ShowNewFolderButton = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.SelectedPath
+}
+`;
+        const { execSync } = require('child_process');
+        const output = execSync('powershell.exe -NoProfile -Command "' + psScript.replace(/"/g, '`"') + '"', {
+          encoding: 'utf-8',
+          timeout: 60000,
+        }).trim();
+
+        if (output && fs.existsSync(output)) {
+          return {
+            selectedPath: path.resolve(output),
+            canceled: false,
+            suggestedPaths,
+          };
+        }
+      } catch (err) {
+        logger.warn(`[UninstallPreflightService] Windows native folder browser invocation fell back: ${err}`);
+      }
+    }
+
+    return {
+      selectedPath: null,
+      canceled: true,
+      suggestedPaths,
     };
   }
 }

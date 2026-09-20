@@ -132,6 +132,65 @@ export const SettingsPage: React.FC = () => {
   const [authorizingUninstall, setAuthorizingUninstall] = useState(false);
   const [preservationMessage, setPreservationMessage] = useState<string | null>(null);
   const [preservationError, setPreservationError] = useState<string | null>(null);
+  const [validatingDestination, setValidatingDestination] = useState(false);
+  const [destinationValidationResult, setDestinationValidationResult] = useState<{
+    valid: boolean;
+    message?: string;
+    error?: string;
+  } | null>(null);
+  const [browsingDestination, setBrowsingDestination] = useState(false);
+
+  const handleBrowseDestination = async () => {
+    setBrowsingDestination(true);
+    setPreservationError(null);
+    try {
+      if ('showDirectoryPicker' in window) {
+        try {
+          await (window as any).showDirectoryPicker();
+        } catch (pickerErr: any) {
+          if (pickerErr.name === 'AbortError') {
+            setBrowsingDestination(false);
+            return;
+          }
+        }
+      }
+
+      const browseRes = await api.uninstall.browseDestination();
+      if (browseRes.selectedPath) {
+        setCustomDestinationDir(browseRes.selectedPath);
+        await handleValidateDestination(browseRes.selectedPath);
+      } else if (browseRes.suggestedPaths && browseRes.suggestedPaths.length > 0 && !customDestinationDir) {
+        setCustomDestinationDir(browseRes.suggestedPaths[0]);
+      }
+    } catch (err: any) {
+      setPreservationError(err.message || 'Folder selection failed');
+    } finally {
+      setBrowsingDestination(false);
+    }
+  };
+
+  const handleValidateDestination = async (dirToValidate?: string) => {
+    const target = (dirToValidate !== undefined ? dirToValidate : customDestinationDir).trim();
+    if (!target) {
+      setDestinationValidationResult({ valid: false, error: 'Please select or enter a destination directory.' });
+      return;
+    }
+    setValidatingDestination(true);
+    setDestinationValidationResult(null);
+    try {
+      const res = await api.uninstall.validateDestination(target);
+      if (res.valid) {
+        setDestinationValidationResult({ valid: true, message: res.message || 'Destination is valid and writable.' });
+        setCustomDestinationDir(res.canonicalPath);
+      } else {
+        setDestinationValidationResult({ valid: false, error: res.error || 'Destination validation failed.' });
+      }
+    } catch (err: any) {
+      setDestinationValidationResult({ valid: false, error: err.message || 'Validation request failed' });
+    } finally {
+      setValidatingDestination(false);
+    }
+  };
 
   const fetchUsers = async () => {
     try {
@@ -1533,38 +1592,85 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Custom Export Destination Selector */}
-                  <div className="space-y-1.5 pt-2 border-t border-outline-variant/40">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Preservation Package Destination (Optional Custom Directory)
-                    </label>
+                  {/* Dedicated Preservation Destination Selection Flow */}
+                  <div className="space-y-3 pt-3 border-t border-outline-variant/40">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800">
+                          Preservation Destination
+                        </label>
+                        <p className="text-[11px] text-slate-500 m-0">
+                          Select the external or local storage folder where verified SQLite backups, CSVs, and XLSX will be preserved.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBrowseDestination}
+                        disabled={browsingDestination}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-750 border border-slate-300 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">folder_open</span>
+                        {browsingDestination ? 'Browsing...' : 'Browse...'}
+                      </button>
+                    </div>
+
+                    <div className="p-3 bg-slate-50 border border-outline-variant/70 rounded-lg flex flex-col gap-1">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Selected:
+                      </div>
+                      <div className="text-xs font-mono text-slate-900 break-all font-semibold">
+                        {customDestinationDir ? (
+                          customDestinationDir
+                        ) : (
+                          <span className="text-slate-400 font-normal italic">
+                            Default (%LOCALAPPDATA%\DiamondERP\exports)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={customDestinationDir}
-                        onChange={(e) => setCustomDestinationDir(e.target.value)}
-                        placeholder="Leave blank for default AppData/DiamondERP/exports"
-                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-outline-variant/70 rounded-lg text-xs font-mono text-slate-800"
+                        onChange={(e) => {
+                          setCustomDestinationDir(e.target.value);
+                          setDestinationValidationResult(null);
+                        }}
+                        placeholder="C:\Users\...\Documents\DiamondERP Backup"
+                        className="flex-1 px-3 py-1.5 bg-white border border-outline-variant/70 rounded-lg text-xs font-mono text-slate-800"
                       />
-                      {preflightData?.lastPreservationDestination && customDestinationDir !== preflightData.lastPreservationDestination && (
-                        <button
-                          type="button"
-                          onClick={() => setCustomDestinationDir(preflightData.lastPreservationDestination)}
-                          className="px-2 py-1 text-[11px] bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-medium"
-                          title="Restore last saved destination"
-                        >
-                          Use Last
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleValidateDestination()}
+                        disabled={validatingDestination}
+                        className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-outline-variant/80 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs flex items-center gap-1"
+                      >
+                        <span className={`material-symbols-outlined text-[15px] ${validatingDestination ? 'animate-spin' : ''}`}>
+                          verified
+                        </span>
+                        Validate Destination
+                      </button>
                     </div>
-                    {preflightData?.lastPreservationDestination && (
-                      <p className="text-[11px] text-indigo-600 m-0 font-mono">
-                        Saved destination: {preflightData.lastPreservationDestination}
-                      </p>
+
+                    {destinationValidationResult && (
+                      <div
+                        className={`p-2.5 rounded-lg text-xs flex items-center gap-2 font-medium ${
+                          destinationValidationResult.valid
+                            ? 'bg-emerald-50 border border-emerald-200 text-emerald-900'
+                            : 'bg-rose-50 border border-rose-200 text-rose-900'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[16px] shrink-0">
+                          {destinationValidationResult.valid ? 'check_circle' : 'error'}
+                        </span>
+                        <span>
+                          {destinationValidationResult.valid
+                            ? destinationValidationResult.message
+                            : destinationValidationResult.error}
+                        </span>
+                      </div>
                     )}
-                    <p className="text-[11px] text-slate-500 m-0">
-                      The package will contain verified SQLite backups, CSV sheets, Excel workbook, and cryptographic SHA-256 manifests.
-                    </p>
                   </div>
 
                   {/* Action Buttons */}

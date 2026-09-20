@@ -7,13 +7,13 @@ import { systemPrisma } from '../infrastructure/database/prisma';
 import { getDatabaseTemplatePath } from '../infrastructure/paths';
 
 describe('Phase 7 — Windows Specific Paths & Canonicalization', () => {
-  const baseScratch = path.resolve('apps/api/test-scratch-phase7-winpaths');
-  const templateDb = getDatabaseTemplatePath() || path.resolve('apps/api/Stavan.db');
+  const baseScratch = path.resolve(__dirname, '../../test-win');
+  const templateDb = getDatabaseTemplatePath() || path.resolve(__dirname, '../../Stavan.db');
 
   // Specific Windows test paths
-  const spacesDir = path.join(baseScratch, 'Test User Folder With Spaces', 'Sub Dir');
+  const spacesDir = path.join(baseScratch, 'Folder With Spaces');
   const unicodeDir = path.join(baseScratch, 'Diamond_测试_ダイヤモンド', 'Data');
-  const nestedDir = path.join(baseScratch, 'Nested', 'Level1', 'Level2', 'Target');
+  const nestedDir = path.join(baseScratch, 'Nest', 'L1', 'L2');
 
   beforeAll(async () => {
     if (!fs.existsSync(baseScratch)) {

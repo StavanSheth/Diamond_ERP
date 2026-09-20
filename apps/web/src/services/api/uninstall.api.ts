@@ -6,9 +6,32 @@ import type {
   PreservationVerificationDto,
   AuthorizeUninstallRequest,
   UninstallAuthorizationDto,
+  ValidateDestinationResponseDto,
+  BrowseDestinationResponseDto,
 } from '@diamond-erp/contracts';
 
 export const uninstallApi = {
+  /**
+   * Validate a preservation destination directory path.
+   */
+  async validateDestination(destinationDir: string): Promise<ValidateDestinationResponseDto> {
+    const res = await request<{ success: boolean; data: ValidateDestinationResponseDto }>('/api/system/uninstall/validate-destination', {
+      method: 'POST',
+      body: JSON.stringify({ destinationDir }),
+    });
+    return res.data;
+  },
+
+  /**
+   * Native destination browsing dialog invocation / fallback suggestions.
+   */
+  async browseDestination(): Promise<BrowseDestinationResponseDto> {
+    const res = await request<{ success: boolean; data: BrowseDestinationResponseDto }>('/api/system/uninstall/browse-destination', {
+      method: 'POST',
+    });
+    return res.data;
+  },
+
   /**
    * Run the Phase 7 Preflight inspection to detect active databases, backups, and customer data.
    */

@@ -81,6 +81,31 @@ export class UninstallController {
       next(err);
     }
   };
+
+  validateDestination = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const destinationDir = req.body?.destinationDir || req.query?.destinationDir || '';
+      const result = await uninstallPreflightService.validateDestination(String(destinationDir));
+      res.json({
+        success: result.valid,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  browseDestination = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await uninstallPreflightService.browseDestination();
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 export const uninstallController = new UninstallController();

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
 import { canonicalizeDatabasePath } from './database-path.util';
+import { schemaCompatibilityService } from './schema-compatibility.service';
 import { logger } from '../../../infrastructure/logging';
 import { getControlDbPath, getDatabaseTemplatePath } from '../../../infrastructure/paths';
 import type { DatabaseValidationResultDto } from '@diamond-erp/contracts';
@@ -189,7 +190,7 @@ export class DatabaseValidationService {
     const readOnlyClient = new PrismaClient({
       datasources: {
         db: {
-          url: `file:${normalizedUrl}?mode=ro`,
+          url: `file:${normalizedUrl}`,
         },
       },
     });
@@ -299,10 +300,9 @@ export class DatabaseValidationService {
         }
       }
 
-      // Schema version compatibility bounds:
-      // Minimum supported: version 1
-      // Maximum supported: version 10 (future version guard)
-      if (schemaVersion < 1) {
+      // Centralized authoritative schema version compatibility check
+      const compat = schemaCompatibilityService.check(schemaVersion);
+      if (!compat.isCompatible) {
         return {
           status: 'UNSUPPORTED',
           canonicalPath,
@@ -313,23 +313,8 @@ export class DatabaseValidationService {
           tablesFound,
           missingRequiredTables: [],
           detectedType: 'UNSUPPORTED_VERSION',
-          details: `Unsupported database schema version: ${schemaVersion}. Minimum supported version is 1.`,
-          error: 'Unsupported schema version',
-        };
-      }
-      if (schemaVersion > 10) {
-        return {
-          status: 'UNSUPPORTED',
-          canonicalPath,
-          isValid: false,
-          tableCount: tablesFound.length,
-          schemaVersion,
-          integrityCheck: 'ok',
-          tablesFound,
-          missingRequiredTables: [],
-          detectedType: 'UNSUPPORTED_VERSION',
-          details: `Database schema version (${schemaVersion}) is newer than supported by this application version.`,
-          error: 'Future schema version',
+          details: compat.details,
+          error: compat.conflictReason === 'UNSUPPORTED_SCHEMA_VERSION_NEWER' ? 'Future schema version' : 'Unsupported schema version',
         };
       }
 

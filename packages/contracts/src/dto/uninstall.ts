@@ -66,6 +66,7 @@ export interface UninstallExportResponseDto {
 export interface CreatePreservationPackageRequest {
   destinationDir?: string;
   databasePath?: string;
+  preserveAll?: boolean;
   confirmPreservation: boolean;
 }
 
@@ -81,6 +82,7 @@ export interface PreservationPackageDto {
   manifestPath?: string | null;
   manifestSha256?: string | null;
   sizeBytes: number;
+  preservedDatabasesCount?: number;
   createdAt: string;
   verifiedAt?: string | null;
   errorMessage?: string | null;
@@ -118,4 +120,23 @@ export interface UninstallAuthorizationDto {
   expiresAt: string;
   consumedAt?: string | null;
   tokenFilePath?: string;
+}
+
+export interface ValidateDestinationRequest {
+  destinationDir: string;
+}
+
+export interface ValidateDestinationResponseDto {
+  valid: boolean;
+  canonicalPath: string;
+  exists: boolean;
+  writable: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface BrowseDestinationResponseDto {
+  selectedPath: string | null;
+  canceled: boolean;
+  suggestedPaths?: string[];
 }

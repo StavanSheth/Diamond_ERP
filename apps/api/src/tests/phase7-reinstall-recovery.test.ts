@@ -204,6 +204,7 @@ describe('Phase 7 — Reinstall Recovery & Full Data Preservation Lifecycle', ()
       restoreId: restorePreview.restoreId,
       confirmDestructiveOverwrite: true,
       targetProfileCode: 'LIFECYCLE_PROF',
+      targetUserId: userId,
     });
     expect(restoreResult.status).toBe('VERIFIED');
 

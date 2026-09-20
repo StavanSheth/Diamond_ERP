@@ -15,6 +15,7 @@ import {
 } from '../../../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
+import { schemaCompatibilityService } from '../database/schema-compatibility.service';
 import { installationService } from '../installation.service';
 import { backupService } from '../backup/backup.service';
 import { ValidationError, NotFoundError, ConflictError } from '../../../errors';
@@ -49,9 +50,43 @@ export class RecoveryService {
     let previousOwnerUsername: string | null = null;
     let previousOwnerDisplayName: string | null = null;
 
-    // 1. Check database registry and profiles
+    // 1. Check database registry and profiles directly or via backup record / manifest
+    let resolvedProfileId: string | null = null;
+    let sourceDbPath: string | null = null;
+
+    if (manifest?.databases && Array.isArray(manifest.databases)) {
+      const matched = manifest.databases.find(
+        (d: any) =>
+          (d.backupPath && path.resolve(d.backupPath) === canonical) ||
+          (d.canonicalPath && path.resolve(d.canonicalPath) === canonical)
+      );
+      if (matched) {
+        if (matched.profileId) resolvedProfileId = matched.profileId;
+        if (matched.canonicalPath) sourceDbPath = path.resolve(matched.canonicalPath);
+        if (matched.username) previousOwnerUsername = matched.username;
+      }
+    } else if (manifest?.database) {
+      if (manifest.database.profileId) resolvedProfileId = manifest.database.profileId;
+      if (manifest.database.sourcePath) sourceDbPath = path.resolve(manifest.database.sourcePath);
+    }
+
+    // Check if canonical candidate is a recorded backup
+    const backupRecord = await systemPrisma.backupRecord.findFirst({
+      where: { backupPath: canonical },
+    });
+    if (backupRecord) {
+      if (!resolvedProfileId && backupRecord.profileId) resolvedProfileId = backupRecord.profileId;
+      if (!sourceDbPath && backupRecord.sourcePath) sourceDbPath = path.resolve(backupRecord.sourcePath);
+    }
+
     const reg = await systemPrisma.databaseRegistry.findFirst({
-      where: { canonicalPath: canonical },
+      where: {
+        OR: [
+          { canonicalPath: canonical },
+          ...(sourceDbPath ? [{ canonicalPath: sourceDbPath }] : []),
+          ...(resolvedProfileId ? [{ profileId: resolvedProfileId }] : []),
+        ],
+      },
       include: {
         profile: {
           include: {
@@ -63,33 +98,27 @@ export class RecoveryService {
       },
     });
 
-    if (reg?.profile) {
-      const activeUsers = reg.profile.userProfiles.filter((up) => up.isActive && up.user.isActive && !up.user.deletedAt);
-      const deletedUsers = reg.profile.userProfiles.filter((up) => !up.isActive || !up.user.isActive || up.user.deletedAt);
-
-      if (activeUsers.length === 0 && deletedUsers.length > 0) {
-        ownershipStatus = 'DELETED_USER';
-        previousOwnerUsername = deletedUsers[0].user.username;
-        previousOwnerDisplayName = deletedUsers[0].user.displayName;
-        return { ownershipStatus, previousOwnerUsername, previousOwnerDisplayName };
-      }
-    }
-
-    // 2. Check if candidate filename or manifest matches a profile with deleted users
     const candidateBase = path.basename(canonical, path.extname(canonical));
-    const profile = await systemPrisma.profile.findFirst({
-      where: {
-        OR: [
-          { code: candidateBase },
-          { dbPath: { contains: candidateBase } },
-        ],
-      },
-      include: {
-        userProfiles: {
-          include: { user: true },
+    const sourceBase = sourceDbPath ? path.basename(sourceDbPath, path.extname(sourceDbPath)) : null;
+
+    const profile =
+      reg?.profile ||
+      (await systemPrisma.profile.findFirst({
+        where: {
+          OR: [
+            ...(resolvedProfileId ? [{ id: resolvedProfileId }] : []),
+            { code: candidateBase },
+            { dbPath: { contains: candidateBase } },
+            ...(sourceBase ? [{ code: sourceBase }, { dbPath: { contains: sourceBase } }] : []),
+            ...(sourceDbPath ? [{ dbPath: sourceDbPath }] : []),
+          ],
         },
-      },
-    });
+        include: {
+          userProfiles: {
+            include: { user: true },
+          },
+        },
+      }));
 
     if (profile) {
       const activeUsers = profile.userProfiles.filter((up) => up.isActive && up.user.isActive && !up.user.deletedAt);
@@ -299,14 +328,13 @@ export class RecoveryService {
 
     const validation = await databaseValidationService.validateDatabase(canonical);
     let suitability = this.computeSuitability(validation);
-    const supportedSchemaVersion = 1;
     const candidateSchemaVersion = manifest?.database?.schemaVersion ?? validation.schemaVersion ?? 1;
-    let conflictReason: string | null = null;
+    const compatResult = schemaCompatibilityService.check(candidateSchemaVersion);
+    let conflictReason: string | null = compatResult.conflictReason;
 
-    if (candidateSchemaVersion > supportedSchemaVersion) {
+    if (!compatResult.isCompatible) {
       suitability = 'UNSUPPORTED';
-      conflictReason = 'UNSUPPORTED_SCHEMA_VERSION_NEWER';
-    } else if (candidateSchemaVersion < supportedSchemaVersion) {
+    } else if (compatResult.canMigrate) {
       conflictReason = 'MIGRATABLE_SCHEMA_VERSION_OLDER';
     }
 
@@ -331,7 +359,7 @@ export class RecoveryService {
       sizeBytes: stat.size,
       tableCount: validation.tableCount,
       schemaVersion: candidateSchemaVersion,
-      supportedSchemaVersion,
+      supportedSchemaVersion: compatResult.currentVersion,
       profileCode: manifest?.database?.profileCode || null,
       profileName: manifest?.database?.displayName || null,
       status: validation.status,
@@ -386,8 +414,9 @@ export class RecoveryService {
       throw new ValidationError(`Candidate database is corrupted and cannot be restored: ${validation.integrityCheck}`);
     }
     const candidateSchemaVersion = manifestSchemaVersion ?? validation.schemaVersion ?? 1;
-    if (candidateSchemaVersion > 1) {
-      throw new ValidationError(`Candidate schema version (${candidateSchemaVersion}) is newer than supported (1).`);
+    const compatResult = schemaCompatibilityService.check(candidateSchemaVersion);
+    if (!compatResult.isCompatible) {
+      throw new ValidationError(`Candidate schema version (${candidateSchemaVersion}) is not compatible: ${compatResult.details}`);
     }
 
     // Resolve target profile and target DB path
@@ -503,6 +532,48 @@ export class RecoveryService {
     }
     const canonicalTarget = targetResult.canonicalPath;
 
+    const install = await installationService.getOrCreateInstallation();
+
+    // Authoritative ownership resolution for candidate database
+    const candidateManifestPath = `${restoreRecord.candidatePath}.manifest.json`;
+    let candidateManifest: any = null;
+    if (fs.existsSync(candidateManifestPath)) {
+      try {
+        candidateManifest = JSON.parse(fs.readFileSync(candidateManifestPath, 'utf-8'));
+      } catch {}
+    }
+    const ownershipInfo = await this.resolveOwnership(restoreRecord.candidatePath, candidateManifest, install);
+
+    // Explicit user binding validation:
+    // If candidate database belongs to a DELETED_USER, explicit targetUserId is mandatory.
+    if (ownershipInfo.ownershipStatus === 'DELETED_USER' && !req.targetUserId) {
+      throw new ValidationError(
+        'Target user ID is mandatory to recover a database belonging to a deleted user. Explicit user selection required.'
+      );
+    }
+
+    let targetUser: any = null;
+    if (req.targetUserId) {
+      targetUser = await systemPrisma.user.findUnique({
+        where: { id: req.targetUserId },
+      });
+      if (!targetUser) {
+        throw new NotFoundError(`Selected target user "${req.targetUserId}" does not exist.`);
+      }
+
+      // If candidate had a known previous owner, verify match or require explicit confirmation
+      if (
+        ownershipInfo.previousOwnerUsername &&
+        ownershipInfo.previousOwnerUsername !== targetUser.username &&
+        !req.confirmForeignInstallation &&
+        !req.confirmDestructiveOverwrite
+      ) {
+        throw new ValidationError(
+          `Candidate database belonged to user "${ownershipInfo.previousOwnerUsername}", which differs from selected target user "${targetUser.username}". Explicit confirmation required.`
+        );
+      }
+    }
+
     // Concurrency Lock
     if (this.activeRestoreLocks.has(canonicalTarget)) {
       throw new ConflictError('A restore operation is already in progress for this target database.');
@@ -601,8 +672,6 @@ export class RecoveryService {
       }
 
       // 5. Update or Register active database in DatabaseRegistry and Profile
-      const install = await installationService.getOrCreateInstallation();
-
       let targetProfile = await systemPrisma.profile.findFirst({
         where: { code: targetProfileCode },
       });
@@ -650,50 +719,54 @@ export class RecoveryService {
         },
       });
 
-      // If target user is provided, associate or reactivate them
-      if (req.targetUserId) {
-        const targetUser = await systemPrisma.user.findUnique({
-          where: { id: req.targetUserId },
-        });
+      // Explicit user ↔ database recovery binding
+      if (targetUser) {
+        if (req.reactivateUser || !targetUser.isActive || targetUser.deletedAt) {
+          await systemPrisma.user.update({
+            where: { id: targetUser.id },
+            data: { isActive: true, deletedAt: null },
+          });
+        }
 
-        if (targetUser) {
-          if (req.reactivateUser && (!targetUser.isActive || targetUser.deletedAt)) {
-            await systemPrisma.user.update({
-              where: { id: targetUser.id },
-              data: { isActive: true, deletedAt: null },
-            });
-          }
-
-          await systemPrisma.userProfile.upsert({
-            where: {
-              userId_profileId: {
-                userId: targetUser.id,
-                profileId: targetProfile.id,
-              },
-            },
-            update: { isActive: true, role: 'ADMIN' },
-            create: {
+        await systemPrisma.userProfile.upsert({
+          where: {
+            userId_profileId: {
               userId: targetUser.id,
               profileId: targetProfile.id,
-              role: 'ADMIN',
-              isActive: true,
             },
-          });
+          },
+          update: { isActive: true, role: 'ADMIN' },
+          create: {
+            userId: targetUser.id,
+            profileId: targetProfile.id,
+            role: 'ADMIN',
+            isActive: true,
+          },
+        });
 
-          await systemPrisma.installationUser.upsert({
-            where: {
-              installationId_userId: {
-                installationId: install.id,
-                userId: targetUser.id,
-              },
-            },
-            update: {},
-            create: {
+        await systemPrisma.installationUser.upsert({
+          where: {
+            installationId_userId: {
               installationId: install.id,
               userId: targetUser.id,
             },
-          });
-        }
+          },
+          update: {},
+          create: {
+            installationId: install.id,
+            userId: targetUser.id,
+          },
+        });
+
+        await systemPrisma.auditEvent.create({
+          data: {
+            entityType: 'USER',
+            entityId: targetUser.id,
+            eventType: 'DATABASE_RECOVERED',
+            description: `Database ${canonicalTarget} explicitly bound to recovered user ${targetUser.username} (${targetUser.id})`,
+            performedBy,
+          },
+        });
       }
 
       // 6. Clean up staging folder
