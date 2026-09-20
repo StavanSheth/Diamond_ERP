@@ -114,6 +114,54 @@ async function waitForServer(maxWaitMs = 35000) {
   return false;
 }
 
+async function prepareSmokeDatabase() {
+  const databasesDir = path.join(TEMP_DATA_DIR, 'databases');
+  if (!fs.existsSync(databasesDir)) {
+    fs.mkdirSync(databasesDir, { recursive: true });
+  }
+
+  const isolatedDbPath = path.join(databasesDir, 'Stavan.db');
+  if (!fs.existsSync(isolatedDbPath)) {
+    const templatePath = isStagedMode
+      ? path.join(STAGING_DIR, 'api', 'prisma', 'template.db')
+      : path.join(ROOT_DIR, 'apps', 'api', 'prisma', 'template.db');
+    if (fs.existsSync(templatePath)) {
+      fs.copyFileSync(templatePath, isolatedDbPath);
+    }
+  }
+
+  // Ensure Installation record is initialized in READY state so business domain APIs can be smoke-tested
+  const prismaClientDir = isStagedMode
+    ? path.join(STAGING_DIR, 'api', 'node_modules', '@prisma/client')
+    : path.join(ROOT_DIR, 'apps', 'api', 'node_modules', '@prisma/client');
+
+  if (fs.existsSync(prismaClientDir)) {
+    const { PrismaClient } = require(prismaClientDir);
+    const client = new PrismaClient({ datasources: { db: { url: `file:${isolatedDbPath}` } } });
+    try {
+      const existing = await client.installation.findFirst();
+      if (!existing) {
+        await client.installation.create({
+          data: {
+            installationId: require('crypto').randomUUID(),
+            appVersion: '3.0.0',
+            lifecycleState: 'READY',
+            status: 'ACTIVE',
+            initializedAt: new Date(),
+          },
+        });
+      } else if (existing.lifecycleState !== 'READY') {
+        await client.installation.update({
+          where: { id: existing.id },
+          data: { lifecycleState: 'READY', initializedAt: new Date() },
+        });
+      }
+    } finally {
+      await client.$disconnect();
+    }
+  }
+}
+
 function spawnServer(apiEntry, cwd) {
   const databasesDir = path.join(TEMP_DATA_DIR, 'databases');
   if (!fs.existsSync(databasesDir)) {
@@ -271,6 +319,7 @@ async function runSmokeTests() {
     }
   }
 
+  await prepareSmokeDatabase();
   console.log(`\n[2/5] Spawning Production Server Process (CWD: ${apiCwd})...`);
   serverProcess = spawnServer(apiEntry, apiCwd);
 
