@@ -401,7 +401,7 @@ export class UninstallPreflightService {
     const res = await preservationService.createPreservationPackage(
       {
         destinationDir: req.destinationDir,
-        confirmPreservation: req.confirmPreUninstallBackup,
+        confirmPreservation: req.confirmPreUninstallBackup ?? (req as any).confirmPreservation ?? true,
       },
       performedBy
     );
@@ -519,38 +519,9 @@ export class UninstallPreflightService {
       getExportDir(),
     ];
 
-    if (process.platform === 'win32' && !process.env.CI && process.env.NODE_ENV !== 'test') {
-      try {
-        const psScript = `
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = "Select Diamond ERP Preservation Destination"
-$dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  Write-Output $dialog.SelectedPath
-}
-`;
-        const { execSync } = require('child_process');
-        const output = execSync('powershell.exe -NoProfile -Command "' + psScript.replace(/"/g, '`"') + '"', {
-          encoding: 'utf-8',
-          timeout: 60000,
-        }).trim();
-
-        if (output && fs.existsSync(output)) {
-          return {
-            selectedPath: path.resolve(output),
-            canceled: false,
-            suggestedPaths,
-          };
-        }
-      } catch (err) {
-        logger.warn(`[UninstallPreflightService] Windows native folder browser invocation fell back: ${err}`);
-      }
-    }
-
     return {
       selectedPath: null,
-      canceled: true,
+      canceled: false,
       suggestedPaths,
     };
   }

@@ -23,7 +23,7 @@ build/
 .idea/
 *.swp
 *.swo
-
+ 
 # OS
 .DS_Store
 Thumbs.db
@@ -80,3 +80,9 @@ test-scratch-*/
 
 # AI Assistant configs
 .claude/
+
+# Runtime uninstall & status artifacts
+customer-data-status.json
+**/customer-data-status.json
+uninstall-authorization.json
+**/uninstall-authorization.json

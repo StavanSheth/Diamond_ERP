@@ -13,6 +13,8 @@ router.post('/create', adminStack, authorize('settings.update'), backupControlle
 router.get('/list', adminStack, authorize('settings.read'), backupController.listBackups);
 router.post('/inspect', adminStack, authorize('settings.read'), backupController.inspectBackup);
 router.post('/verify', adminStack, authorize('settings.read'), backupController.verifyBackup);
+router.get('/:backupId/download', adminStack, authorize('settings.read'), backupController.downloadBackup);
 router.delete('/:backupId', adminStack, authorize('settings.update'), backupController.deleteBackup);
 
 export default router;
+

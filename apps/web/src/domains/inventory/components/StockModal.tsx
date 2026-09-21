@@ -174,9 +174,9 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
           )}
 
           {/* Section 1: Parcel Identification & Classification */}
-          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant shadow-xs shrink-0 overflow-hidden">
             <div className="h-1 bg-blue-600" />
-            <div className="p-lg flex flex-col gap-md">
+            <div className="p-5 flex flex-col gap-4">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center shrink-0 shadow-2xs">
                   <span className="material-symbols-outlined text-[18px]">inventory_2</span>
@@ -191,9 +191,9 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-md pt-xs">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
                 {/* Stock Parcel Name */}
-                <div className="flex flex-col gap-xs md:col-span-2">
+                <div className="flex flex-col gap-1.5 col-span-1 md:col-span-2">
                   <label className="font-caption text-caption font-bold text-on-surface-variant flex items-center gap-1 uppercase tracking-wider">
                     Stock Parcel Name <span className="text-error">*</span>
                     <span className="font-normal text-on-surface-variant/70 text-[11px] lowercase">(e.g., Lot code, Envelope ID, or Brand)</span>
@@ -214,14 +214,14 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 </div>
 
                 {/* Parcel Classification / Type */}
-                <div className="flex flex-col gap-xs">
+                <div className="flex flex-col gap-1.5 col-span-1">
                   <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                     Parcel Classification / Type
                   </label>
                   <select
                     value={form.itemType}
                     onChange={(e) => handleChange('itemType', e.target.value)}
-                    className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-medium"
+                    className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-medium"
                   >
                     {PARCEL_TYPES.map((type) => (
                       <option key={type} value={type}>
@@ -232,14 +232,14 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 </div>
 
                 {/* Certificate Group / Classification */}
-                <div className="flex flex-col gap-xs">
+                <div className="flex flex-col gap-1.5 col-span-1">
                   <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                     Certificate Group / Category
                   </label>
                   <select
                     value={form.reportGroup}
                     onChange={(e) => handleChange('reportGroup', e.target.value)}
-                    className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
+                    className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
                   >
                     <option value="">Select Group (Optional)</option>
                     {REPORT_GROUPS.map((g) => (
@@ -251,7 +251,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                 </div>
 
                 {/* Storage Location */}
-                <div className={`flex flex-col gap-xs ${isEdit ? '' : 'md:col-span-2'}`}>
+                <div className={`flex flex-col gap-1.5 col-span-1 ${isEdit ? '' : 'md:col-span-2'}`}>
                   <div className="flex items-center justify-between">
                     <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                       Storage Location
@@ -273,7 +273,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                         value={newLocName}
                         onChange={(e) => setNewLocName(e.target.value)}
                         placeholder="e.g. Surat Safe, BKC Vault..."
-                        className="w-full px-sm py-1.5 border border-outline-variant rounded-lg bg-white text-xs text-on-surface focus:outline-none focus:border-primary"
+                        className="w-full px-sm py-2 border border-outline-variant rounded-lg bg-white text-xs text-on-surface focus:outline-none focus:border-primary"
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
@@ -285,7 +285,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                       <button
                         type="button"
                         onClick={handleSaveNewLocation}
-                        className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-bold shrink-0 hover:bg-surface-tint shadow-xs transition-colors"
+                        className="px-3 py-2 bg-primary text-white rounded-lg text-xs font-bold shrink-0 hover:bg-surface-tint shadow-xs transition-colors"
                       >
                         Save
                       </button>
@@ -294,7 +294,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                     <select
                       value={form.location || DEFAULT_LOCATION}
                       onChange={(e) => handleChange('location', e.target.value)}
-                      className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
+                      className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface"
                     >
                       <option value={DEFAULT_LOCATION}>{DEFAULT_LOCATION}</option>
                       {locations.map((l) => (
@@ -308,7 +308,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
                 {/* Edit Mode Status Selector */}
                 {isEdit && (
-                  <div className="flex flex-col gap-xs">
+                  <div className="flex flex-col gap-1.5 col-span-1">
                     <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
                       Lifecycle Status
                     </label>
@@ -322,7 +322,7 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                           status: isArch ? 'ARCHIVED' : 'ACTIVE',
                         }));
                       }}
-                      className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-semibold"
+                      className="w-full px-md py-2.5 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-md text-on-surface font-semibold"
                     >
                       <option value="ACTIVE">Active (In Circulation)</option>
                       <option value="ARCHIVED">Archived (Closed / Deactivated)</option>
@@ -335,9 +335,9 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
 
           {/* Section 2: Optional Opening Balance (Only for Create Mode) */}
           {!isEdit && (
-            <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+            <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant shadow-xs shrink-0 overflow-hidden">
               <div className="h-1 bg-emerald-600" />
-              <div className="p-lg flex flex-col gap-md">
+              <div className="p-5 flex flex-col gap-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0 shadow-2xs">
@@ -379,54 +379,44 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
                       {/* Carat Weight */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
-                          Carat Weight <span className="text-error">*</span>
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase">
+                          Carat Weight (Ct) *
                         </label>
-                        <div className="relative">
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={form.caratWeight || ''}
-                            onChange={(e) => handleChange('caratWeight', e.target.value)}
-                            placeholder="0.00"
-                            className="w-full px-sm py-2 border border-emerald-200 rounded-lg bg-emerald-50/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-600 font-body-lg text-on-surface font-bold text-right pr-9"
-                          />
-                          <span className="absolute right-3 top-1/2 -translate-y-1/2 font-caption text-on-surface-variant font-medium">
-                            ct
-                          </span>
-                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={form.caratWeight || ''}
+                          onChange={(e) => handleChange('caratWeight', e.target.value)}
+                          placeholder="0.00"
+                          className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-600 font-body-md text-on-surface font-semibold"
+                        />
                       </div>
 
                       {/* Carat Rate */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
-                          Carat Rate (₹)
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase">
+                          Rate / Carat (₹)
                         </label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 font-caption text-on-surface-variant font-semibold">
-                            ₹
-                          </span>
-                          <input
-                            type="number"
-                            step="1"
-                            min="0"
-                            value={form.caratRate || ''}
-                            onChange={(e) => handleChange('caratRate', e.target.value)}
-                            placeholder="0"
-                            className="w-full pl-8 pr-sm py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary font-body-lg text-on-surface font-bold text-right"
-                          />
-                        </div>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={form.caratRate || ''}
+                          onChange={(e) => handleChange('caratRate', e.target.value)}
+                          placeholder="0"
+                          className="w-full px-md py-2 border border-outline-variant rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-600 font-body-md text-on-surface font-semibold"
+                        />
                       </div>
 
-                      {/* Total Net Value (Auto) */}
+                      {/* Calculated Total Valuation */}
                       <div className="flex flex-col gap-xs">
-                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase tracking-wider">
-                          Total Opening Value (Auto)
+                        <label className="font-caption text-caption font-bold text-on-surface-variant uppercase">
+                          Total Opening Value (₹)
                         </label>
-                        <div className="h-[42px] flex items-center justify-between px-3 rounded-lg bg-emerald-50 border border-emerald-200 font-body-lg text-emerald-800 font-bold">
-                          <span className="text-xs font-semibold text-emerald-600">₹</span>
-                          <span>
+                        <div className="w-full px-md py-2 border border-emerald-200 rounded-lg bg-emerald-50/60 flex items-center">
+                          <span className="font-body-md font-bold text-emerald-800">
+                            ₹
                             {totalOpeningValue.toLocaleString('en-IN', {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
@@ -449,9 +439,9 @@ export const StockModal: React.FC<StockModalProps> = ({ open, stock, onClose, on
           )}
 
           {/* Section 3: Notes & Metadata */}
-          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+          <div className="bg-[#F8FAFC] rounded-2xl border border-outline-variant shadow-xs shrink-0 overflow-hidden">
             <div className="h-1 bg-purple-600" />
-            <div className="p-lg flex flex-col gap-md">
+            <div className="p-5 flex flex-col gap-4">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center shrink-0 shadow-2xs">
                   <span className="material-symbols-outlined text-[18px]">notes</span>

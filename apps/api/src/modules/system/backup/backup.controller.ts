@@ -1,5 +1,8 @@
+import fs from 'fs';
+import path from 'path';
 import { Request, Response, NextFunction } from 'express';
 import { backupService } from './backup.service';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
 
 export class BackupController {
   createBackup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -54,6 +57,21 @@ export class BackupController {
     }
   };
 
+  downloadBackup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const backupId = String(req.params.backupId);
+      const record = await systemPrisma.backupRecord.findUnique({ where: { backupId } });
+      if (!record || !fs.existsSync(record.backupPath)) {
+        res.status(404).json({ success: false, message: 'Backup file not found on disk' });
+        return;
+      }
+      const filename = path.basename(record.backupPath);
+      res.download(record.backupPath, filename);
+    } catch (err) {
+      next(err);
+    }
+  };
+
   deleteBackup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const backupId = req.params.backupId || req.body?.backupId;
@@ -69,3 +87,4 @@ export class BackupController {
 }
 
 export const backupController = new BackupController();
+

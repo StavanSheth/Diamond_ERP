@@ -105,6 +105,11 @@ export const api = {
   getActivationStatus: settingsApi.getActivationStatus,
   activateApp: settingsApi.activateApp,
   listUsers: settingsApi.listUsers,
+  updateUser: settingsApi.updateUser,
+  listDatabases: settingsApi.listDatabases,
+  updateDatabase: settingsApi.updateDatabase,
+  linkDatabaseToUser: settingsApi.linkDatabaseToUser,
+  unlinkDatabaseFromUser: settingsApi.unlinkDatabaseFromUser,
   deleteUser: settingsApi.deleteUser,
 
   // Auth

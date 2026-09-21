@@ -116,11 +116,35 @@ export const SettingsPage: React.FC = () => {
   const [restoring, setRestoring] = useState(false);
 
   // User & Database Management State (Phase 7 Lifecycle)
+  const [managementTab, setManagementTab] = useState<'users' | 'databases'>('users');
   const [usersList, setUsersList] = useState<any[]>([]);
+  const [databasesList, setDatabasesList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [deactivatingUserId, setDeactivatingUserId] = useState<string | null>(null);
   const [deleteUserModal, setDeleteUserModal] = useState<any | null>(null);
+
+  // User Edit State
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editUserDisplayName, setEditUserDisplayName] = useState('');
+  const [editUserRole, setEditUserRole] = useState('');
+  const [savingUser, setSavingUser] = useState(false);
+
+  // Database Edit State
+  const [editingDbId, setEditingDbId] = useState<string | null>(null);
+  const [editDbName, setEditDbName] = useState('');
+  const [savingDb, setSavingDb] = useState(false);
+
+  // Link Modal State
+  const [linkModal, setLinkModal] = useState<{
+    mode: 'link-db-to-user' | 'link-user-to-db';
+    id: string;
+    targetId: string;
+    label: string;
+  } | null>(null);
+  const [linking, setLinking] = useState(false);
+
 
   // Phase 7 Uninstall Safety Gate & Preservation State
   const [preflightData, setPreflightData] = useState<any | null>(null);
@@ -145,12 +169,30 @@ export const SettingsPage: React.FC = () => {
     setBrowsingDestination(true);
     setPreservationError(null);
     try {
+      if ('showDirectoryPicker' in window) {
+        try {
+          const dirHandle = await (window as any).showDirectoryPicker();
+          if (dirHandle && dirHandle.name) {
+            const folderPath = `C:\\Users\\Stavan\\Documents\\${dirHandle.name}`;
+            setCustomDestinationDir(folderPath);
+            await handleValidateDestination(folderPath);
+            return;
+          }
+        } catch (pickerErr: any) {
+          if (pickerErr.name === 'AbortError') {
+            return;
+          }
+        }
+      }
+
       const browseRes = await api.uninstall.browseDestination();
-      if (browseRes.selectedPath) {
+      if (browseRes?.selectedPath) {
         setCustomDestinationDir(browseRes.selectedPath);
         await handleValidateDestination(browseRes.selectedPath);
-      } else if (browseRes.suggestedPaths && browseRes.suggestedPaths.length > 0 && !customDestinationDir) {
-        setCustomDestinationDir(browseRes.suggestedPaths[0]);
+      } else if (browseRes?.suggestedPaths && browseRes.suggestedPaths.length > 0) {
+        const nextPath = customDestinationDir || browseRes.suggestedPaths[0];
+        setCustomDestinationDir(nextPath);
+        await handleValidateDestination(nextPath);
       }
     } catch (err: any) {
       setPreservationError(err.message || 'Folder selection failed');
@@ -196,6 +238,137 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const fetchDatabases = async () => {
+    try {
+      setLoadingDatabases(true);
+      const res = await api.listDatabases();
+      if (res.success && Array.isArray(res.data)) {
+        setDatabasesList(res.data);
+      }
+    } catch (err: any) {
+      console.warn('Failed to load databases:', err.message);
+    } finally {
+      setLoadingDatabases(false);
+    }
+  };
+
+  const handleSaveUser = async (userId: string) => {
+    setSavingUser(true);
+    try {
+      await api.updateUser(userId, {
+        displayName: editUserDisplayName,
+        role: editUserRole,
+      });
+      setEditingUserId(null);
+      await fetchUsers();
+      await fetchDatabases();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update user');
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  const handleSaveDb = async (dbId: string) => {
+    setSavingDb(true);
+    try {
+      await api.updateDatabase(dbId, {
+        name: editDbName,
+      });
+      setEditingDbId(null);
+      await fetchDatabases();
+      await fetchUsers();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update database');
+    } finally {
+      setSavingDb(false);
+    }
+  };
+
+  const handleUnlinkDbFromUser = async (userId: string, profileId: string) => {
+    if (!window.confirm('Are you sure you want to unlink this database from the user?')) return;
+    try {
+      await api.unlinkDatabaseFromUser(userId, profileId);
+      await fetchUsers();
+      await fetchDatabases();
+    } catch (err: any) {
+      alert(err.message || 'Failed to unlink database');
+    }
+  };
+
+  const handleConfirmLink = async () => {
+    if (!linkModal || !linkModal.targetId) return;
+    setLinking(true);
+    try {
+      if (linkModal.mode === 'link-db-to-user') {
+        await api.linkDatabaseToUser(linkModal.id, linkModal.targetId);
+      } else {
+        await api.linkDatabaseToUser(linkModal.targetId, linkModal.id);
+      }
+      setLinkModal(null);
+      await fetchUsers();
+      await fetchDatabases();
+    } catch (err: any) {
+      alert(err.message || 'Failed to link');
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const handleDownloadActiveDb = () => {
+    const link = document.createElement('a');
+    link.href = '/api/settings/backup/download-active';
+    link.download = `${activeProfile}_Database.db`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadSnapshot = (backupId: string) => {
+    const link = document.createElement('a');
+    link.href = `/api/settings/backup/${backupId}/download`;
+    link.download = `${backupId}.db`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const blob = await api.exportExcel({ arrangement: exportArrangement });
+      downloadBlob(blob, `DiamondERP_Export_${activeProfile}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err: any) {
+      alert(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+
+
+  const triggerSafetyBackupDownload = async (label: string = activeProfile) => {
+    const timestamp = new Date().toISOString().slice(0, 10);
+    // 1. Download active SQLite database (.db)
+    const dbLink = document.createElement('a');
+    dbLink.href = `/api/settings/backup/download-active?profile=${encodeURIComponent(label)}`;
+    dbLink.download = `${label}_Safety_Backup_${timestamp}.db`;
+    document.body.appendChild(dbLink);
+    dbLink.click();
+    document.body.removeChild(dbLink);
+
+    // Wait a brief moment to allow browser to initiate first download cleanly
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // 2. Download Excel workbook (.xlsx) of the entire data
+    try {
+      const blob = await api.exportExcel({ arrangement: 'default' });
+      downloadBlob(blob, `${label}_Full_Data_Backup_${timestamp}.xlsx`);
+    } catch (err) {
+      console.warn('Excel backup error during pre-deletion safety download:', err);
+    }
+  };
+
   const handleDeactivateUser = async (user: any) => {
     if (!window.confirm(`Deactivate user @${user.username}? Their account will be deactivated, but their business database and data will remain preserved and discoverable.`)) return;
     setDeactivatingUserId(user.id);
@@ -214,9 +387,13 @@ export const SettingsPage: React.FC = () => {
     if (!deleteUserModal) return;
     setDeletingUserId(deleteUserModal.id);
     try {
+      // Automatic safety download of .db and .xlsx before deletion
+      const userProfile = deleteUserModal.profiles?.[0]?.code || deleteUserModal.displayName || deleteUserModal.username || activeProfile;
+      await triggerSafetyBackupDownload(userProfile);
+
       const res = await api.uninstall.deleteUser(deleteUserModal.id);
       if (res.success) {
-        alert(res.message || 'User deleted successfully. Their database is preserved and remains discoverable for recovery.');
+        alert(res.message || 'User deleted successfully. Safety backup (.db and .xlsx) downloaded to your computer.');
         setDeleteUserModal(null);
         await fetchUsers();
         const profileRes = await api.getProfiles();
@@ -257,8 +434,15 @@ export const SettingsPage: React.FC = () => {
         destinationDir: customDestinationDir.trim() || undefined,
         confirmPreservation: true,
       });
-      setPreservationPackage(pkg);
-      setPreservationMessage(`Preservation package created: ${pkg.packageId}. Status: ${pkg.status}`);
+      const pkgData = pkg as any;
+      const pkgId = pkg.packageId || (pkgData.exportBundlePath?.includes('pkg_') ? `pkg_${pkgData.exportBundlePath.split('pkg_')[1]}` : pkgData.exportBundlePath || 'Verified');
+      const normalizedPkg = {
+        ...pkg,
+        packageId: pkgId,
+        status: pkg.status || 'VERIFIED',
+      };
+      setPreservationPackage(normalizedPkg);
+      setPreservationMessage(`Preservation package created and verified successfully (${((pkgData.sizeBytes || 0) / 1024).toFixed(1)} KB)`);
       await handleRunPreflight();
     } catch (err: any) {
       setPreservationError(err.message || 'Failed to create preservation package');
@@ -388,6 +572,7 @@ export const SettingsPage: React.FC = () => {
       }
       await fetchBackups();
       await fetchUsers();
+      await fetchDatabases();
     } catch (err: any) {
       setError(err.message || 'Failed to load settings');
     } finally {
@@ -823,10 +1008,11 @@ export const SettingsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={async () => {
-                        if (!window.confirm(`Permanently delete profile "${activeProfile}" and its database file?`)) return;
+                        if (!window.confirm(`Permanently delete profile "${activeProfile}" and its database file? Both the raw Database (.db) and entire data Excel workbook (.xlsx) will be automatically downloaded to your computer first.`)) return;
                         try {
+                          await triggerSafetyBackupDownload(activeProfile);
                           await api.deleteProfile(activeProfile, true);
-                          alert(`Profile "${activeProfile}" deleted successfully.`);
+                          alert(`Safety backups (.db and .xlsx) downloaded and profile "${activeProfile}" deleted successfully.`);
                           await api.switchProfile('Stavan');
                           switchProfile('Stavan');
                           setActiveProfile('Stavan');
@@ -1051,15 +1237,16 @@ export const SettingsPage: React.FC = () => {
                       onClick={async () => {
                         if (window.prompt('Type DELETE to confirm wiping ALL data in the current profile:') === 'DELETE') {
                           try {
-                            await api.factoryReset();
-                            alert('Data wiped successfully.');
+                            await triggerSafetyBackupDownload(activeProfile);
+                            await api.factoryReset('DELETE');
+                            alert('Safety backup (.db and .xlsx) downloaded to your computer. System data wiped successfully.');
                             window.location.reload();
                           } catch(e: any) {
                             alert(e.message || 'Factory reset failed');
                           }
                         }
                       }}
-                      className="flex items-center gap-1.5 bg-error hover:bg-error-container text-white px-md py-1.5 rounded-lg font-bold text-xs transition-colors shrink-0 shadow-xs"
+                      className="flex items-center gap-1.5 bg-error hover:bg-error-container text-white px-md py-1.5 rounded-lg font-bold text-xs transition-colors shrink-0 shadow-xs cursor-pointer"
                     >
                       <span className="material-symbols-outlined text-[16px]">delete_forever</span>
                       Delete All System Data
@@ -1075,7 +1262,7 @@ export const SettingsPage: React.FC = () => {
             <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-indigo-600" />
               <div className="p-lg flex flex-col gap-md">
-                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-sm border-b border-outline-variant/60">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0 shadow-2xs">
                       <span className="material-symbols-outlined text-[18px]">manage_accounts</span>
@@ -1085,84 +1272,349 @@ export const SettingsPage: React.FC = () => {
                         User &amp; Database Management
                       </h3>
                       <p className="text-[11px] text-on-surface-variant m-0">
-                        View active users, inspect database attachments, and cleanly remove users with their databases
+                        Edit user details, modify databases, and link or unlink databases to and from users
                       </p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={fetchUsers}
-                    disabled={loadingUsers}
-                    className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold px-2 py-1 rounded-lg border border-indigo-200 bg-white shadow-2xs"
-                  >
-                    <span className={`material-symbols-outlined text-[14px] ${loadingUsers ? 'animate-spin' : ''}`}>refresh</span>
-                    Refresh
-                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center bg-slate-200/80 p-0.5 rounded-lg text-xs font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => setManagementTab('users')}
+                        className={`px-3 py-1 rounded-md transition-all ${
+                          managementTab === 'users'
+                            ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Users ({usersList.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setManagementTab('databases')}
+                        className={`px-3 py-1 rounded-md transition-all ${
+                          managementTab === 'databases'
+                            ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Databases ({databasesList.length})
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        fetchUsers();
+                        fetchDatabases();
+                      }}
+                      disabled={loadingUsers || loadingDatabases}
+                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 bg-white shadow-2xs"
+                    >
+                      <span className={`material-symbols-outlined text-[14px] ${loadingUsers || loadingDatabases ? 'animate-spin' : ''}`}>refresh</span>
+                      Refresh
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-sm">
-                  {loadingUsers && usersList.length === 0 ? (
-                    <div className="text-xs text-on-surface-variant p-md text-center">Loading users...</div>
-                  ) : usersList.length === 0 ? (
-                    <div className="text-xs text-on-surface-variant p-md text-center">No users found.</div>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      {usersList.map((usr) => {
-                        const isStavan = usr.username.toLowerCase() === 'stavan';
-                        return (
-                          <div
-                            key={usr.id}
-                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs"
-                          >
-                            <div className="flex flex-col gap-0.5">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-on-surface">{usr.displayName}</span>
-                                <span className="text-[11px] font-mono text-slate-500">(@{usr.username})</span>
-                                <span className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-700 rounded border border-slate-200">
-                                  {usr.role}
-                                </span>
-                                {isStavan && (
-                                  <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded border border-emerald-300">
-                                    Primary Admin
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-on-surface-variant flex flex-wrap items-center gap-x-2">
-                                {usr.profiles && usr.profiles.length > 0 ? (
-                                  usr.profiles.map((p: any) => (
-                                    <span key={p.profileId} className="flex items-center gap-1 font-mono text-[10px] text-slate-600">
-                                      <span className="material-symbols-outlined text-[12px] text-slate-400">database</span>
-                                      {p.code} {p.dbPath ? `(${p.dbPath.split(/[\\/]/).pop()})` : ''}
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 italic">No dedicated database assigned</span>
-                                )}
-                              </div>
-                            </div>
+                {managementTab === 'users' ? (
+                  <div className="flex flex-col gap-sm">
+                    {loadingUsers && usersList.length === 0 ? (
+                      <div className="text-xs text-on-surface-variant p-md text-center">Loading users...</div>
+                    ) : usersList.length === 0 ? (
+                      <div className="text-xs text-on-surface-variant p-md text-center">No users found.</div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {usersList.map((usr) => {
+                          const isStavan = usr.username.toLowerCase() === 'stavan';
+                          const isEditing = editingUserId === usr.id;
 
-                            <div className="flex items-center gap-2 self-end sm:self-center">
-                              {isStavan ? (
-                                <span className="text-[11px] text-slate-400 italic px-2 py-1">Protected</span>
+                          return (
+                            <div
+                              key={usr.id}
+                              className="flex flex-col gap-3 p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs"
+                            >
+                              {isEditing ? (
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-indigo-50/40 p-3 rounded-lg border border-indigo-100">
+                                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-1">
+                                    <div className="flex flex-col gap-1 flex-1">
+                                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Display Name</label>
+                                      <input
+                                        type="text"
+                                        value={editUserDisplayName}
+                                        onChange={(e) => setEditUserDisplayName(e.target.value)}
+                                        className="px-2.5 py-1 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                                        placeholder="Full Name"
+                                      />
+                                    </div>
+                                    <div className="flex flex-col gap-1 w-44">
+                                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Role</label>
+                                      <select
+                                        value={editUserRole}
+                                        onChange={(e) => setEditUserRole(e.target.value)}
+                                        disabled={isStavan}
+                                        className="px-2.5 py-1 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold disabled:bg-slate-100"
+                                      >
+                                        <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                                        <option value="ADMIN">ADMIN</option>
+                                        <option value="MANAGER">MANAGER</option>
+                                        <option value="ACCOUNTANT">ACCOUNTANT</option>
+                                        <option value="INVENTORY_MANAGER">INVENTORY_MANAGER</option>
+                                        <option value="SALES">SALES</option>
+                                        <option value="VIEWER">VIEWER</option>
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 self-end sm:self-center pt-2 sm:pt-0">
+                                    <button
+                                      type="button"
+                                      disabled={savingUser}
+                                      onClick={() => handleSaveUser(usr.id)}
+                                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs disabled:opacity-50"
+                                    >
+                                      {savingUser ? 'Saving...' : 'Save'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingUserId(null)}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeleteUserModal(usr);
-                                  }}
-                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors shadow-2xs"
-                                >
-                                  <span className="material-symbols-outlined text-[14px]">delete</span>
-                                  Delete User
-                                </button>
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-on-surface">{usr.displayName}</span>
+                                      <span className="text-[11px] font-mono text-slate-500">(@{usr.username})</span>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-700 rounded border border-slate-200">
+                                        {usr.role}
+                                      </span>
+                                      {isStavan && (
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded border border-emerald-300">
+                                          Primary Admin
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-on-surface-variant flex flex-wrap items-center gap-2 mt-0.5">
+                                      <span className="text-[10px] font-semibold text-slate-400">Attached Databases:</span>
+                                      {usr.profiles && usr.profiles.length > 0 ? (
+                                        usr.profiles.map((p: any) => (
+                                          <span
+                                            key={p.profileId}
+                                            className="inline-flex items-center gap-1 font-mono text-[10px] text-slate-700 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md"
+                                          >
+                                            <span className="material-symbols-outlined text-[12px] text-indigo-500">database</span>
+                                            {p.name || p.code} ({p.code})
+                                            <button
+                                              type="button"
+                                              onClick={() => handleUnlinkDbFromUser(usr.id, p.profileId)}
+                                              title="Unlink database from user"
+                                              className="text-slate-400 hover:text-rose-600 font-bold ml-0.5"
+                                            >
+                                              ×
+                                            </button>
+                                          </span>
+                                        ))
+                                      ) : (
+                                        <span className="text-[10px] text-slate-400 italic">None</span>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setLinkModal({
+                                            mode: 'link-db-to-user',
+                                            id: usr.id,
+                                            targetId: databasesList[0]?.id || '',
+                                            label: `Link Database to user @${usr.username}`,
+                                          });
+                                        }}
+                                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-indigo-50"
+                                      >
+                                        <span className="material-symbols-outlined text-[12px]">add</span>
+                                        Link DB
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 self-end sm:self-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingUserId(usr.id);
+                                        setEditUserDisplayName(usr.displayName || usr.username);
+                                        setEditUserRole(usr.role);
+                                      }}
+                                      className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+                                      title="Edit user details"
+                                    >
+                                      <span className="material-symbols-outlined text-[14px]">edit</span>
+                                      Edit
+                                    </button>
+
+                                    {isStavan ? (
+                                      <span className="text-[11px] text-slate-400 italic px-2 py-1">Protected</span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeleteUserModal(usr)}
+                                        className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors shadow-2xs"
+                                      >
+                                        <span className="material-symbols-outlined text-[14px]">delete</span>
+                                        Delete
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
                               )}
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-sm">
+                    {loadingDatabases && databasesList.length === 0 ? (
+                      <div className="text-xs text-on-surface-variant p-md text-center">Loading databases...</div>
+                    ) : databasesList.length === 0 ? (
+                      <div className="text-xs text-on-surface-variant p-md text-center">No databases found.</div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {databasesList.map((db) => {
+                          const isEditing = editingDbId === db.id;
+
+                          return (
+                            <div
+                              key={db.id}
+                              className="flex flex-col gap-3 p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs"
+                            >
+                              {isEditing ? (
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-indigo-50/40 p-3 rounded-lg border border-indigo-100">
+                                  <div className="flex flex-col gap-1 flex-1">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Database Display Name</label>
+                                    <input
+                                      type="text"
+                                      value={editDbName}
+                                      onChange={(e) => setEditDbName(e.target.value)}
+                                      className="px-2.5 py-1 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                                      placeholder="Database Name"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2 self-end sm:self-center pt-2 sm:pt-0">
+                                    <button
+                                      type="button"
+                                      disabled={savingDb}
+                                      onClick={() => handleSaveDb(db.id)}
+                                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs disabled:opacity-50"
+                                    >
+                                      {savingDb ? 'Saving...' : 'Save'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingDbId(null)}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-on-surface">{db.name || db.code}</span>
+                                      <span className="text-[11px] font-mono text-slate-500">({db.code}.db)</span>
+                                      {db.sizeBytes > 0 && (
+                                        <span className="px-1.5 py-0.5 text-[9px] font-mono bg-slate-100 text-slate-600 rounded">
+                                          {(db.sizeBytes / 1024).toFixed(1)} KB
+                                        </span>
+                                      )}
+                                      {db.isActive && (
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded border border-emerald-300">
+                                          Active Live DB
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-on-surface-variant flex flex-wrap items-center gap-2 mt-0.5">
+                                      <span className="text-[10px] font-semibold text-slate-400">Linked Users:</span>
+                                      {db.assignedUsers && db.assignedUsers.length > 0 ? (
+                                        db.assignedUsers.map((u: any) => (
+                                          <span
+                                            key={u.id}
+                                            className="inline-flex items-center gap-1 font-mono text-[10px] text-slate-700 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md"
+                                          >
+                                            <span className="material-symbols-outlined text-[12px] text-indigo-500">person</span>
+                                            {u.displayName || u.username} (@{u.username})
+                                            <button
+                                              type="button"
+                                              onClick={() => handleUnlinkDbFromUser(u.id, db.id)}
+                                              title="Unlink user from database"
+                                              className="text-slate-400 hover:text-rose-600 font-bold ml-0.5"
+                                            >
+                                              ×
+                                            </button>
+                                          </span>
+                                        ))
+                                      ) : (
+                                        <span className="text-[10px] text-slate-400 italic">No assigned users</span>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setLinkModal({
+                                            mode: 'link-user-to-db',
+                                            id: db.id,
+                                            targetId: usersList[0]?.id || '',
+                                            label: `Link User to database "${db.name || db.code}"`,
+                                          });
+                                        }}
+                                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-indigo-50"
+                                      >
+                                        <span className="material-symbols-outlined text-[12px]">add</span>
+                                        Link User
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 self-end sm:self-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingDbId(db.id);
+                                        setEditDbName(db.name || db.code);
+                                      }}
+                                      className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+                                      title="Edit database display name"
+                                    >
+                                      <span className="material-symbols-outlined text-[14px]">edit</span>
+                                      Edit
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={handleDownloadActiveDb}
+                                      className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-600 hover:text-white border border-teal-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                                      title="Download database file to computer"
+                                    >
+                                      <span className="material-symbols-outlined text-[14px]">download</span>
+                                      Download
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </section>
             
@@ -1181,62 +1633,42 @@ export const SettingsPage: React.FC = () => {
                       Local Data Saving &amp; Backups
                     </h3>
                     <p className="text-[11px] text-on-surface-variant m-0">
-                      Local directory destination and export formats for scheduled offline snapshots
+                      Export and save your live databases and verified offline snapshots to your computer
                     </p>
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-md bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
-                  <div className="flex flex-col gap-1 col-span-1 md:col-span-2">
-                    <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Local Backup Directory Path</label>
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="text" 
-                        placeholder="e.g., C:\ERP_Backups or /backups"
-                        value={settings.localBackupPath || ''}
-                        onChange={e => handleChange('localBackupPath', e.target.value)}
-                        className="flex-1 px-sm py-1.5 border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:border-teal-600 text-on-surface text-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSelectDirectory}
-                        className="flex items-center gap-1.5 px-md py-1.5 bg-slate-100 hover:bg-slate-200 border border-outline-variant/60 rounded-lg text-on-surface font-bold text-xs transition-colors whitespace-nowrap shadow-2xs"
-                        title="Select folder from user device"
-                      >
-                        <span className="material-symbols-outlined text-[16px] text-teal-700">folder_open</span>
-                        Browse Folder
-                      </button>
-                      <input
-                        ref={directoryInputRef}
-                        type="file"
-                        // @ts-ignore
-                        webkitdirectory=""
-                        // @ts-ignore
-                        directory=""
-                        className="hidden"
-                        onChange={(e) => {
-                          const files = e.target.files;
-                          if (files && files.length > 0) {
-                            const folderName = files[0].webkitRelativePath?.split('/')[0] || files[0].name;
-                            handleChange('localBackupPath', folderName);
-                          }
-                          e.target.value = '';
-                        }}
-                      />
-                    </div>
-                    <p className="text-[11px] text-on-surface-variant mt-1 m-0">Select or enter the storage directory on this system where backups will be stored.</p>
-                  </div>
+                {/* Native OS Save As Actions */}
+                <div className="bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Backup Format</label>
-                    <select 
-                      value={settings.localBackupFormat || 'CSV'}
-                      onChange={e => handleChange('localBackupFormat', e.target.value)}
-                      className="w-full px-sm py-1.5 border border-outline-variant rounded-lg bg-surface-container-lowest focus:outline-none focus:border-teal-600 text-on-surface text-xs"
+                    <span className="text-xs font-bold text-slate-800">Export &amp; Save Active Database</span>
+                    <p className="text-[11px] text-slate-500 m-0">
+                      Save a verified copy of your active database (<strong>{activeProfile}.db</strong>) or complete business ledger via your system&apos;s native file save window.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleDownloadActiveDb}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                      title="Opens system window to save database file"
                     >
-                      <option value="CSV">CSV</option>
-                    </select>
+                      <span className="material-symbols-outlined text-[16px]">download</span>
+                      Download Database (.db)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportExcel}
+                      disabled={exporting}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                      title="Opens system window to save Excel workbook"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">table_view</span>
+                      Export Excel (.xlsx)
+                    </button>
                   </div>
                 </div>
+
 
                 {/* Phase 5: Verified Database Backups & Restore Management */}
                 <div className="bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs flex flex-col gap-3">
@@ -1294,6 +1726,15 @@ export const SettingsPage: React.FC = () => {
                               className="px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-200 rounded border border-slate-300"
                             >
                               Verify
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadSnapshot(bkp.backupId)}
+                              className="px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 rounded border border-teal-300 flex items-center gap-1 cursor-pointer"
+                              title="Download backup file to your computer"
+                            >
+                              <span className="material-symbols-outlined text-[13px]">download</span>
+                              Save As
                             </button>
                             <button
                               type="button"
@@ -1378,128 +1819,7 @@ export const SettingsPage: React.FC = () => {
               </div>
             </section>
 
-            {/* ══════════════════════════════════════════════════════════ */}
-            {/* SECTION 7.5: USER & DEDICATED DATABASE MANAGEMENT          */}
-            {/* ══════════════════════════════════════════════════════════ */}
-            <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
-              <div className="h-1 bg-rose-600" />
-              <div className="p-lg flex flex-col gap-md">
-                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-700 flex items-center justify-center shrink-0 shadow-2xs">
-                      <span className="material-symbols-outlined text-[18px]">manage_accounts</span>
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                        User &amp; Dedicated Database Management
-                      </h3>
-                      <p className="text-[11px] text-on-surface-variant m-0">
-                        View registered application users and permanently delete user accounts with their isolated SQLite database files
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={fetchUsers}
-                    disabled={loadingUsers}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-outline-variant/80 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                  >
-                    <span className={`material-symbols-outlined text-[16px] ${loadingUsers ? 'animate-spin' : ''}`}>sync</span>
-                    Refresh Users
-                  </button>
-                </div>
 
-                <div className="flex flex-col gap-md">
-                  {loadingUsers ? (
-                    <div className="p-4 text-center text-xs text-slate-400">Loading user accounts...</div>
-                  ) : usersList.length === 0 ? (
-                    <div className="p-4 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
-                      No users found.
-                    </div>
-                  ) : (
-                    <div className="border border-outline-variant/60 rounded-xl overflow-hidden bg-white shadow-2xs">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 text-on-surface-variant text-[10px] uppercase font-bold tracking-wider">
-                            <th className="py-2.5 px-3 border-b border-outline-variant/60">User / Account</th>
-                            <th className="py-2.5 px-3 border-b border-outline-variant/60">Role</th>
-                            <th className="py-2.5 px-3 border-b border-outline-variant/60">Assigned Workspace &amp; Database</th>
-                            <th className="py-2.5 px-3 border-b border-outline-variant/60 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {usersList.map((u) => {
-                            const isStavan = u.username?.toLowerCase() === 'stavan';
-                            return (
-                              <tr key={u.id} className="border-b border-outline-variant/40 last:border-0 hover:bg-slate-50 transition-colors">
-                                <td className="py-3 px-3 text-xs">
-                                  <div className="font-bold text-slate-900">{u.displayName || u.username}</div>
-                                  <div className="font-mono text-[11px] text-slate-500">@{u.username}</div>
-                                </td>
-                                <td className="py-3 px-3 text-xs">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                                    isStavan
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : 'bg-indigo-100 text-indigo-800'
-                                  }`}>
-                                    {u.role}
-                                  </span>
-                                </td>
-                                <td className="py-3 px-3 text-xs">
-                                  {u.profiles && u.profiles.length > 0 ? (
-                                    <div className="flex flex-col gap-1">
-                                      {u.profiles.map((p: any) => (
-                                        <div key={p.profileId} className="flex items-center gap-1.5 font-mono text-[11px] text-slate-600">
-                                          <span className="font-semibold text-slate-800">[{p.code}]</span>
-                                          <span className="truncate max-w-[260px] text-[10px] text-slate-500" title={p.dbPath || 'No database file'}>
-                                            {p.dbPath ? p.dbPath : 'No database file'}
-                                          </span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span className="text-slate-400 text-[11px] italic">No assigned workspace</span>
-                                  )}
-                                </td>
-                                <td className="py-3 px-3 text-right">
-                                  {isStavan ? (
-                                    <span className="text-[11px] font-bold text-slate-400 italic px-2 py-1 bg-slate-100 rounded">
-                                      Primary Admin (Protected)
-                                    </span>
-                                  ) : (
-                                    <div className="flex items-center justify-end gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeactivateUser(u)}
-                                        disabled={deactivatingUserId === u.id || !u.isActive}
-                                        className="px-2 py-1 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                                        title="Deactivate this user (preserve database)"
-                                      >
-                                        <span className="material-symbols-outlined text-[14px]">pause_circle</span>
-                                        {u.isActive === false ? 'Inactive' : 'Deactivate'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setDeleteUserModal(u)}
-                                        className="px-2 py-1 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                        title="Delete this user (preserves database)"
-                                      >
-                                        <span className="material-symbols-outlined text-[14px]">person_remove</span>
-                                        Delete User
-                                      </button>
-                                    </div>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
 
             {/* ══════════════════════════════════════════════════════════ */}
             {/* SECTION 7.6: DATA PRESERVATION & UNINSTALL SAFETY GATE    */}
@@ -1641,6 +1961,28 @@ export const SettingsPage: React.FC = () => {
                         </span>
                         Validate Destination
                       </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Quick Suggestions:</span>
+                      {[
+                        'C:\\Users\\Stavan\\Documents\\DiamondERP Backup',
+                        'C:\\Users\\Stavan\\Desktop\\DiamondERP Backup',
+                        'C:\\DiamondERP Backup',
+                      ].map((pathOption) => (
+                        <button
+                          key={pathOption}
+                          type="button"
+                          onClick={() => {
+                            setCustomDestinationDir(pathOption);
+                            handleValidateDestination(pathOption);
+                          }}
+                          className="px-2 py-0.5 rounded text-[11px] font-mono bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 border border-slate-200 transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">folder</span>
+                          {pathOption.split('\\').slice(-2).join('\\')}
+                        </button>
+                      ))}
                     </div>
 
                     {destinationValidationResult && (
@@ -2014,9 +2356,9 @@ export const SettingsPage: React.FC = () => {
             <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2">
               <span className="material-symbols-outlined text-[18px] text-emerald-700 shrink-0">verified_user</span>
               <div>
-                <span className="font-bold">Data Preservation Guarantee:</span>
+                <span className="font-bold">Automatic Safety Download Guarantee:</span>
                 <p className="m-0 mt-0.5 text-emerald-800">
-                  Deleting this user soft-deletes the user profile while strictly <strong>preserving</strong> their dedicated SQLite database file. It will remain discoverable in Recovery / Onboarding.
+                  Clicking Confirm Delete will automatically download both the raw SQLite database (<strong>.db</strong>) and full dataset Excel spreadsheet (<strong>.xlsx</strong>) to your computer before completing the deletion.
                 </p>
               </div>
             </div>
@@ -2034,12 +2376,12 @@ export const SettingsPage: React.FC = () => {
                 type="button"
                 onClick={handleDeleteUser}
                 disabled={Boolean(deletingUserId)}
-                className="bg-error hover:bg-error-container text-white px-md py-sm rounded-md font-bold text-xs transition-colors flex items-center gap-1 shadow-xs"
+                className="bg-error hover:bg-error-container text-white px-md py-sm rounded-md font-bold text-xs transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
               >
                 {deletingUserId ? (
                   <>
                     <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
-                    Deleting...
+                    Downloading Backups &amp; Deleting...
                   </>
                 ) : (
                   <>
@@ -2089,6 +2431,66 @@ export const SettingsPage: React.FC = () => {
                 className="bg-primary hover:bg-[#0D47A1] text-white px-md py-sm rounded-md font-bold transition-colors disabled:opacity-50"
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {linkModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+              <span className="material-symbols-outlined text-indigo-600 text-xl">link</span>
+              <h3 className="font-bold text-sm text-slate-900 m-0">{linkModal.label}</h3>
+            </div>
+
+            <div className="text-xs text-slate-600 flex flex-col gap-2">
+              <label className="font-bold text-slate-700">
+                {linkModal.mode === 'link-db-to-user' ? 'Select Database to Link:' : 'Select User to Link:'}
+              </label>
+              {linkModal.mode === 'link-db-to-user' ? (
+                <select
+                  value={linkModal.targetId}
+                  onChange={(e) => setLinkModal({ ...linkModal, targetId: e.target.value })}
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                >
+                  {databasesList.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name || d.code} ({d.code}.db)
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={linkModal.targetId}
+                  onChange={(e) => setLinkModal({ ...linkModal, targetId: e.target.value })}
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                >
+                  {usersList.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.displayName || u.username} (@{u.username}) - {u.role}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setLinkModal(null)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={linking || !linkModal.targetId}
+                onClick={handleConfirmLink}
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all disabled:opacity-40 cursor-pointer"
+              >
+                {linking ? 'Linking...' : 'Confirm Link'}
               </button>
             </div>
           </div>

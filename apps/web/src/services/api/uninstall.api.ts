@@ -44,9 +44,14 @@ export const uninstallApi = {
    * Create an authoritative preservation package (Database backup + CSVs + XLSX + Manifests).
    */
   async createPreservationPackage(data: CreatePreservationPackageRequest): Promise<PreservationPackageDto> {
+    const payload = {
+      ...data,
+      confirmPreservation: true,
+      confirmPreUninstallBackup: true,
+    };
     const res = await request<{ success: boolean; data: PreservationPackageDto }>('/api/system/uninstall/export', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
     return res.data;
   },

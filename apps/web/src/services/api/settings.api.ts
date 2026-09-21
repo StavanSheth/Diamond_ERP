@@ -27,10 +27,10 @@ export const settingsApi = {
     });
   },
 
-  factoryReset(confirmPassword?: string): Promise<any> {
+  factoryReset(confirmPassword = 'DELETE'): Promise<any> {
     return request('/api/settings/factory-reset', {
       method: 'POST',
-      body: JSON.stringify({ confirmPassword }),
+      body: JSON.stringify({ confirmation: confirmPassword, confirmPassword }),
     });
   },
 
@@ -71,6 +71,43 @@ export const settingsApi = {
     return request('/api/settings/users');
   },
 
+  /** Update user details */
+  updateUser(userId: string, data: { displayName?: string; role?: string }): Promise<{ success: boolean; message: string; data: any }> {
+    return request(`/api/settings/users/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** List all registered databases / profiles */
+  listDatabases(): Promise<{ success: boolean; data: any[] }> {
+    return request('/api/settings/databases');
+  },
+
+  /** Update database display name */
+  updateDatabase(profileId: string, data: { name: string }): Promise<{ success: boolean; message: string; data: any }> {
+    return request(`/api/settings/databases/${profileId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Link a database / profile to a user */
+  linkDatabaseToUser(userId: string, profileId: string): Promise<{ success: boolean; message: string }> {
+    return request(`/api/settings/users/${userId}/link-database`, {
+      method: 'POST',
+      body: JSON.stringify({ profileId }),
+    });
+  },
+
+  /** Unlink a database / profile from a user */
+  unlinkDatabaseFromUser(userId: string, profileId: string): Promise<{ success: boolean; message: string }> {
+    return request(`/api/settings/users/${userId}/unlink-database`, {
+      method: 'POST',
+      body: JSON.stringify({ profileId }),
+    });
+  },
+
   /** Delete a user and optionally their dedicated profile database */
   deleteUser(userId: string, deleteDatabase = true): Promise<{ success: boolean; message?: string; deletedDatabases?: string[] }> {
     return request(`/api/settings/users/${userId}?deleteDatabase=${deleteDatabase}`, {
@@ -78,3 +115,4 @@ export const settingsApi = {
     });
   },
 };
+

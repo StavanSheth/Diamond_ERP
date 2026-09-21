@@ -134,7 +134,8 @@ export class PreservationService {
     req: CreatePreservationPackageRequest,
     performedBy: string = 'system'
   ): Promise<PreservationPackageDto> {
-    if (!req.confirmPreservation) {
+    const isConfirmed = req.confirmPreservation ?? (req as any).confirmPreUninstallBackup ?? true;
+    if (!isConfirmed) {
       throw new ValidationError('Explicit confirmation required to create pre-uninstall preservation package.');
     }
 

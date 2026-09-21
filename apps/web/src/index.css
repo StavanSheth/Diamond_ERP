@@ -113,23 +113,27 @@ body {
   transition: opacity 200ms ease-out, transform 200ms ease-out;
 }
 
-/* ── Sidebar collapse/expand transition ── */
-.sidebar-nav {
-  transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: width;
-  overflow: hidden;
+/* ── Modern Liquid Glass Sidebar & Bun Button Transition ── */
+.sidebar-liquid-glass {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.82) 0%, rgba(248, 250, 255, 0.70) 50%, rgba(240, 246, 255, 0.80) 100%);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  box-shadow: 6px 0 35px -3px rgba(99, 102, 241, 0.08), inset -1px 0 0 0 rgba(255, 255, 255, 0.85), 1px 0 0 0 rgba(226, 232, 240, 0.6);
+  transition: width 340ms cubic-bezier(0.16, 1, 0.3, 1), transform 340ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: width, transform;
 }
 
+
+
 .sidebar-label {
-  transition: opacity 200ms ease, transform 200ms ease;
+  transition: opacity 220ms ease, transform 220ms ease;
   white-space: nowrap;
-  overflow: hidden;
 }
 
 .sidebar-collapsed .sidebar-label {
   opacity: 0;
   width: 0;
-  transform: translateX(-8px);
+  transform: translateX(-10px);
   pointer-events: none;
 }
 
@@ -139,26 +143,28 @@ body {
   transform: translateX(0);
 }
 
-.sidebar-toggle-btn {
-  transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1),
-              background-color 200ms ease;
+.sidebar-section-header {
+  transition: opacity 200ms ease, transform 200ms ease;
 }
 
-.sidebar-toggle-btn:hover {
-  background-color: var(--md-sys-color-surface-container-high, #e8e6e9);
-}
-
-.sidebar-collapsed .sidebar-toggle-btn {
-  transform: rotate(180deg);
+.sidebar-collapsed .sidebar-section-header {
+  opacity: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .sidebar-footer {
-  transition: opacity 200ms ease 50ms;
+  transition: opacity 200ms ease;
 }
 
-.sidebar-collapsed .sidebar-footer {
+.sidebar-collapsed .sidebar-footer-text {
   opacity: 0;
+  height: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 
 /* Print optimizations for Reports & Audits */
