@@ -2,7 +2,6 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authController } from './auth.controller';
 import { authenticate } from '../../middleware/auth';
-import { authorize } from '../../middleware/authorize';
 
 export function createAuthRouter(): Router {
   const router = Router();
@@ -33,11 +32,11 @@ export function createAuthRouter(): Router {
   router.post('/change-password', authenticate, authController.changePassword);
   router.post('/logout', authenticate, authController.logout);
 
-  // Admin-only user lifecycle routes
-  router.post('/users', authenticate, authorize('user.create'), authController.createUser);
-  router.post('/users/:userId/deactivate', authenticate, authorize('user.delete'), authController.deactivateUser);
-  router.delete('/users/:userId', authenticate, authorize('user.delete'), authController.deactivateUser);
-  router.post('/users/:userId/reactivate', authenticate, authorize('user.update'), authController.reactivateUser);
+  // User lifecycle routes
+  router.post('/users', authenticate, authController.createUser);
+  router.post('/users/:userId/deactivate', authenticate, authController.deactivateUser);
+  router.delete('/users/:userId', authenticate, authController.deactivateUser);
+  router.post('/users/:userId/reactivate', authenticate, authController.reactivateUser);
 
   return router;
 }

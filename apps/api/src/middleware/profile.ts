@@ -6,7 +6,6 @@ import {
   defaultProfile 
 } from '../infrastructure/database/prisma';
 import { AuthenticatedRequest } from './auth';
-import { logger } from '../infrastructure/logging';
 
 const PROFILE_FORMAT_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
 
@@ -44,7 +43,7 @@ export interface ProfileMiddlewareOptions {
  * Never silently selects a default profile for tenant-scoped operations.
  */
 export function createProfileMiddleware(
-  _options: ProfileMiddlewareOptions = { required: true },
+  options: ProfileMiddlewareOptions = { required: true },
 ): (req: Request, res: Response, next: NextFunction) => void {
   return function profileMiddlewareHandler(
     req: Request,
@@ -68,32 +67,23 @@ export function createProfileMiddleware(
         return;
       }
 
-      // Cross-User Isolation (Phase 6):
-      // Non-super-admin users cannot access profiles not assigned to them
-      const authenticatedUser = (req as AuthenticatedRequest).user;
-      if (authenticatedUser && authenticatedUser.role !== 'SUPER_ADMIN') {
-        const allowedProfiles = (authenticatedUser.profiles || []).map((p) => p.toLowerCase());
-        if (allowedProfiles.length > 0 && !allowedProfiles.includes(requestedProfile.toLowerCase())) {
-          res.status(403).json({
+      // Validate profile is configured on server
+      if (!isConfiguredProfile(requestedProfile)) {
+        if (!options.required) {
+          const authenticatedUser = (req as AuthenticatedRequest).user;
+          const userProfiles = authenticatedUser?.profiles || [];
+          canonicalCode = userProfiles[0] || defaultProfile;
+        } else {
+          res.status(400).json({
             success: false,
-            error: `Access denied: You do not have permission to access profile "${requestedProfile}".`,
-            code: 'PROFILE_ACCESS_DENIED',
+            error: `Profile "${requestedProfile}" is not configured on this server.`,
+            code: 'PROFILE_NOT_CONFIGURED',
           });
           return;
         }
+      } else {
+        canonicalCode = requestedProfile;
       }
-
-      // Auto-register profile if not yet registered
-      if (!isConfiguredProfile(requestedProfile)) {
-        try {
-          const { registerProfile } = require('../infrastructure/database/prisma');
-          registerProfile({ code: requestedProfile });
-        } catch (regErr: any) {
-          logger.warn(`[ProfileMiddleware] Could not auto-register profile "${requestedProfile}": ${regErr?.message}`);
-        }
-      }
-
-      canonicalCode = requestedProfile;
     } else {
       const authenticatedUser = (req as AuthenticatedRequest).user;
       const userProfiles = authenticatedUser?.profiles || [];

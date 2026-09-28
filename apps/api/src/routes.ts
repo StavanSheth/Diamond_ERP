@@ -35,7 +35,6 @@ import { lifecycleReadyMiddleware } from './middleware/lifecycle-ready';
  *       3. Verify requested X-Profile-Id against user's authorized profile memberships (reject 403)
  *       4. Establish canonical profile DB context
  *       5. Support Idempotency-Key header on mutating requests
- *       6. Individual routes enforce RBAC via authorize()
  */
 export function createRoutes(
   stockController: StockController,

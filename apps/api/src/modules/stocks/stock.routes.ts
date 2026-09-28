@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { StockController } from '../../modules/stocks/stock.controller';
 import { validateCreateStock, validateUpdateStock } from '../../validation/stock.validator';
-import { authorize } from '../../middleware/authorize';
 
 /**
  * Create stock routes.
@@ -14,10 +13,10 @@ import { authorize } from '../../middleware/authorize';
 export function createStockRouter(controller: StockController): Router {
   const router = Router();
 
-  router.get('/', authorize('stock.read'), controller.getStocks);
-  router.post('/', authorize('stock.create'), validateCreateStock, controller.createStock);
-  router.put('/:id', authorize('stock.update'), validateUpdateStock, controller.updateStock);
-  router.delete('/:id', authorize('stock.archive'), controller.deleteStock);
+  router.get('/', controller.getStocks);
+  router.post('/', validateCreateStock, controller.createStock);
+  router.put('/:id', validateUpdateStock, controller.updateStock);
+  router.delete('/:id', controller.deleteStock);
 
   return router;
 }

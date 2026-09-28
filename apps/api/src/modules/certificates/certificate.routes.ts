@@ -7,7 +7,6 @@
 
 import { Router } from 'express';
 import { CertificateController } from './certificate.controller';
-import { authorize } from '../../middleware/authorize';
 import { fileStorageService } from '../../infrastructure/storage/file-storage.service';
 
 export function createCertificateRouter(controller: CertificateController): Router {
@@ -16,14 +15,14 @@ export function createCertificateRouter(controller: CertificateController): Rout
   // Multer instance owned and configured by FileStorageService — single source of truth
   const upload = fileStorageService.createMulterUpload();
 
-  router.get('/', authorize('certificate.read'), controller.getCertificates);
-  router.get('/unlinked', authorize('certificate.read'), controller.getUnlinkedCertificates);
-  router.post('/', authorize('certificate.create'), controller.createCertificate);
-  router.post('/upload', authorize('certificate.upload'), upload.single('file'), controller.uploadPdf);
-  router.post('/:id/link', authorize('certificate.update'), controller.linkCertificate);
-  router.put('/:id', authorize('certificate.update'), controller.updateCertificate);
-  router.delete('/:id', authorize('certificate.delete'), controller.delete);
-  router.get('/:id/file', authorize('certificate.read'), controller.downloadPdf);
+  router.get('/', controller.getCertificates);
+  router.get('/unlinked', controller.getUnlinkedCertificates);
+  router.post('/', controller.createCertificate);
+  router.post('/upload', upload.single('file'), controller.uploadPdf);
+  router.post('/:id/link', controller.linkCertificate);
+  router.put('/:id', controller.updateCertificate);
+  router.delete('/:id', controller.delete);
+  router.get('/:id/file', controller.downloadPdf);
 
   return router;
 }

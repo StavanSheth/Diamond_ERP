@@ -63,6 +63,8 @@ storage/
 **/storage/
 backups/
 **/backups/
+exports/
+**/exports/
 restore-staging/
 **/restore-staging/
 *.partial

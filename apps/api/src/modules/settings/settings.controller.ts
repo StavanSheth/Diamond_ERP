@@ -772,7 +772,14 @@ export class SettingsController {
         return;
       }
 
-      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const { FORBIDDEN_PROFILE_NAMES, registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      if (FORBIDDEN_PROFILE_NAMES.has(cleanName.toLowerCase())) {
+        res.status(400).json({
+          success: false,
+          message: `Profile name "${cleanName}" is reserved for system use and cannot be registered as a business profile.`
+        });
+        return;
+      }
       const canonical = registerProfile({ code: cleanName });
       await getClientForProfileAsync(cleanName);
 
@@ -890,8 +897,14 @@ export class SettingsController {
         return;
       }
 
-      // Auto-register and provision profile database if not yet present
-      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const { FORBIDDEN_PROFILE_NAMES, registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      if (FORBIDDEN_PROFILE_NAMES.has(cleanName.toLowerCase())) {
+        res.status(400).json({
+          success: false,
+          message: `Profile name "${cleanName}" is reserved for system use.`
+        });
+        return;
+      }
       const canonical = registerProfile({ code: cleanName });
       await getClientForProfileAsync(cleanName);
 

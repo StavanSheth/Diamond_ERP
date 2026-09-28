@@ -987,10 +987,15 @@ export const SettingsPage: React.FC = () => {
                     onClick={() => {
                       setNewProfileName('');
                       setNewProfileCallback(() => async (name: string) => {
+                        const trimmed = name.trim();
+                        if (['system', 'template', 'test'].includes(trimmed.toLowerCase())) {
+                          alert(`Profile name "${trimmed}" is reserved for system use.`);
+                          return;
+                        }
                         try {
-                          await api.createProfile(name);
-                          switchProfile(name);
-                          setActiveProfile(name);
+                          await api.createProfile(trimmed);
+                          switchProfile(trimmed);
+                          setActiveProfile(trimmed);
                           window.location.reload();
                         } catch (err: any) {
                           alert(err.message || 'Failed to create profile');

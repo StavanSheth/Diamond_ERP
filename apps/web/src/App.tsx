@@ -89,22 +89,7 @@ function ErpAppLayout() {
  */
 function AppContent() {
   const { isLocked } = useAppLock();
-  const [onboardingReady, setOnboardingReady] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    api.onboarding
-      .getStatus()
-      .then((status) => {
-        if (active) setOnboardingReady(Boolean(status.ready));
-      })
-      .catch(() => {
-        if (active) setOnboardingReady(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const [onboardingReady, setOnboardingReady] = useState<boolean>(false);
 
   return (
     <>

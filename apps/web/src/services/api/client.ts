@@ -23,6 +23,16 @@ export interface ApiRequestOptions extends RequestInit {
 }
 
 const BASE_URL = '';
+const FORBIDDEN_PROFILES = new Set(['system', 'template', 'test']);
+
+function sanitizeProfile(p: string | null | undefined): string {
+  if (!p) return 'Stavan';
+  const trimmed = p.trim();
+  if (!trimmed || FORBIDDEN_PROFILES.has(trimmed.toLowerCase())) {
+    return 'Stavan';
+  }
+  return trimmed;
+}
 
 /**
  * Authoritative session & tenant store for Diamond ERP Frontend (Findings 48 & 49).
@@ -38,7 +48,11 @@ class SessionStore {
   constructor() {
     if (typeof localStorage !== 'undefined') {
       this.token = localStorage.getItem('token');
-      this.profileId = localStorage.getItem('profileId') || 'Stavan';
+      const rawStored = localStorage.getItem('profileId');
+      this.profileId = sanitizeProfile(rawStored);
+      if (rawStored && rawStored !== this.profileId) {
+        localStorage.setItem('profileId', this.profileId);
+      }
     }
   }
 
@@ -55,7 +69,7 @@ class SessionStore {
   }
 
   getProfileId(): string | null {
-    return this.profileId || 'Stavan';
+    return sanitizeProfile(this.profileId);
   }
 
   getProfileGeneration(): number {
@@ -67,23 +81,23 @@ class SessionStore {
   }
 
   setProfileId(profileId: string | null): void {
-    if (this.profileId === profileId) return;
+    const cleanProfileId = sanitizeProfile(profileId);
+    if (this.profileId === cleanProfileId) return;
 
     // Finding 49: Stale request protection on profile switch
     this.profileAbortController.abort('Profile switched');
     this.profileAbortController = new AbortController();
     this.profileGeneration++;
-    this.profileId = profileId;
+    this.profileId = cleanProfileId;
 
     if (typeof localStorage !== 'undefined') {
-      if (profileId) localStorage.setItem('profileId', profileId);
-      else localStorage.removeItem('profileId');
+      localStorage.setItem('profileId', cleanProfileId);
     }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('profileChanged', {
-          detail: { profileId, generation: this.profileGeneration },
+          detail: { profileId: cleanProfileId, generation: this.profileGeneration },
         })
       );
     }
@@ -177,6 +191,9 @@ export async function requestCore(
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const errorJson = await res.json().catch(() => ({}));
+        if (res.status === 400 && errorJson?.code === 'PROFILE_NOT_CONFIGURED') {
+          sessionStore.setProfileId('Stavan');
+        }
         throw new ApiError(
           errorJson.error || errorJson.message || `Request failed with status ${res.status}`,
           res.status,

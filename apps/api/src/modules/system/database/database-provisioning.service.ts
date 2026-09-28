@@ -525,7 +525,7 @@ export class DatabaseProvisioningService {
 
     let createdFile = false;
     try {
-      // Guard: Disk collision check
+      // Guard: Disk collision / partial completion check
       if (fs.existsSync(targetDbPath)) {
         const existingReg = await systemPrisma.databaseRegistry.findUnique({
           where: { canonicalPath: targetDbPath },
@@ -554,26 +554,40 @@ export class DatabaseProvisioningService {
             operationId,
           };
         }
-        throw new ConflictError(`A database file already exists at "${targetDbPath}". Cannot overwrite.`);
+
+        // Check if existing file is from a partially completed attempt that can be resumed
+        const preValidation = await databaseValidationService.validateDatabase(targetDbPath);
+        if (preValidation.isValid) {
+          logger.info(`Resuming provisioning for existing valid database file: ${targetDbPath}`);
+          createdFile = false;
+        } else {
+          // Incomplete/corrupt file from aborted previous run — clean up to restart from template
+          try {
+            fs.unlinkSync(targetDbPath);
+            logger.info(`Cleaned up invalid partial database file: ${targetDbPath}`);
+          } catch {}
+        }
       }
 
-      // Step 1: Destination Reserved
-      await systemPrisma.provisioningOperation.update({
-        where: { operationId },
-        data: { status: 'DESTINATION_RESERVED' },
-      });
+      if (!fs.existsSync(targetDbPath)) {
+        // Step 1: Destination Reserved
+        await systemPrisma.provisioningOperation.update({
+          where: { operationId },
+          data: { status: 'DESTINATION_RESERVED' },
+        });
 
-      // Step 2: Validate approved template before copying (Fix #4)
-      const templateDbPath = await this.validateTemplate();
+        // Step 2: Validate approved template before copying (Fix #4)
+        const templateDbPath = await this.validateTemplate();
 
-      // Step 3: Clone immutable template to destination
-      fs.copyFileSync(templateDbPath, targetDbPath);
-      createdFile = true;
+        // Step 3: Clone immutable template to destination
+        fs.copyFileSync(templateDbPath, targetDbPath);
+        createdFile = true;
 
-      await systemPrisma.provisioningOperation.update({
-        where: { operationId },
-        data: { status: 'FILE_CREATED' },
-      });
+        await systemPrisma.provisioningOperation.update({
+          where: { operationId },
+          data: { status: 'FILE_CREATED' },
+        });
+      }
 
       // Step 4: Structural, schema, and SQLite integrity validation
       const validation = await databaseValidationService.validateDatabase(targetDbPath);

@@ -158,6 +158,10 @@ export class OnboardingService {
     if (install.lifecycleState === 'NOT_INITIALIZED') {
       await installationService.updateLifecycleState('APP_SETUP');
     }
+    const current = await installationService.getOrCreateInstallation();
+    if (current.lifecycleState === 'APP_SETUP') {
+      await installationService.updateLifecycleState('PIN_SETUP');
+    }
 
     return this.getOnboardingState();
   }
@@ -237,7 +241,7 @@ export class OnboardingService {
    * Associate an existing business user with the local installation.
    * Advances USER_DISCOVERY -> DATABASE_DISCOVERY if in discovery state.
    */
-  async selectExistingUser(userId: string): Promise<{ success: boolean; user: any }> {
+  async selectExistingUser(userId: string): Promise<{ success: boolean; user: any; status?: OnboardingStatusDto }> {
     const install = await installationService.getOrCreateInstallation();
     const user = await systemPrisma.user.findUnique({
       where: { id: userId },
@@ -274,6 +278,8 @@ export class OnboardingService {
       await installationService.updateLifecycleState('DATABASE_DISCOVERY');
     }
 
+    const latestStatus = await this.getOnboardingState();
+
     return {
       success: true,
       user: {
@@ -282,6 +288,7 @@ export class OnboardingService {
         displayName: user.displayName,
         role: user.role,
       },
+      status: latestStatus,
     };
   }
 
@@ -297,6 +304,7 @@ export class OnboardingService {
   }): Promise<{
     success: boolean;
     user: any;
+    status?: OnboardingStatusDto;
     provisioningContext: {
       userId: string;
       installationId: string;
@@ -304,6 +312,7 @@ export class OnboardingService {
   }> {
     const install = await installationService.getOrCreateInstallation();
     const role = input.role || 'ADMIN';
+    const normalizedUsername = input.username.toLowerCase().trim();
 
     // 0. Audit event: provisioning started
     await systemPrisma.auditEvent.create({
@@ -317,59 +326,37 @@ export class OnboardingService {
       },
     }).catch(() => {});
 
-    // 1. Create user in control DB using authoritative authService
-    const created = await authService.createUser(
-      input.username,
-      input.password,
-      input.displayName,
-      role,
-      []
-    );
-
-    // 2. Associate with installation
-    await installationService.associateUser(install.id, created.id);
-
-    // 3. Audit events: user created and associated
-    await systemPrisma.auditEvent.create({
-      data: {
-        entityType: 'User',
-        entityId: created.id,
-        eventType: 'NEW_USER_CREATED',
-        description: `New business user account created: "${created.username}" [${created.id}]`,
-        performedBy: created.id,
-        metadata: JSON.stringify({
-          userId: created.id,
-          username: created.username,
-          role: created.role,
-        }),
-      },
-    }).catch(() => {});
-
-    await systemPrisma.auditEvent.create({
-      data: {
-        entityType: 'User',
-        entityId: created.id,
-        eventType: 'USER_ASSOCIATED',
-        description: `New user "${created.username}" created and associated with installation ${install.installationId}`,
-        performedBy: created.id,
-        metadata: JSON.stringify({
-          userId: created.id,
-          username: created.username,
-          installationId: install.id,
-        }),
-      },
+    // 1. Check if user already exists (idempotency for interrupted setup / retry)
+    let user: any = await systemPrisma.user.findUnique({
+      where: { username: normalizedUsername },
     });
+
+    if (!user) {
+      user = await authService.createUser(
+        input.username,
+        input.password,
+        input.displayName,
+        role,
+        []
+      );
+    }
+
+    // 2. Associate with installation (idempotent upsert)
+    await installationService.associateUser(install.id, user.id);
 
     // 3. Advance lifecycle state if at USER_DISCOVERY
     if (install.lifecycleState === 'USER_DISCOVERY') {
       await installationService.updateLifecycleState('DATABASE_DISCOVERY');
     }
 
+    const latestStatus = await this.getOnboardingState();
+
     return {
       success: true,
-      user: created,
+      user,
+      status: latestStatus,
       provisioningContext: {
-        userId: created.id,
+        userId: user.id,
         installationId: install.id,
       },
     };
@@ -648,7 +635,7 @@ export class OnboardingService {
    * Invariant: Requires confirmAttachment = true. Never auto-attaches.
    * Failure compensation: Never mutates or deletes the physical file.
    */
-  async attachExistingDatabase(input: AttachDatabaseRequest): Promise<{ success: boolean; registry: any }> {
+  async attachExistingDatabase(input: AttachDatabaseRequest): Promise<{ success: boolean; registry: any; status?: OnboardingStatusDto }> {
     if (!input.confirmAttachment) {
       throw new ValidationError('Explicit confirmation is required before attaching an existing database.');
     }
@@ -799,9 +786,12 @@ export class OnboardingService {
       await installationService.updateLifecycleState('DATABASE_SETUP');
     }
 
+    const latestStatus = await this.getOnboardingState();
+
     return {
       success: true,
       registry: result.registry,
+      status: latestStatus,
     };
   }
 
@@ -810,7 +800,7 @@ export class OnboardingService {
    * Invariant: If template.db is missing, fails immediately without creating empty DB.
    * Delegated authoritatively to DatabaseProvisioningService for pristine validation & atomic compensation.
    */
-  async createNewDatabase(input: CreateDatabaseRequest): Promise<{ success: boolean; registry: any }> {
+  async createNewDatabase(input: CreateDatabaseRequest): Promise<{ success: boolean; registry: any; status?: OnboardingStatusDto }> {
     // 1. Environmental prerequisite: template existence check
     const templateDbPath = getDatabaseTemplatePath();
     if (!templateDbPath || !fs.existsSync(templateDbPath)) {
@@ -863,9 +853,12 @@ export class OnboardingService {
       await installationService.updateLifecycleState('DATABASE_SETUP');
     }
 
+    const latestStatus = await this.getOnboardingState();
+
     return {
       success: true,
       registry: provisioned,
+      status: latestStatus,
     };
   }
 

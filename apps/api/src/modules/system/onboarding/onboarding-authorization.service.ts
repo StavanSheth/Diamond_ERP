@@ -145,7 +145,7 @@ export class OnboardingAuthorizationService {
         );
       }
 
-      // Explicit role-based check: user must be an active administrator
+      // Post-READY operations require an active authenticated user
       const targetUserId = user.userId || user.id;
       if (!targetUserId) {
         throw new AuthenticationError('Invalid authentication token: missing user identifier.');
@@ -157,12 +157,6 @@ export class OnboardingAuthorizationService {
 
       if (!dbUser || !dbUser.isActive || dbUser.deletedAt) {
         throw new AuthorizationError('Authenticated user account is inactive or not found.');
-      }
-
-      if (dbUser.role !== 'ADMIN') {
-        throw new AuthorizationError(
-          `Operation ${operation} requires ADMIN role once installation is in READY state.`
-        );
       }
 
       return;

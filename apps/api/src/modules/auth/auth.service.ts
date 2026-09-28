@@ -323,12 +323,10 @@ export class AuthService {
     username: string,
     password: string,
     displayName: string,
-    role: string,
+    role: string = 'ADMIN',
     profileCodes?: string[],
   ): Promise<{ id: string; username: string; displayName: string; role: string; profiles: string[] }> {
-    if (!Object.values(ROLES).includes(role as Role)) {
-      throw new ValidationError(`Invalid role: ${role}. Valid roles: ${Object.values(ROLES).join(', ')}`);
-    }
+    const effectiveRole = role && Object.values(ROLES).includes(role as Role) ? role : 'ADMIN';
 
     if (password.length < AUTH_CONFIG.MIN_PASSWORD_LENGTH) {
       throw new ValidationError(`Password must be at least ${AUTH_CONFIG.MIN_PASSWORD_LENGTH} characters long`);
@@ -351,13 +349,13 @@ export class AuthService {
           username: normalizedUsername,
           displayName,
           passwordHash,
-          role,
+          role: effectiveRole,
           isActive: true,
         },
       });
 
-      // Ensure default profiles exist in Profile table (only default when profileCodes is omitted)
-      const targetProfiles = profileCodes !== undefined ? profileCodes : [defaultProfile];
+      // Ensure default profiles exist in Profile table (only default when profileCodes is omitted and defaultProfile is set)
+      const targetProfiles = profileCodes !== undefined ? profileCodes : (defaultProfile ? [defaultProfile] : []);
       for (const pCode of targetProfiles) {
         let prof = await tx.profile.findUnique({ where: { code: pCode } });
         if (!prof) {

@@ -51,7 +51,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
       const data = await api.onboarding.getStatus();
       setStatus(data);
 
-      if (data.ready === true) {
+      if (data.lifecycleState === 'READY' && data.ready === true) {
         onReady?.();
       }
 
@@ -115,10 +115,6 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
     setError(null);
     try {
       await api.onboarding.initializeApp();
-      const latest = await api.onboarding.getStatus();
-      if (latest.lifecycleState === 'NOT_INITIALIZED' || latest.lifecycleState === 'APP_SETUP') {
-        await api.onboarding.updateLifecycleState('PIN_SETUP');
-      }
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to initialize application setup');
@@ -203,7 +199,6 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
           username: newUsername.trim(),
           password: newPassword,
           displayName: newDisplayName.trim() || newUsername.trim(),
-          role: 'ADMIN',
         });
         if (userRes?.user?.id) {
           setCreatedUserId(userRes.user.id);
@@ -376,10 +371,6 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                     setError(null);
                     try {
                       await api.recovery.continueExistingInstall(status.reinstallRecovery?.previousInstallationId || undefined);
-                      const latest = await api.onboarding.getStatus();
-                      if (latest.lifecycleState === 'NOT_INITIALIZED' || latest.lifecycleState === 'APP_SETUP') {
-                        await api.onboarding.updateLifecycleState('PIN_SETUP');
-                      }
                       await fetchStatus();
                     } catch (err: any) {
                       setError(err?.message || 'Failed to continue existing installation');

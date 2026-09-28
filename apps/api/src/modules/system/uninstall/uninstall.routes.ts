@@ -1,19 +1,18 @@
 import { Router } from 'express';
 import { uninstallController } from './uninstall.controller';
 import { authenticate } from '../../../middleware/auth';
-import { authorize } from '../../../middleware/authorize';
 import { idempotencyMiddleware } from '../../../middleware/idempotency';
 
 const router = Router();
 const adminStack = [authenticate, idempotencyMiddleware];
 
-router.get('/preflight', adminStack, authorize('settings.read'), uninstallController.getPreflight);
-router.post('/preserve', adminStack, authorize('settings.update'), uninstallController.createPreservation);
-router.post('/verify', adminStack, authorize('settings.read'), uninstallController.verifyPreservation);
-router.post('/authorize', adminStack, authorize('settings.update'), uninstallController.authorizeUninstall);
-router.get('/authorization', adminStack, authorize('settings.read'), uninstallController.checkAuthorization);
-router.post('/validate-destination', adminStack, authorize('settings.read'), uninstallController.validateDestination);
-router.post('/browse-destination', adminStack, authorize('settings.read'), uninstallController.browseDestination);
-router.post('/export', adminStack, authorize('settings.update'), uninstallController.createUninstallExport);
+router.get('/preflight', adminStack, uninstallController.getPreflight);
+router.post('/preserve', adminStack, uninstallController.createPreservation);
+router.post('/verify', adminStack, uninstallController.verifyPreservation);
+router.post('/authorize', adminStack, uninstallController.authorizeUninstall);
+router.get('/authorization', adminStack, uninstallController.checkAuthorization);
+router.post('/validate-destination', adminStack, uninstallController.validateDestination);
+router.post('/browse-destination', adminStack, uninstallController.browseDestination);
+router.post('/export', adminStack, uninstallController.createUninstallExport);
 
 export default router;

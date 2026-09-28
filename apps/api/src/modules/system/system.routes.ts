@@ -9,7 +9,6 @@ import { exportRoutes } from './export';
 import { uninstallRoutes } from './uninstall';
 import { userLifecycleRoutes } from './user-lifecycle';
 import { authenticate } from '../../middleware/auth';
-import { authorize } from '../../middleware/authorize';
 import { idempotencyMiddleware } from '../../middleware/idempotency';
 
 const router = Router();
@@ -45,21 +44,21 @@ router.use('/users', userLifecycleRoutes);
 const protectedAdminStack = [authenticate, idempotencyMiddleware];
 
 // Activation & software lock
-router.get('/activation-status', protectedAdminStack, authorize('system.activate'), activationController.getActivationStatus);
-router.post('/activate', protectedAdminStack, authorize('system.activate'), activationController.activate);
+router.get('/activation-status', protectedAdminStack, activationController.getActivationStatus);
+router.post('/activate', protectedAdminStack, activationController.activate);
 
 // Installation & device lifecycle management
-router.get('/installation', protectedAdminStack, authorize('settings.read'), lifecycleController.getInstallation);
-router.post('/device/:deviceId/revoke', protectedAdminStack, authorize('settings.update'), lifecycleController.revokeDevice);
-router.post('/device/:deviceId/reactivate', protectedAdminStack, authorize('settings.update'), lifecycleController.reactivateDevice);
+router.get('/installation', protectedAdminStack, lifecycleController.getInstallation);
+router.post('/device/:deviceId/revoke', protectedAdminStack, lifecycleController.revokeDevice);
+router.post('/device/:deviceId/reactivate', protectedAdminStack, lifecycleController.reactivateDevice);
 
 // Database registry management
-router.post('/database/register', protectedAdminStack, authorize('settings.update'), lifecycleController.registerDatabase);
-router.get('/database/list', protectedAdminStack, authorize('settings.read'), lifecycleController.listDatabases);
+router.post('/database/register', protectedAdminStack, lifecycleController.registerDatabase);
+router.get('/database/list', protectedAdminStack, lifecycleController.listDatabases);
 
 // Installation ↔ User association management
-router.post('/users/associate', protectedAdminStack, authorize('settings.update'), lifecycleController.associateUser);
-router.post('/users/disassociate', protectedAdminStack, authorize('settings.update'), lifecycleController.disassociateUser);
-router.get('/users', protectedAdminStack, authorize('settings.read'), lifecycleController.getInstallationUsers);
+router.post('/users/associate', protectedAdminStack, lifecycleController.associateUser);
+router.post('/users/disassociate', protectedAdminStack, lifecycleController.disassociateUser);
+router.get('/users', protectedAdminStack, lifecycleController.getInstallationUsers);
 
 export default router;

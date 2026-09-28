@@ -130,7 +130,7 @@ export class OnboardingController {
       }
 
       const result = await onboardingService.selectExistingUser(parsed.data.userId);
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: result, status: result.status });
     } catch (err) {
       next(err);
     }
@@ -150,7 +150,7 @@ export class OnboardingController {
       }
 
       const result = await onboardingService.createBusinessUser(parsed.data);
-      res.status(201).json({ success: true, data: result });
+      res.status(201).json({ success: true, data: result, status: result.status });
     } catch (err) {
       next(err);
     }
@@ -200,7 +200,7 @@ export class OnboardingController {
       }
 
       const result = await onboardingService.attachExistingDatabase(parsed.data);
-      res.status(201).json({ success: true, data: result });
+      res.status(201).json({ success: true, data: result, status: result.status });
     } catch (err) {
       next(err);
     }
@@ -220,7 +220,7 @@ export class OnboardingController {
       }
 
       const result = await onboardingService.createNewDatabase(parsed.data);
-      res.status(201).json({ success: true, data: result });
+      res.status(201).json({ success: true, data: result, status: result.status });
     } catch (err) {
       next(err);
     }
