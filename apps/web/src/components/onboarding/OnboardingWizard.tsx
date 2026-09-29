@@ -322,7 +322,11 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
         <div className="flex items-center justify-between pb-6 mb-4 border-b border-slate-800">
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">Diamond ERP Setup</h1>
-            <p className="text-xs text-slate-400">Step: {currentStep}</p>
+            <p className="text-xs text-slate-400">
+              {currentStep === 'NOT_INITIALIZED' || currentStep === 'APP_SETUP'
+                ? 'Step 1 of 8: Welcome & Choose Mode'
+                : `Step: ${currentStep}`}
+            </p>
           </div>
           <span className="text-xs px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-full font-mono">
             V3.0
@@ -352,16 +356,30 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
           status.reinstallRecovery?.hasPreviousData ? (
             <div className="space-y-4" id="previous-data-detected-card">
               <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 text-sm">
-                <div className="font-bold flex items-center gap-2 mb-1">
-                  <span className="material-symbols-outlined text-base">restore</span>
-                  Previous Diamond ERP Installation Detected
+                <div className="font-bold flex items-center gap-2 mb-2 text-blue-200">
+                  <span className="material-symbols-outlined text-lg">folder_shared</span>
+                  Found Your Existing Business Data!
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {status.reinstallRecovery.details || 'Previous application data and database records were discovered on this computer.'}
+                <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                  We detected your previous Diamond ERP records on this computer. You don&apos;t have to set up everything again:
                 </p>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="px-2.5 py-1 rounded-md bg-blue-950/60 border border-blue-500/30 text-blue-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-xs">database</span>
+                    {status.reinstallRecovery.previousDatabasesCount} Company Database(s)
+                  </span>
+                  <span className="px-2.5 py-1 rounded-md bg-indigo-950/60 border border-indigo-500/30 text-indigo-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-xs">archive</span>
+                    {status.reinstallRecovery.previousBackupsCount} Safe Backup(s)
+                  </span>
+                  <span className="px-2.5 py-1 rounded-md bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-xs">person</span>
+                    User Account Ready
+                  </span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-2.5">
+              <div className="grid grid-cols-1 gap-3">
                 <button
                   id="btn-continue-installation"
                   type="button"
@@ -378,13 +396,22 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                       setSubmitting(false);
                     }
                   }}
-                  className="w-full text-left p-3.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-white transition-all flex items-center justify-between"
+                  className="w-full text-left p-4 rounded-xl border border-indigo-500/40 bg-indigo-600/15 hover:bg-indigo-600/25 text-white transition-all flex items-center justify-between group shadow-lg shadow-indigo-950/30"
                 >
                   <div>
-                    <div className="font-semibold text-sm">Continue with Existing Installation</div>
-                    <div className="text-xs text-slate-400">Keep all existing database records, users, and transactions.</div>
+                    <div className="font-semibold text-sm text-indigo-200 group-hover:text-white flex items-center gap-2">
+                      <span>1. Continue with Existing Data</span>
+                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        Recommended
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-300 mt-1 leading-normal">
+                      Keep all your diamonds, stock inventory, party ledgers, and user accounts exactly as you left them.
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-indigo-400">arrow_forward</span>
+                  <span className="material-symbols-outlined text-indigo-400 group-hover:translate-x-1 transition-transform ml-3">
+                    arrow_forward
+                  </span>
                 </button>
 
                 <button
@@ -405,13 +432,19 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                       setSubmitting(false);
                     }
                   }}
-                  className="w-full text-left p-3.5 rounded-xl border border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 transition-all flex items-center justify-between"
+                  className="w-full text-left p-4 rounded-xl border border-slate-700/80 bg-slate-800/50 hover:bg-slate-800/90 text-slate-200 transition-all flex items-center justify-between group"
                 >
                   <div>
-                    <div className="font-semibold text-sm">Start New Blank Installation</div>
-                    <div className="text-xs text-slate-400">Creates a fresh identity. Previous database files remain 100% preserved on disk.</div>
+                    <div className="font-semibold text-sm text-slate-200 group-hover:text-white">
+                      2. Start a Clean, Blank Installation
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1 leading-normal">
+                      Start fresh from scratch. (Your old database and backup files remain 100% safe on your disk).
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-slate-400">add_circle</span>
+                  <span className="material-symbols-outlined text-slate-500 group-hover:text-slate-300 ml-3">
+                    add_circle
+                  </span>
                 </button>
               </div>
             </div>
