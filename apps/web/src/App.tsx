@@ -12,7 +12,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { useStocks } from './hooks/useStocks';
 import { AppLockProvider, useAppLock } from './contexts/AppLockContext';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppLockOverlay } from './components/security/AppLockOverlay';
 import { FirstRunActivationOverlay } from './components/security/FirstRunActivationOverlay';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
@@ -89,6 +89,7 @@ function ErpAppLayout() {
  */
 function AppContent() {
   const { isLocked } = useAppLock();
+  const { profileId } = useAuth();
   const [onboardingReady, setOnboardingReady] = useState<boolean>(false);
 
   return (
@@ -103,7 +104,7 @@ function AppContent() {
       <AppLockOverlay />
 
       {/* 4. ERP Business Application — Mounted ONLY when lifecycle is READY */}
-      {onboardingReady === true && !isLocked && <ErpAppLayout />}
+      {onboardingReady === true && !isLocked && <ErpAppLayout key={profileId || 'default'} />}
     </>
   );
 }

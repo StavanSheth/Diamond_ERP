@@ -365,6 +365,28 @@ check('No developer machine filesystem paths leak into api/package.json', () => 
   return !content.includes('C:\\') && !content.includes('TestV3.0') && !content.includes('/Users/');
 });
 
+// ── 7. Data Lifecycle & Production Architecture Invariants ─────────────────
+console.log('\n[7] Data Lifecycle & Export Architecture:');
+
+check('Authoritative DatabaseContextService exists in compiled backend dist', () => {
+  const svc = path.join(STAGING_DIR, 'api', 'dist', 'infrastructure', 'database', 'database-context.service.js');
+  return fs.existsSync(svc);
+});
+
+check('SemanticVerificationService exists in compiled backend dist', () => {
+  const svc = path.join(STAGING_DIR, 'api', 'dist', 'modules', 'system', 'export', 'semantic-verification.service.js');
+  return fs.existsSync(svc);
+});
+
+check('No export-specific encryption wrappers or password export libraries in production dependencies', () => {
+  const pkgPath = path.join(STAGING_DIR, 'api', 'package.json');
+  if (!fs.existsSync(pkgPath)) return false;
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+  const deps = Object.keys(pkg.dependencies || {});
+  const forbiddenDeps = ['crypto-js', 'node-forge', 'zip-encrypt', 'secure-spreadsheet'];
+  return forbiddenDeps.every(d => !deps.includes(d));
+});
+
 // ── Results Summary ─────────────────────────────────────────────────────────
 console.log('\n================================================================');
 console.log(`Validation Results: ${passedChecks}/${totalChecks} checks PASSED (${failedChecks} failed)`);

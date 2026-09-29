@@ -1,0 +1,211 @@
+import fs from 'fs';
+import path from 'path';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
+import { databaseValidationService } from './database-validation.service';
+import { databaseContextService } from '../../../infrastructure/database/database-context.service';
+import { getDatabasesDir, getControlDbPath, getDatabaseTemplatePath } from '../../../infrastructure/paths';
+
+export interface ProfileDatabaseHealth {
+  profileId: string;
+  profileCode: string;
+  profileName: string;
+  databaseId: string;
+  databasePath: string;
+  exists: boolean;
+  readable: boolean;
+  sizeBytes: number;
+  status: string;
+  schemaVersion: number;
+  integrityCheck: string;
+  tablesFound: string[];
+  missingTables: string[];
+  walState: 'CLEAN' | 'WAL_ACTIVE' | 'ERROR';
+  lastValidatedAt: string | null;
+  lastBackupAt: string | null;
+  lastVerifiedBackupAt: string | null;
+  lastExportAt: string | null;
+  isOrphaned: boolean;
+  ownershipValid: boolean;
+  issues: string[];
+}
+
+export interface SystemDataHealthReport {
+  overallStatus: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  totalProfiles: number;
+  healthyProfiles: number;
+  orphanedDatabases: { path: string; sizeBytes: number }[];
+  profiles: ProfileDatabaseHealth[];
+  generatedAt: string;
+}
+
+export class DatabaseHealthService {
+  /**
+   * Run comprehensive data health inspection across all ERP profiles and databases.
+   */
+  async checkHealth(): Promise<SystemDataHealthReport> {
+    const profiles = await systemPrisma.profile.findMany({
+      include: {
+        databaseRegistries: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const reportProfiles: ProfileDatabaseHealth[] = [];
+    let healthyCount = 0;
+    const registeredPaths = new Set<string>();
+
+    for (const prof of profiles) {
+      const issues: string[] = [];
+      let dbContext: any = null;
+
+      try {
+        dbContext = await databaseContextService.getDatabaseForProfile(prof.id);
+      } catch (err: any) {
+        issues.push(`Database Context Resolution Error: ${err.message}`);
+      }
+
+      const dbPath = dbContext?.canonicalPath || prof.dbPath || path.resolve(getDatabasesDir(), `${prof.code}.db`);
+      registeredPaths.add(path.resolve(dbPath).toLowerCase());
+
+      const exists = fs.existsSync(dbPath);
+      let readable = false;
+      let sizeBytes = 0;
+
+      if (exists) {
+        try {
+          fs.accessSync(dbPath, fs.constants.R_OK);
+          readable = true;
+          sizeBytes = fs.statSync(dbPath).size;
+        } catch {
+          issues.push('Database file exists but is not readable.');
+        }
+      } else {
+        issues.push('Database file does not exist on disk.');
+      }
+
+      // SQLite integrity and schema check
+      let integrityCheck = 'NOT_RUN';
+      let tablesFound: string[] = [];
+      let missingTables: string[] = [];
+      let schemaVersion = prof.schemaVersion || 1;
+
+      if (exists && readable) {
+        const valResult = await databaseValidationService.validateDatabase(dbPath);
+        integrityCheck = valResult.integrityCheck || (valResult.isValid ? 'ok' : 'failed');
+        tablesFound = valResult.tablesFound || [];
+        missingTables = valResult.missingRequiredTables || [];
+        if (valResult.schemaVersion) schemaVersion = valResult.schemaVersion;
+        if (!valResult.isValid) {
+          issues.push(`Integrity/Schema check failed: ${valResult.error || valResult.details}`);
+        }
+      }
+
+      // Check WAL state
+      let walState: 'CLEAN' | 'WAL_ACTIVE' | 'ERROR' = 'CLEAN';
+      if (fs.existsSync(`${dbPath}-wal`)) {
+        walState = 'WAL_ACTIVE';
+      }
+
+      // Fetch last backup metadata for this profile
+      const latestBackup = await systemPrisma.backupRecord.findFirst({
+        where: { profileId: prof.id },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const latestVerifiedBackup = await systemPrisma.backupRecord.findFirst({
+        where: { profileId: prof.id, status: 'VERIFIED' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Fetch last export metadata
+      const latestExport = dbContext?.databaseId
+        ? await systemPrisma.exportRecord.findFirst({
+            where: { databaseId: dbContext.databaseId },
+            orderBy: { createdAt: 'desc' },
+          })
+        : null;
+
+      // Ownership invariants: Verify no duplicate profile assignment for this DB
+      let ownershipValid = true;
+      const otherRegistries = await systemPrisma.databaseRegistry.findMany({
+        where: {
+          canonicalPath: path.resolve(dbPath),
+          NOT: { profileId: prof.id },
+        },
+      });
+
+      if (otherRegistries.length > 0) {
+        ownershipValid = false;
+        issues.push(`Ownership Conflict: Database path is simultaneously mapped to another profile/registry.`);
+      }
+
+      const isHealthy = exists && readable && integrityCheck === 'ok' && ownershipValid && missingTables.length === 0;
+      if (isHealthy) healthyCount++;
+
+      reportProfiles.push({
+        profileId: prof.id,
+        profileCode: prof.code,
+        profileName: prof.name,
+        databaseId: dbContext?.databaseId || `db_${prof.code}`,
+        databasePath: dbPath,
+        exists,
+        readable,
+        sizeBytes,
+        status: isHealthy ? 'HEALTHY' : 'NEEDS_ATTENTION',
+        schemaVersion,
+        integrityCheck,
+        tablesFound,
+        missingTables,
+        walState,
+        lastValidatedAt: prof.databaseRegistries[0]?.lastValidatedAt?.toISOString() || null,
+        lastBackupAt: latestBackup?.createdAt?.toISOString() || null,
+        lastVerifiedBackupAt: latestVerifiedBackup?.createdAt?.toISOString() || null,
+        lastExportAt: latestExport?.createdAt?.toISOString() || null,
+        isOrphaned: !prof.isActive,
+        ownershipValid,
+        issues,
+      });
+    }
+
+    // Detect orphaned .db files in the databases directory
+    const databasesDir = getDatabasesDir();
+    const orphanedDatabases: { path: string; sizeBytes: number }[] = [];
+    const controlDbPath = path.resolve(getControlDbPath()).toLowerCase();
+    const templateDbPath = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
+
+    if (fs.existsSync(databasesDir)) {
+      const files = fs.readdirSync(databasesDir);
+      for (const file of files) {
+        if (!file.endsWith('.db')) continue;
+        const fullPath = path.resolve(databasesDir, file);
+        const lower = fullPath.toLowerCase();
+        if (lower === controlDbPath || lower === templateDbPath) continue;
+
+        if (!registeredPaths.has(lower)) {
+          orphanedDatabases.push({
+            path: fullPath,
+            sizeBytes: fs.statSync(fullPath).size,
+          });
+        }
+      }
+    }
+
+    const overallStatus: 'HEALTHY' | 'WARNING' | 'CRITICAL' =
+      healthyCount === profiles.length && orphanedDatabases.length === 0
+        ? 'HEALTHY'
+        : healthyCount > 0
+        ? 'WARNING'
+        : 'CRITICAL';
+
+    return {
+      overallStatus,
+      totalProfiles: profiles.length,
+      healthyProfiles: healthyCount,
+      orphanedDatabases,
+      profiles: reportProfiles,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export const databaseHealthService = new DatabaseHealthService();

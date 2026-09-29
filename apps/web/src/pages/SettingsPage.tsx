@@ -165,6 +165,26 @@ export const SettingsPage: React.FC = () => {
   } | null>(null);
   const [browsingDestination, setBrowsingDestination] = useState(false);
 
+  // Section 7.7 Data Health & Diagnostics State
+  const [dataHealthReport, setDataHealthReport] = useState<any | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  const handleRunHealthCheck = async () => {
+    setLoadingHealth(true);
+    setHealthError(null);
+    try {
+      const res = await api.getDataHealth();
+      if (res.success && res.data) {
+        setDataHealthReport(res.data);
+      }
+    } catch (err: any) {
+      setHealthError(err.message || 'Data health inspection failed');
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
+
   const handleBrowseDestination = async () => {
     setBrowsingDestination(true);
     setPreservationError(null);
@@ -2066,6 +2086,166 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   )}
                 </div>
+              </div>
+            </section>
+
+            {/* ══════════════════════════════════════════════════════════ */}
+            {/* SECTION 7.7: DATA HEALTH & DIAGNOSTICS                    */}
+            {/* ══════════════════════════════════════════════════════════ */}
+            <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
+              <div className="h-1 bg-teal-600" />
+              <div className="p-lg flex flex-col gap-md">
+                <div className="flex items-center justify-between pb-sm border-b border-outline-variant/60">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center shrink-0 shadow-2xs">
+                      <span className="material-symbols-outlined text-[18px]">health_and_safety</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
+                        Database Health &amp; Diagnostics
+                      </h3>
+                      <p className="text-[11px] text-on-surface-variant m-0">
+                        Central verification of profile database integrity, ownership invariants, WAL state, and backups
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRunHealthCheck}
+                    disabled={loadingHealth}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    <span className={`material-symbols-outlined text-[16px] ${loadingHealth ? 'animate-spin' : ''}`}>
+                      sync
+                    </span>
+                    {loadingHealth ? 'Inspecting Health...' : 'Run Health Check'}
+                  </button>
+                </div>
+
+                {healthError && (
+                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-900 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-rose-700">error</span>
+                    <span>{healthError}</span>
+                  </div>
+                )}
+
+                {dataHealthReport ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                      <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Overall Status</div>
+                        <div className="text-sm font-bold mt-1 flex items-center gap-1.5">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              dataHealthReport.overallStatus === 'HEALTHY'
+                                ? 'bg-emerald-500'
+                                : dataHealthReport.overallStatus === 'WARNING'
+                                ? 'bg-amber-500'
+                                : 'bg-rose-500'
+                            }`}
+                          />
+                          <span
+                            className={
+                              dataHealthReport.overallStatus === 'HEALTHY'
+                                ? 'text-emerald-700'
+                                : dataHealthReport.overallStatus === 'WARNING'
+                                ? 'text-amber-700'
+                                : 'text-rose-700'
+                            }
+                          >
+                            {dataHealthReport.overallStatus}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Profiles Checked</div>
+                        <div className="text-sm font-bold text-slate-800 mt-1">
+                          {dataHealthReport.healthyProfiles} / {dataHealthReport.totalProfiles} Healthy
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Orphaned Databases</div>
+                        <div className="text-sm font-bold mt-1 text-slate-800">
+                          {dataHealthReport.orphanedDatabases?.length || 0} unmapped
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Last Inspection</div>
+                        <div className="text-xs font-semibold text-slate-700 mt-1">
+                          {new Date(dataHealthReport.generatedAt).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden shadow-2xs">
+                      {dataHealthReport.profiles?.map((p: any) => (
+                        <div key={p.profileId} className="p-3 flex flex-col md:flex-row md:items-center justify-between gap-2 text-xs">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900">{p.profileName}</span>
+                              <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
+                                {p.profileCode}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  p.status === 'HEALTHY'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {p.status}
+                              </span>
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 truncate max-w-lg">
+                              {p.databasePath}
+                            </div>
+                            <div className="text-[10px] text-slate-400 flex flex-wrap gap-2 pt-0.5">
+                              <span>Size: {(p.sizeBytes / 1024).toFixed(1)} KB</span>
+                              <span>•</span>
+                              <span>WAL: {p.walState}</span>
+                              <span>•</span>
+                              <span>Integrity: {p.integrityCheck}</span>
+                              <span>•</span>
+                              <span>Last Verified Backup: {p.lastVerifiedBackupAt ? new Date(p.lastVerifiedBackupAt).toLocaleDateString() : 'None'}</span>
+                            </div>
+                            {p.issues?.length > 0 && (
+                              <div className="mt-1 text-rose-600 text-[11px]">
+                                {p.issues.map((iss: string, idx: number) => (
+                                  <div key={idx}>⚠ {iss}</div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await api.createBackup({ databasePath: p.databasePath, backupType: 'MANUAL' });
+                                  alert(`Backup created successfully for profile "${p.profileCode}"`);
+                                  handleRunHealthCheck();
+                                } catch (e: any) {
+                                  alert(e.message || 'Backup failed');
+                                }
+                              }}
+                              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+                            >
+                              Backup Now
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-white border border-dashed border-slate-200 rounded-xl text-center text-xs text-slate-400">
+                    Click &quot;Run Health Check&quot; to inspect all registered databases, WAL states, and ownership invariants.
+                  </div>
+                )}
               </div>
             </section>
 

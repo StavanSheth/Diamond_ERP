@@ -1,14 +1,18 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, getCanonicalProfile, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, NotFoundError } from '../../errors';
 import { sanitizeForSpreadsheet } from '@diamond-erp/shared-utils';
-import { getBackupsDir, getDatabasesDir } from '../../infrastructure/paths';
+import { getDatabasesDir } from '../../infrastructure/paths';
 import { userLifecycleService } from '../system/user-lifecycle/user-lifecycle.service';
 import { computeLedgerBalances, generateStockColorMap } from '../ledger/ledger.service';
+import { backupService } from '../system/backup/backup.service';
+import { databaseProvisioningService } from '../system/database/database-provisioning.service';
+import { databaseContextService } from '../../infrastructure/database/database-context.service';
+import { databaseHealthService } from '../system/database/database-health.service';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
   const sanitized: Record<string, any> = {};
@@ -757,7 +761,7 @@ export class SettingsController {
 
   createProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { profileName } = req.body;
+      const { profileName, displayName } = req.body;
       if (!profileName || typeof profileName !== 'string') {
         res.status(400).json({ success: false, message: 'Profile name is required' });
         return;
@@ -772,7 +776,6 @@ export class SettingsController {
         return;
       }
 
-      const { FORBIDDEN_PROFILE_NAMES, registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
       if (FORBIDDEN_PROFILE_NAMES.has(cleanName.toLowerCase())) {
         res.status(400).json({
           success: false,
@@ -780,17 +783,46 @@ export class SettingsController {
         });
         return;
       }
-      const canonical = registerProfile({ code: cleanName });
+
+      // Resolve requesting user
+      let targetUser = (req as any).user;
+      if (!targetUser?.id) {
+        targetUser = await systemPrisma.user.findFirst({ where: { isActive: true } });
+      }
+      if (!targetUser) {
+        throw new ValidationError('Cannot provision profile without an active system user.');
+      }
+
+      // Check if profile code already exists
+      const existingProf = await systemPrisma.profile.findUnique({ where: { code: cleanName } });
+      if (existingProf) {
+        throw new ValidationError(`Profile "${cleanName}" already exists.`);
+      }
+
+      // Authoritative database provisioning via DatabaseProvisioningService
+      const provisionResult = await databaseProvisioningService.provisionBlankDatabase({
+        profileCode: cleanName,
+        displayName: displayName || cleanName,
+        userId: targetUser.id,
+      });
+
+      // Synchronize in-memory Prisma client pool
+      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      registerProfile({
+        code: cleanName,
+        name: displayName || cleanName,
+        dbPath: provisionResult.canonicalPath,
+      });
       await getClientForProfileAsync(cleanName);
 
+      // Create initial verified backup for the new database
       try {
-        await systemPrisma.profile.upsert({
-          where: { code: cleanName },
-          update: { isActive: true },
-          create: { code: cleanName, name: cleanName, dbPath: canonical.dbPath, isActive: true },
+        await backupService.createBackup({
+          databasePath: provisionResult.canonicalPath,
+          backupType: 'MANUAL',
         });
-      } catch {
-        // ignore
+      } catch (bkpErr: any) {
+        console.warn(`[SettingsController] Initial backup notice for ${cleanName}:`, bkpErr.message);
       }
 
       const allProfiles = getAllProfiles();
@@ -826,16 +858,28 @@ export class SettingsController {
       const deletedDatabases: string[] = [];
 
       if (profile) {
-        if (deleteDatabase) {
-          for (const reg of profile.databaseRegistries) {
-            const dbFile = reg.canonicalPath;
-            const baseName = path.basename(dbFile).toLowerCase();
+        for (const reg of profile.databaseRegistries) {
+          const dbFile = reg.canonicalPath;
+          const baseName = path.basename(dbFile).toLowerCase();
+
+          if (deleteDatabase) {
+            // Invariant L: Never silently delete a customer's physical .db without verified backup
             if (
               baseName !== 'system.db' &&
               baseName !== 'template.db' &&
               baseName !== 'stavan.db' &&
               fs.existsSync(dbFile)
             ) {
+              try {
+                // Take pre-deletion verified backup first
+                await backupService.createBackup({
+                  databasePath: dbFile,
+                  backupType: 'PRE_RESTORE',
+                });
+              } catch (bkpErr: any) {
+                console.warn(`[SettingsController] Pre-deletion backup warning for ${dbFile}:`, bkpErr.message);
+              }
+
               try {
                 fs.unlinkSync(dbFile);
                 deletedDatabases.push(dbFile);
@@ -846,13 +890,23 @@ export class SettingsController {
               }
             }
             await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => { });
+          } else {
+            // Invariant K: If DB retained, explicitly mark ORPHANED / AVAILABLE rather than disappearing
+            await systemPrisma.databaseRegistry.update({
+              where: { id: reg.id },
+              data: {
+                status: 'ORPHANED',
+                profileId: null,
+              },
+            }).catch(() => { });
           }
         }
+
         await systemPrisma.userProfile.deleteMany({ where: { profileId: profile.id } }).catch(() => { });
         await systemPrisma.profile.delete({ where: { id: profile.id } }).catch(() => { });
       }
 
-      // Also check if any standalone file exists on disk
+      // Also check if any standalone file exists on disk when physical deletion requested
       if (deleteDatabase) {
         const directFile = path.resolve(getDatabasesDir(), `${profileCode}.db`);
         if (
@@ -872,7 +926,7 @@ export class SettingsController {
 
       res.json({
         success: true,
-        message: `Profile "${profileCode}" deleted successfully.`,
+        message: `Profile "${profileCode}" deleted successfully.${deleteDatabase ? ' Physical database removed.' : ' Physical database retained as ORPHANED/RECOVERABLE.'}`,
         deletedDatabases,
       });
     } catch (error) {
@@ -1364,17 +1418,37 @@ export class SettingsController {
               vendorId = party.id;
             }
 
-            await tx.repair.create({
-              data: {
+            // Idempotent repair matching: find existing repair for this diamond and repair type
+            const existingRepair = await tx.repair.findFirst({
+              where: {
                 diamondItemId: diamond.id,
                 repairType: row['Repair Type'] || 'OTHER',
-                vendorPartyId: vendorId,
-                dateSent: new Date(),
-                caratBefore: diamond.carat,
-                cost: row['Cost'] != null ? parseFloat(row['Cost']) : 0,
                 status: row['Status'] || 'IN_PROGRESS',
               },
             });
+
+            if (existingRepair) {
+              await tx.repair.update({
+                where: { id: existingRepair.id },
+                data: {
+                  vendorPartyId: vendorId,
+                  cost: row['Cost'] != null ? parseFloat(row['Cost']) : existingRepair.cost,
+                  status: row['Status'] || existingRepair.status,
+                },
+              });
+            } else {
+              await tx.repair.create({
+                data: {
+                  diamondItemId: diamond.id,
+                  repairType: row['Repair Type'] || 'OTHER',
+                  vendorPartyId: vendorId,
+                  dateSent: new Date(),
+                  caratBefore: diamond.carat,
+                  cost: row['Cost'] != null ? parseFloat(row['Cost']) : 0,
+                  status: row['Status'] || 'IN_PROGRESS',
+                },
+              });
+            }
             totalSuccess++;
           } catch (err: any) {
             errors.push(`[Repairs] Row "${row['Item Code'] || '?'}": ${err.message}`);
@@ -1630,44 +1704,28 @@ export class SettingsController {
   /**
    * POST /api/settings/backup
    * Creates an atomic, consistent database snapshot.
-   * Flushes WAL via PRAGMA wal_checkpoint(TRUNCATE) first.
+   * Delegates to authoritative BackupService (SSOT).
    */
-  backupDatabase = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  backupDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // 1. Flush SQLite WAL to ensure 100% data consistency
-      await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
+      const dbContext = await databaseContextService.getDatabaseForProfileCode(activeProfile);
 
-      // 2. Prepare backup directory
-      const backupsDir = getBackupsDir();
-      if (!fs.existsSync(backupsDir)) {
-        fs.mkdirSync(backupsDir, { recursive: true });
-      }
-
-      // 3. Format timestamped backup filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupFilename = `diamond_erp_backup_${timestamp}.db`;
-      const backupFilePath = path.join(backupsDir, backupFilename);
-
-      // 4. Use SQLite online backup VACUUM INTO if supported, or safe copy
-      try {
-        await systemPrisma.$executeRawUnsafe(`VACUUM INTO '${backupFilePath.replace(/\\/g, '/')}'`);
-      } catch {
-        const rawDbUrl = process.env.DATABASE_URL?.replace('file:', '');
-        const resolvedDbPath = rawDbUrl
-          ? (path.isAbsolute(rawDbUrl) ? rawDbUrl : path.resolve(getDatabasesDir(), rawDbUrl))
-          : path.join(getDatabasesDir(), 'Stavan.db');
-        fs.copyFileSync(resolvedDbPath, backupFilePath);
-      }
-
-      const stats = fs.statSync(backupFilePath);
+      const backupRecord = await backupService.createBackup({
+        databasePath: dbContext.canonicalPath,
+        backupType: 'MANUAL',
+      }, (req as any).user?.username || 'user');
 
       res.json({
         success: true,
         message: 'Database backup created successfully',
         data: {
-          filename: backupFilename,
-          sizeBytes: stats.size,
-          timestamp: new Date().toISOString(),
+          filename: path.basename(backupRecord.backupPath),
+          backupId: backupRecord.backupId,
+          sizeBytes: backupRecord.sizeBytes,
+          timestamp: backupRecord.createdAt,
+          sha256: backupRecord.sha256,
+          status: backupRecord.status,
           checkpoint: 'TRUNCATE'
         }
       });
@@ -1678,11 +1736,15 @@ export class SettingsController {
 
   /**
    * POST /api/settings/checkpoint
-   * Flushes SQLite Write-Ahead Log to the main database file.
+   * Flushes SQLite Write-Ahead Log on the active business database file.
    */
-  checkpointWAL = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  checkpointWAL = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result: any = await systemPrisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
+      const { getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const client = await getClientForProfileAsync(activeProfile);
+
+      const result: any = await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
       res.json({
         success: true,
         message: 'SQLite WAL checkpoint completed successfully',
@@ -1835,7 +1897,7 @@ export class SettingsController {
    */
   listDatabases = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      let profiles = await systemPrisma.profile.findMany({
+      const profiles = await systemPrisma.profile.findMany({
         where: { isActive: true },
         include: {
           databaseRegistries: {
@@ -1848,28 +1910,6 @@ export class SettingsController {
         },
         orderBy: { name: 'asc' },
       });
-
-      const configured = getAllProfiles();
-      for (const code of configured) {
-        let existing = profiles.find((p) => p.code.toLowerCase() === code.toLowerCase());
-        if (!existing) {
-          try {
-            const newProf = await systemPrisma.profile.create({
-              data: {
-                code,
-                name: code,
-                isActive: true,
-                dbPath: path.resolve(getDatabasesDir(), `${code}.db`),
-              },
-              include: {
-                databaseRegistries: true,
-                userProfiles: { include: { user: true } },
-              },
-            });
-            profiles.push(newProf as any);
-          } catch { }
-        }
-      }
 
       const activeProfile = getActiveProfileOrDefault();
 
@@ -2023,8 +2063,8 @@ export class SettingsController {
   downloadActiveDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
-      const canonical = getCanonicalProfile(activeProfile);
-      const resolvedDbPath = canonical?.dbPath || path.resolve(getDatabasesDir(), `${activeProfile}.db`);
+      const dbContext = await databaseContextService.getDatabaseForProfileCode(activeProfile);
+      const resolvedDbPath = dbContext.canonicalPath;
 
       if (!fs.existsSync(resolvedDbPath)) {
         res.status(404).json({ success: false, message: `Database file for "${activeProfile}" not found` });
@@ -2032,7 +2072,9 @@ export class SettingsController {
       }
 
       try {
-        await prisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
+        const { getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+        const client = await getClientForProfileAsync(activeProfile);
+        await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
       } catch { }
 
       const dateStr = new Date().toISOString().slice(0, 10);
@@ -2057,6 +2099,19 @@ export class SettingsController {
       }
       const filename = path.basename(record.backupPath);
       res.download(record.backupPath, filename);
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * GET /api/settings/data-health
+   * Runs central database health inspection across all profiles and databases.
+   */
+  getDataHealth = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const report = await databaseHealthService.checkHealth();
+      res.json({ success: true, data: report });
     } catch (error) {
       next(error);
     }

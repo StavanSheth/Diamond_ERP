@@ -126,7 +126,11 @@ export const api = {
 
   // Phase 5 Data Preservation & Recovery
   backup: backupApi,
+  createBackup: backupApi.createBackup,
   recovery: recoveryApi,
+
+  // Settings Data Health
+  getDataHealth: settingsApi.getDataHealth,
 
   // Phase 7 Uninstall Safety Gate & Preservation
   uninstall: uninstallApi,

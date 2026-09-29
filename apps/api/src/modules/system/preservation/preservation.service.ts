@@ -27,6 +27,8 @@ import type {
 } from '@diamond-erp/contracts';
 import { buildExportQueries } from '../export/export-entity-registry';
 import { customerDataDetectionService } from '../uninstall/customer-data-detection.service';
+import { semanticVerificationService } from '../export/semantic-verification.service';
+import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 
 export class PreservationService {
   /**
@@ -288,18 +290,33 @@ export class PreservationService {
     }
 
     if (databasesToPreserve.length === 0) {
-      const defaultDb = path.join(getDatabasesDir(), 'Stavan.db');
-      if (fs.existsSync(defaultDb)) {
-        databasesToPreserve.push({
-          canonicalPath: defaultDb,
-          databaseId: 'db_Stavan',
-          profileId: null,
-          profileCode: 'Stavan',
-          userId: null,
-          username: null,
-          schemaVersion: 1,
-        });
-      } else {
+      const activeProfiles = await systemPrisma.profile.findMany({
+        where: { isActive: true },
+        include: {
+          databaseRegistries: {
+            where: { status: 'ACTIVE' },
+          },
+        },
+      });
+
+      for (const prof of activeProfiles) {
+        try {
+          const ctx = await databaseContextService.getDatabaseForProfile(prof.id);
+          if (fs.existsSync(ctx.canonicalPath)) {
+            databasesToPreserve.push({
+              canonicalPath: ctx.canonicalPath,
+              databaseId: ctx.databaseId,
+              profileId: ctx.profileId,
+              profileCode: ctx.profileCode,
+              userId: null,
+              username: null,
+              schemaVersion: ctx.schemaVersion,
+            });
+          }
+        } catch {}
+      }
+
+      if (databasesToPreserve.length === 0) {
         throw new NotFoundError('No active customer database found to preserve.');
       }
     }
@@ -523,6 +540,13 @@ export class PreservationService {
 
           totalAllRows += dbTotalRows;
 
+          // Semantic verification: compare live profile DB rows against exported CSV and XLSX
+          const semanticResult = await semanticVerificationService.verifyDatabaseAgainstExports(
+            client,
+            dbCsvDir,
+            dbXlsxPath
+          );
+
           manifestDatabases.push({
             databaseId: dbItem.databaseId,
             profileId: dbItem.profileId,
@@ -544,6 +568,15 @@ export class PreservationService {
             tablesCount: dbCsvFiles.length,
             totalRows: dbTotalRows,
             csvFiles: dbCsvFiles,
+            semanticVerification: {
+              status: semanticResult.status,
+              databaseVsCsv: semanticResult.databaseVsCsv,
+              databaseVsXlsx: semanticResult.databaseVsXlsx,
+              duplicatePrimaryKeys: semanticResult.duplicatePrimaryKeys,
+              missingRows: semanticResult.missingRows,
+              extraRows: semanticResult.extraRows,
+              fieldMismatches: semanticResult.fieldMismatches,
+            },
           });
         } finally {
           await client.$disconnect();

@@ -6,6 +6,8 @@ export interface ExportBusinessDataRequest {
   format: 'XLSX' | 'CSV' | 'SQLITE';
   tables?: string[];
   databasePath?: string;
+  profileId?: string;
+  profileCode?: string;
   customDestinationDir?: string;
   note?: string;
 }
@@ -45,11 +47,15 @@ export interface ExportVerificationDto {
   exportId: string;
   isValid: boolean;
   manifestMatches: boolean;
+  hashesMatch?: boolean;
+  allFilesPresent?: boolean;
   fileCount: number;
+  totalRows?: number;
   tableCount?: number;
   tablesVerified?: boolean;
   verifiedAt: string;
   error?: string | null;
+  errors?: string[];
 }
 
 export interface ExportResponseDto {

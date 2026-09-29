@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { systemPrisma } from '../../../infrastructure/database/prisma';
+import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
+import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getBackupsDir,
   getBackupStagingDir,
-  getDatabasesDir,
   getControlDbPath,
   getDatabaseTemplatePath,
   ensureAllDataDirs,
@@ -46,34 +46,55 @@ export class BackupService {
     ensureAllDataDirs();
     const install = await installationService.getOrCreateInstallation();
 
-    // 1. Resolve source database path
+    // 1. Authoritative resolution of source database via DatabaseContextService
     let sourcePath = reqBody.databasePath;
     let targetRegistry: any = null;
+    let resolvedProfileId: string | null = null;
+    let profileCode: string = 'erp';
 
-    if (!sourcePath) {
+    if (sourcePath) {
+      const pathResult = canonicalizeDatabasePath(sourcePath);
+      if (!pathResult.valid) {
+        throw new ValidationError(pathResult.error || 'Invalid database path');
+      }
+      sourcePath = pathResult.canonicalPath;
       targetRegistry = await systemPrisma.databaseRegistry.findFirst({
-        where: {
-          installationId: install.id,
-          status: 'ACTIVE',
-        },
+        where: { canonicalPath: sourcePath },
         include: { profile: true },
       });
-
-      if (!targetRegistry) {
-        // Fall back to default profile database in databases dir
-        const defaultPath = path.join(getDatabasesDir(), 'Stavan.db');
-        if (fs.existsSync(defaultPath)) {
-          sourcePath = defaultPath;
-        } else {
-          throw new NotFoundError('No active database found to back up.');
-        }
+      resolvedProfileId = targetRegistry?.profileId || null;
+      profileCode = reqBody.profileCode || targetRegistry?.profile?.code || path.basename(sourcePath, '.db');
+    } else {
+      let dbContext: any = null;
+      if (reqBody.profileId) {
+        dbContext = await databaseContextService.getDatabaseForProfile(reqBody.profileId);
+      } else if (reqBody.profileCode) {
+        dbContext = await databaseContextService.getDatabaseForProfileCode(reqBody.profileCode);
       } else {
-        sourcePath = targetRegistry.canonicalPath;
+        try {
+          dbContext = await databaseContextService.getActiveProfileDatabase();
+        } catch {
+          const fallbackProfile = getActiveProfileOrDefault();
+          if (fallbackProfile) {
+            dbContext = await databaseContextService.getDatabaseForProfileCode(fallbackProfile);
+          }
+        }
       }
+
+      if (!dbContext) {
+        throw new NotFoundError('No active profile database found to back up.');
+      }
+
+      sourcePath = dbContext.canonicalPath;
+      resolvedProfileId = dbContext.profileId;
+      profileCode = dbContext.profileCode;
+      targetRegistry = await systemPrisma.databaseRegistry.findUnique({
+        where: { databaseId: dbContext.databaseId },
+      });
     }
 
-    if (!sourcePath) {
-      throw new NotFoundError('No active database found to back up.');
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      throw new NotFoundError(`Source database file does not exist: ${sourcePath}`);
     }
 
     // 2. Validate source path invariants
@@ -112,7 +133,6 @@ export class BackupService {
 
     const backupId = `bkp_${crypto.randomUUID()}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const profileCode = reqBody.profileCode || targetRegistry?.profile?.code || 'erp';
     const backupFileName = `${profileCode}_backup_${timestamp}_${backupId}.db`;
 
     if (reqBody.customDestinationDir) {
@@ -148,7 +168,7 @@ export class BackupService {
 
     // 4. Record PENDING state in Database
     const databaseId = targetRegistry?.databaseId || `db_${path.basename(canonicalSource, '.db')}`;
-    const profileId = targetRegistry?.profileId || null;
+    const profileId = resolvedProfileId;
 
     let backupRecord = await systemPrisma.backupRecord.create({
       data: {
@@ -306,6 +326,11 @@ export class BackupService {
           performedBy,
         },
       });
+
+      // Safe retention: prune old backups beyond retention limit (keep minimum 5, never delete latest/only verified)
+      if (profileId) {
+        await this.pruneBackups(profileId, 5).catch(() => {});
+      }
 
       return this.formatRecord(backupRecord);
     } catch (err: any) {
@@ -521,6 +546,55 @@ export class BackupService {
         }
       } catch {}
     }
+  }
+
+  /**
+   * Safe backup retention enforcement (Section 34):
+   * - Never deletes the latest verified backup
+   * - Never deletes the only backup
+   * - Keeps at least retainCount verified backups per profile
+   */
+  async pruneBackups(profileId?: string, retainCount: number = 5): Promise<number> {
+    const whereClause: any = {
+      status: 'VERIFIED',
+    };
+    if (profileId) {
+      whereClause.profileId = profileId;
+    }
+
+    const verifiedBackups = await systemPrisma.backupRecord.findMany({
+      where: whereClause,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (verifiedBackups.length <= retainCount) {
+      return 0;
+    }
+
+    // Keep the first `retainCount` records (which are newest)
+    const toPrune = verifiedBackups.slice(retainCount);
+    let pruned = 0;
+
+    for (const bkp of toPrune) {
+      try {
+        if (fs.existsSync(bkp.backupPath)) {
+          fs.unlinkSync(bkp.backupPath);
+        }
+        const manifestPath = `${bkp.backupPath}.manifest.json`;
+        if (fs.existsSync(manifestPath)) {
+          fs.unlinkSync(manifestPath);
+        }
+        await systemPrisma.backupRecord.update({
+          where: { id: bkp.id },
+          data: { status: 'DELETED' },
+        });
+        pruned++;
+      } catch (err: any) {
+        logger.warn(`[BackupService] Could not prune backup ${bkp.backupId}: ${err.message}`);
+      }
+    }
+
+    return pruned;
   }
 
   private formatRecord(record: any): BackupRecordDto {

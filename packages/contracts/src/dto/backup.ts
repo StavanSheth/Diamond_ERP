@@ -2,7 +2,7 @@
  * Phase 5 - Data Preservation & Backup Contracts
  */
 
-export type BackupType = 'FULL' | 'SNAPSHOT' | 'PRE_RESTORE' | 'UNINSTALL';
+export type BackupType = 'FULL' | 'SNAPSHOT' | 'MANUAL' | 'PRE_RESTORE' | 'UNINSTALL';
 
 export type BackupStatus =
   | 'PENDING'
@@ -34,6 +34,7 @@ export interface BackupRecordDto {
 
 export interface CreateBackupRequest {
   databasePath?: string;
+  profileId?: string;
   profileCode?: string;
   backupType?: BackupType;
   customDestinationDir?: string;

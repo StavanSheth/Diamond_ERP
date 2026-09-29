@@ -4,10 +4,10 @@ import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
-import { systemPrisma } from '../../../infrastructure/database/prisma';
+import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
+import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getExportDir,
-  getDatabasesDir,
   getControlDbPath,
   getDatabaseTemplatePath,
   ensureAllDataDirs,
@@ -27,7 +27,7 @@ export class ExportService {
   /**
    * Sanitizes values against CSV/Excel spreadsheet formula injection.
    */
-  private sanitizeCellValue(value: any): any {
+  public sanitizeCellValue(value: any): any {
     if (value === null || value === undefined) return '';
     if (typeof value === 'string') {
       const trimmed = value.trim();
@@ -38,9 +38,60 @@ export class ExportService {
     return value;
   }
 
-  private calculateSha256(filePath: string): string {
+  public calculateSha256(filePath: string): string {
     const fileBuffer = fs.readFileSync(filePath);
     return crypto.createHash('sha256').update(fileBuffer).digest('hex');
+  }
+
+  /**
+   * Authoritative workbook generator from a live PrismaClient.
+   * Shared by standard user export, Settings export, and preservation export.
+   */
+  async generateWorkbook(
+    client: PrismaClient,
+    entityFilter?: string[]
+  ): Promise<ExcelJS.Workbook> {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Diamond ERP V3';
+    workbook.created = new Date();
+
+    const tableEntities = buildExportQueries(client);
+    const requiredEntities = entityFilter && entityFilter.length > 0
+      ? tableEntities.filter((e) => entityFilter.includes(e.name))
+      : tableEntities;
+
+    for (const entity of requiredEntities) {
+      let rows: any[] = [];
+      try {
+        rows = await entity.query();
+      } catch {
+        throw new ConflictError(
+          `Export failed: unable to query table "${entity.name}". All-or-nothing export aborted.`
+        );
+      }
+
+      const sanitizedRows = rows.map((row) => {
+        const clean: Record<string, any> = {};
+        for (const [k, v] of Object.entries(row)) {
+          if (/password|pin|hash|secret|token/i.test(k)) continue;
+          clean[k] = this.sanitizeCellValue(v);
+        }
+        return clean;
+      });
+
+      const sheet = workbook.addWorksheet(entity.name);
+      if (sanitizedRows.length > 0) {
+        const columns = Object.keys(sanitizedRows[0]).map((key) => ({
+          header: key,
+          key,
+          width: Math.max(key.length + 4, 12),
+        }));
+        sheet.columns = columns;
+        sheet.addRows(sanitizedRows);
+      }
+    }
+
+    return workbook;
   }
 
   /**
@@ -69,9 +120,10 @@ export class ExportService {
     const controlDb = getControlDbPath().toLowerCase();
     const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
 
-    // Connect to active profile database
+    // Authoritative resolution of profile business database via DatabaseContextService
     let activeDbPath = req.databasePath;
     let activeRegistry: any = null;
+    let resolvedProfileCode = 'Stavan';
 
     if (activeDbPath) {
       const pathRes = canonicalizeDatabasePath(activeDbPath);
@@ -95,25 +147,34 @@ export class ExportService {
         where: { canonicalPath: canonical },
         include: { profile: true },
       });
+      resolvedProfileCode = activeRegistry?.profile?.code || path.basename(canonical, '.db');
     } else {
-      const registries = await systemPrisma.databaseRegistry.findMany({
-        where: { installationId: install.id, status: 'ACTIVE' },
-        include: { profile: true },
-      });
-      activeRegistry = registries.find(
-        (r) =>
-          fs.existsSync(r.canonicalPath) &&
-          r.canonicalPath.toLowerCase() !== controlDb &&
-          r.canonicalPath.toLowerCase() !== templateDb
-      );
-      if (activeRegistry) {
-        activeDbPath = activeRegistry.canonicalPath;
+      let dbContext: any = null;
+      if (req.profileId) {
+        dbContext = await databaseContextService.getDatabaseForProfile(req.profileId);
+      } else if (req.profileCode) {
+        dbContext = await databaseContextService.getDatabaseForProfileCode(req.profileCode);
       } else {
-        const defaultPath = path.join(getDatabasesDir(), 'Stavan.db');
-        if (fs.existsSync(defaultPath)) {
-          activeDbPath = defaultPath;
+        try {
+          dbContext = await databaseContextService.getActiveProfileDatabase();
+        } catch {
+          const fallback = getActiveProfileOrDefault();
+          if (fallback) {
+            dbContext = await databaseContextService.getDatabaseForProfileCode(fallback);
+          }
         }
       }
+
+      if (!dbContext) {
+        throw new NotFoundError('No active business database found to export.');
+      }
+
+      activeDbPath = dbContext.canonicalPath;
+      resolvedProfileCode = dbContext.profileCode;
+      activeRegistry = await systemPrisma.databaseRegistry.findUnique({
+        where: { databaseId: dbContext.databaseId },
+        include: { profile: true },
+      });
     }
 
     if (!activeDbPath || !fs.existsSync(activeDbPath)) {
@@ -138,9 +199,7 @@ export class ExportService {
     let totalRows = 0;
     let totalSizeBytes = 0;
 
-    // Defined business entities to export from authoritative registry (strictly omitting System/User/Session/Security)
     const tableEntities = buildExportQueries(client);
-
     const requiredEntities = req.tables && req.tables.length > 0
       ? tableEntities.filter((e) => req.tables!.includes(e.name))
       : tableEntities;
@@ -160,42 +219,10 @@ export class ExportService {
 
       // Handle XLSX format
       if (requestedFormat === 'XLSX') {
-        const workbook = new ExcelJS.Workbook();
-        workbook.creator = 'Diamond ERP V3';
-        workbook.created = new Date();
-
-        for (const entity of requiredEntities) {
-          let rows: any[] = [];
-          try {
-            rows = await entity.query();
-          } catch {
-            throw new ConflictError(
-              `Export failed: unable to query table "${entity.name}". All-or-nothing export aborted.`
-            );
-          }
-
-          const sanitizedRows = rows.map((row) => {
-            const clean: Record<string, any> = {};
-            for (const [k, v] of Object.entries(row)) {
-              if (/password|pin|hash|secret|token/i.test(k)) continue;
-              clean[k] = this.sanitizeCellValue(v);
-            }
-            return clean;
-          });
-
-          const sheet = workbook.addWorksheet(entity.name);
-          if (sanitizedRows.length > 0) {
-            const columns = Object.keys(sanitizedRows[0]).map((key) => ({
-              header: key,
-              key,
-              width: Math.max(key.length + 4, 12),
-            }));
-            sheet.columns = columns;
-            sheet.addRows(sanitizedRows);
-          }
-
-          totalRows += sanitizedRows.length;
-        }
+        const workbook = await this.generateWorkbook(
+          client,
+          req.tables && req.tables.length > 0 ? req.tables : undefined
+        );
 
         const xlsxFileName = 'business_data.xlsx';
         const xlsxPath = path.join(bundlePath, xlsxFileName);
@@ -205,18 +232,22 @@ export class ExportService {
         totalSizeBytes = stats.size;
         const sha256 = this.calculateSha256(xlsxPath);
 
+        let xlsxRowCount = 0;
+        workbook.eachSheet((sheet) => {
+          xlsxRowCount += Math.max(0, sheet.rowCount - 1);
+        });
+
         exportedTables.push({
           tableName: 'AllEntities',
-          rowCount: totalRows,
+          rowCount: xlsxRowCount,
           fileName: xlsxFileName,
           sha256,
         });
+        totalRows = xlsxRowCount;
       } else if (requestedFormat === 'SQLITE') {
-        // Handle SQLITE format: clean snapshot of business tables
         const sqliteFileName = 'business_data.db';
         const sqlitePath = path.join(bundlePath, sqliteFileName);
 
-        // Checkpoint before copy
         try {
           await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
         } catch {}
@@ -281,6 +312,15 @@ export class ExportService {
           totalRows += sanitizedRows.length;
           totalSizeBytes += stats.size;
         }
+
+        // Also generate matching plain unencrypted XLSX for universal portability
+        const workbook = await this.generateWorkbook(
+          client,
+          req.tables && req.tables.length > 0 ? req.tables : undefined
+        );
+        const xlsxFileName = 'business_data.xlsx';
+        const xlsxPath = path.join(bundlePath, xlsxFileName);
+        await workbook.xlsx.writeFile(xlsxPath);
       }
 
       // Write Manifest JSON
@@ -296,9 +336,9 @@ export class ExportService {
           installationId: install.installationId,
         },
         database: {
-          databaseId: activeRegistry?.databaseId || 'db_primary',
+          databaseId: activeRegistry?.databaseId || `db_${resolvedProfileCode}`,
           schemaVersion: activeRegistry?.schemaVersion || 1,
-          profileCode: activeRegistry?.profile?.code || 'Stavan',
+          profileCode: resolvedProfileCode,
         },
         exportFormat: requestedFormat,
         format: requestedFormat,
@@ -339,7 +379,6 @@ export class ExportService {
         manifest,
       };
     } catch (err: any) {
-      // Clean up incomplete bundle directory on error
       if (fs.existsSync(bundlePath)) {
         try {
           fs.rmSync(bundlePath, { recursive: true, force: true });
@@ -367,7 +406,6 @@ export class ExportService {
   async verifyExport(exportPathOrId: string): Promise<ExportVerificationDto> {
     let targetPath = path.resolve(exportPathOrId);
     if (!fs.existsSync(targetPath)) {
-      // Check in export dir
       const inExportDir = path.join(getExportDir(), exportPathOrId);
       if (fs.existsSync(inExportDir)) {
         targetPath = inExportDir;
@@ -378,47 +416,48 @@ export class ExportService {
 
     const manifestFile = path.join(targetPath, 'export-manifest.json');
     if (!fs.existsSync(manifestFile)) {
-      return {
-        exportId: path.basename(targetPath),
-        isValid: false,
-        manifestMatches: false,
-        fileCount: 0,
-        verifiedAt: new Date().toISOString(),
-        error: 'Missing export-manifest.json',
-      };
+      throw new ValidationError(`Export manifest not found in bundle: ${manifestFile}`);
     }
 
-    const manifest: ExportManifestDto = JSON.parse(fs.readFileSync(manifestFile, 'utf-8'));
-    let matches = true;
-    let fileCount = 0;
-
-    if (manifest.failedTableCount && manifest.failedTableCount > 0) {
-      matches = false;
+    let manifest: ExportManifestDto;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf-8'));
+    } catch {
+      throw new ValidationError('Export manifest is corrupted or unreadable JSON.');
     }
 
-    for (const table of manifest.tables) {
+    let allFilesPresent = true;
+    let hashesMatch = true;
+    const errors: string[] = [];
+
+    for (const table of manifest.tables || []) {
       const filePath = path.join(targetPath, table.fileName);
       if (!fs.existsSync(filePath)) {
-        matches = false;
-        break;
+        allFilesPresent = false;
+        errors.push(`Exported file missing from bundle: ${table.fileName}`);
+        continue;
       }
-      fileCount++;
+
       const currentHash = this.calculateSha256(filePath);
-      if (currentHash !== table.sha256) {
-        matches = false;
-        break;
+      if (table.sha256 && table.sha256 !== currentHash) {
+        hashesMatch = false;
+        errors.push(`SHA-256 hash mismatch for ${table.fileName}: expected ${table.sha256}, got ${currentHash}`);
       }
     }
+
+    const isValid = allFilesPresent && hashesMatch;
 
     return {
       exportId: manifest.exportId,
-      isValid: matches,
-      manifestMatches: matches,
-      fileCount,
+      isValid,
+      manifestMatches: isValid,
+      hashesMatch,
+      allFilesPresent,
+      fileCount: (manifest.tables || []).length,
+      totalRows: manifest.totalRows,
       tableCount: manifest.tableCount,
-      tablesVerified: matches && (!manifest.failedTableCount || manifest.failedTableCount === 0),
       verifiedAt: new Date().toISOString(),
-      error: !matches ? 'One or more exported files are missing or have mismatched checksums.' : null,
+      errors,
     };
   }
 }

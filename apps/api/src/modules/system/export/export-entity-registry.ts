@@ -50,6 +50,7 @@ export const EXPORT_ENTITY_REGISTRY: ExportEntityDefinition[] = [
   { entityName: 'AuditEvent',       tableName: 'auditEvent',       category: 'SYSTEM',    exportable: false },
   { entityName: 'Sequence',         tableName: 'sequence',         category: 'SYSTEM',    exportable: false },
   { entityName: 'IdempotencyKey',   tableName: 'idempotencyKey',   category: 'SYSTEM',    exportable: false },
+  { entityName: 'Session',          tableName: 'session',          category: 'SYSTEM',    exportable: false },
 ];
 
 /** Column name patterns that must never appear in exports. */

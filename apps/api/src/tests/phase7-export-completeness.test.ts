@@ -147,4 +147,52 @@ describe('Phase 7 — Export Completeness & Registry Integrity', () => {
       fs.rmSync(result.filePath, { recursive: true, force: true });
     } catch {}
   });
+
+  it('P7-EXP-6: Automated CI check: All models in schema.prisma are explicitly classified in EXPORT_ENTITY_REGISTRY', () => {
+    const schemaPath = path.resolve(__dirname, '../../prisma/schema.prisma');
+    expect(fs.existsSync(schemaPath)).toBe(true);
+
+    const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+    const modelMatches = [...schemaContent.matchAll(/^model\s+([A-Za-z0-9_]+)\s*\{/gm)];
+    const schemaModelNames = modelMatches.map((m) => m[1]);
+
+    expect(schemaModelNames.length).toBeGreaterThan(0);
+
+    const registeredEntityNames = new Set(EXPORT_ENTITY_REGISTRY.map((e) => e.entityName.toLowerCase()));
+
+    // Control Plane models defined only in schema.prisma for System DB / control
+    const controlPlaneModels = new Set([
+      'installation',
+      'device',
+      'devicesecurity',
+      'installationuser',
+      'databaseregistry',
+      'backuprecord',
+      'restorerecord',
+      'provisioningoperation',
+      'preservationpackage',
+      'uninstallauthorization',
+      'userprofile',
+      'user',
+      'profile',
+      'exportrecord',
+    ]);
+
+    const unclassifiedModels: string[] = [];
+
+    for (const model of schemaModelNames) {
+      const lower = model.toLowerCase();
+      const isRegistered = registeredEntityNames.has(lower);
+      const isControlPlane = controlPlaneModels.has(lower);
+
+      if (!isRegistered && !isControlPlane) {
+        unclassifiedModels.push(model);
+      }
+    }
+
+    expect(
+      unclassifiedModels,
+      `Unclassified models detected in schema.prisma: ${unclassifiedModels.join(', ')}. Every model must be classified as BUSINESS, REFERENCE, SYSTEM, or CONTROL.`
+    ).toEqual([]);
+  });
 });

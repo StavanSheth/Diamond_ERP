@@ -56,6 +56,9 @@ export function createSettingsRouter(controller: SettingsController): Router {
   if (controller.downloadActiveDatabase) router.get('/backup/download-active', controller.downloadActiveDatabase);
   if (controller.downloadBackup) router.get('/backup/:backupId/download', controller.downloadBackup);
 
+  // Data Health & Diagnostics
+  if (controller.getDataHealth) router.get('/data-health', controller.getDataHealth);
+
   // Factory reset
   router.post('/factory-reset', controller.factoryReset);
 

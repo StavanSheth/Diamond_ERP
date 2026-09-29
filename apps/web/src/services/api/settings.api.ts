@@ -114,5 +114,10 @@ export const settingsApi = {
       method: 'DELETE',
     });
   },
+
+  /** Get system and database health diagnostics */
+  getDataHealth(): Promise<{ success: boolean; data: any }> {
+    return request('/api/settings/data-health');
+  },
 };
 
