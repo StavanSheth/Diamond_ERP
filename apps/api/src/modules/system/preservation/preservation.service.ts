@@ -317,7 +317,7 @@ export class PreservationService {
               schemaVersion: ctx.schemaVersion,
             });
           }
-        } catch {}
+        } catch { }
       }
 
       if (databasesToPreserve.length === 0) {
@@ -325,8 +325,6 @@ export class PreservationService {
       }
     }
 
-    // COMPATIBILITY_ONLY (Section 15): Legacy single-database consumers inspect top-level fields.
-    // Authoritative multi-profile preservation data resides in `databases[]` and `profiles/${profileCode}/`.
     const primaryDb = databasesToPreserve[0];
     const canonicalSource = primaryDb.canonicalPath;
 
@@ -484,7 +482,7 @@ export class PreservationService {
               columnNames = colInfo
                 .map((c) => c.name)
                 .filter((k) => !/password|pin|hash|secret|token/i.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
-            } catch {}
+            } catch { }
 
             const sanitizedRows = rows.map((row) => {
               const clean: Record<string, any> = {};
@@ -677,19 +675,13 @@ export class PreservationService {
           sizeBytes: primaryXlsxSize,
         },
       };
-      const tmpExportManifestPath = `${exportManifestPath}.tmp_${crypto.randomUUID()}`;
-      fs.writeFileSync(tmpExportManifestPath, JSON.stringify(exportManifest, null, 2), 'utf-8');
-      fs.renameSync(tmpExportManifestPath, exportManifestPath);
+      fs.writeFileSync(exportManifestPath, JSON.stringify(exportManifest, null, 2), 'utf-8');
 
       const preservationManifestPath = path.join(bundleDir, 'preservation-manifest.json');
       const preservationManifest = {
         formatVersion: 2,
         packageId,
         createdAt: new Date().toISOString(),
-        compatibility: {
-          note: 'COMPATIBILITY_ONLY: Top-level database and artifacts fields exist for backwards compatibility. Authoritative multi-profile preservation data resides in databases[] and profiles/${profileCode}/',
-          databaseId: primaryDb.databaseId,
-        },
         installation: {
           installationId: install.installationId,
           appVersion: install.appVersion,
@@ -723,9 +715,7 @@ export class PreservationService {
         status: 'VERIFIED',
         dataDirectoryPreserved: true,
       };
-      const tmpPreservationManifestPath = `${preservationManifestPath}.tmp_${crypto.randomUUID()}`;
-      fs.writeFileSync(tmpPreservationManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
-      fs.renameSync(tmpPreservationManifestPath, preservationManifestPath);
+      fs.writeFileSync(preservationManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
 
       const manifestSha256 = this.calculateSha256(preservationManifestPath);
 
@@ -773,7 +763,7 @@ export class PreservationService {
           update: { value: destinationRoot },
           create: { key: 'lastPreservationDestination', value: destinationRoot },
         });
-      } catch {}
+      } catch { }
 
       logger.info(`[PreservationService] Multi-database preservation package ${packageId} created and verified for ${manifestDatabases.length} databases at ${bundleDir}`);
 
@@ -798,7 +788,7 @@ export class PreservationService {
       if (fs.existsSync(bundleDir)) {
         try {
           fs.rmSync(bundleDir, { recursive: true, force: true });
-        } catch {}
+        } catch { }
       }
 
       await systemPrisma.preservationPackage.update({
@@ -807,7 +797,7 @@ export class PreservationService {
           status: 'FAILED',
           errorMessage: err?.message || 'Unknown preservation error',
         },
-      }).catch(() => {});
+      }).catch(() => { });
 
       await systemPrisma.auditEvent.create({
         data: {

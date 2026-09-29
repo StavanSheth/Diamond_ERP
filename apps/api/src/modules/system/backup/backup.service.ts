@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { systemPrisma } from '../../../infrastructure/database/prisma';
+import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
 import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getBackupsDir,
@@ -72,7 +72,14 @@ export class BackupService {
       } else if (reqBody.profileCode) {
         dbContext = await databaseContextService.getDatabaseForProfileCode(reqBody.profileCode);
       } else {
-        dbContext = await databaseContextService.getActiveProfileDatabase();
+        try {
+          dbContext = await databaseContextService.getActiveProfileDatabase();
+        } catch {
+          const fallbackProfile = getActiveProfileOrDefault();
+          if (fallbackProfile) {
+            dbContext = await databaseContextService.getDatabaseForProfileCode(fallbackProfile);
+          }
+        }
       }
 
       if (!dbContext) {
@@ -300,7 +307,7 @@ export class BackupService {
         if (fs.existsSync(stagedDbPath)) fs.unlinkSync(stagedDbPath);
         if (fs.existsSync(stagedManifestPath)) fs.unlinkSync(stagedManifestPath);
         if (fs.existsSync(stagingDir)) fs.rmdirSync(stagingDir);
-      } catch {}
+      } catch { }
 
       // 11. Mark VERIFIED in Database
       backupRecord = await systemPrisma.backupRecord.update({
@@ -332,7 +339,7 @@ export class BackupService {
 
       // Safe retention: prune old backups beyond retention limit (keep minimum 5, never delete latest/only verified)
       if (profileId) {
-        await this.pruneBackups(profileId, 5).catch(() => {});
+        await this.pruneBackups(profileId, 5).catch(() => { });
       }
 
       return this.formatRecord(backupRecord);
@@ -348,7 +355,7 @@ export class BackupService {
         if (fs.existsSync(manifestPath)) {
           fs.unlinkSync(manifestPath);
         }
-      } catch {}
+      } catch { }
 
       await systemPrisma.backupRecord.update({
         where: { id: backupRecord.id },
@@ -412,7 +419,7 @@ export class BackupService {
     if (fs.existsSync(manifestPath)) {
       try {
         manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      } catch {}
+      } catch { }
     }
 
     const stats = fs.statSync(targetPath);
@@ -453,7 +460,7 @@ export class BackupService {
       try {
         const manifest: BackupManifestDto = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
         expectedHash = manifest.artifact.sha256;
-      } catch {}
+      } catch { }
     }
 
     const currentHash = this.calculateSha256(targetPath);
@@ -530,10 +537,10 @@ export class BackupService {
             try {
               fs.unlinkSync(fullPath);
               logger.info(`[BackupService] Purged stale partial backup: ${file}`);
-            } catch {}
+            } catch { }
           }
         }
-      } catch {}
+      } catch { }
     }
 
     const stagingDir = getBackupStagingDir();
@@ -545,9 +552,9 @@ export class BackupService {
           try {
             fs.rmSync(fullPath, { recursive: true, force: true });
             logger.info(`[BackupService] Purged stale backup staging folder: ${entry}`);
-          } catch {}
+          } catch { }
         }
-      } catch {}
+      } catch { }
     }
   }
 

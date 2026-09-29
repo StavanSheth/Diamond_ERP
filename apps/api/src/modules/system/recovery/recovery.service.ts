@@ -102,19 +102,19 @@ export class RecoveryService {
       reg?.profile ||
       (resolvedProfileId || sourceDbPath
         ? await systemPrisma.profile.findFirst({
-            where: {
-              OR: [
-                ...(resolvedProfileId ? [{ id: resolvedProfileId }] : []),
-                ...(sourceDbPath ? [{ dbPath: sourceDbPath }] : []),
-                { dbPath: canonical },
-              ],
+          where: {
+            OR: [
+              ...(resolvedProfileId ? [{ id: resolvedProfileId }] : []),
+              ...(sourceDbPath ? [{ dbPath: sourceDbPath }] : []),
+              { dbPath: canonical },
+            ],
+          },
+          include: {
+            userProfiles: {
+              include: { user: true },
             },
-            include: {
-              userProfiles: {
-                include: { user: true },
-              },
-            },
-          })
+          },
+        })
         : null);
 
     if (profile) {
@@ -233,7 +233,7 @@ export class RecoveryService {
           if (hasManifest) {
             try {
               manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-            } catch {}
+            } catch { }
           }
 
           let status: any = 'ACTIVE';
@@ -320,7 +320,7 @@ export class RecoveryService {
     if (hasManifest) {
       try {
         manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      } catch {}
+      } catch { }
     }
 
     const validation = await databaseValidationService.validateDatabase(canonical);
@@ -403,7 +403,7 @@ export class RecoveryService {
       try {
         const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
         manifestSchemaVersion = m.database?.schemaVersion;
-      } catch {}
+      } catch { }
     }
 
     const validation = await databaseValidationService.validateDatabase(canonicalCandidate);
@@ -485,7 +485,7 @@ export class RecoveryService {
         metadata: JSON.stringify({ restoreId, candidatePath: canonicalCandidate, targetProfileCode }),
         performedBy: 'system',
       },
-    }).catch(() => {});
+    }).catch(() => { });
 
     return {
       restoreId,
@@ -548,7 +548,7 @@ export class RecoveryService {
     if (fs.existsSync(candidateManifestPath)) {
       try {
         candidateManifest = JSON.parse(fs.readFileSync(candidateManifestPath, 'utf-8'));
-      } catch {}
+      } catch { }
     }
     const ownershipInfo = await this.resolveOwnership(restoreRecord.candidatePath, candidateManifest, install);
 
@@ -597,7 +597,7 @@ export class RecoveryService {
         metadata: JSON.stringify({ restoreId: req.restoreId, targetUserId: req.targetUserId, targetProfileCode: req.targetProfileCode }),
         performedBy,
       },
-    }).catch(() => {});
+    }).catch(() => { });
 
     let rollbackBackupPath: string | null = null;
     let rollbackBackupCreated = false;
@@ -661,7 +661,7 @@ export class RecoveryService {
         logger.error(`[RecoveryService] Post-restore check failed! Rolling back...`, verifyErr);
         if (swapOldPath && fs.existsSync(swapOldPath)) {
           if (fs.existsSync(canonicalTarget)) {
-            try { fs.unlinkSync(canonicalTarget); } catch {}
+            try { fs.unlinkSync(canonicalTarget); } catch { }
           }
           fs.renameSync(swapOldPath, canonicalTarget);
           swapOldPath = null;
@@ -686,7 +686,7 @@ export class RecoveryService {
             metadata: JSON.stringify({ restoreId: req.restoreId, error: verifyErr?.message }),
             performedBy,
           },
-        }).catch(() => {});
+        }).catch(() => { });
 
         throw new ConflictError(
           `Restoration failed post-activation checks. Current database was safely rolled back from backup.`
@@ -697,7 +697,7 @@ export class RecoveryService {
 
       // Unlink swapOldPath upon verified activation
       if (swapOldPath && fs.existsSync(swapOldPath)) {
-        try { fs.unlinkSync(swapOldPath); } catch {}
+        try { fs.unlinkSync(swapOldPath); } catch { }
         swapOldPath = null;
       }
 
@@ -803,7 +803,7 @@ export class RecoveryService {
       try {
         if (fs.existsSync(stagedDbPath)) fs.unlinkSync(stagedDbPath);
         if (fs.existsSync(stagingDir)) fs.rmdirSync(stagingDir);
-      } catch {}
+      } catch { }
 
       // 7. Mark VERIFIED
       await systemPrisma.restoreRecord.update({
@@ -824,7 +824,7 @@ export class RecoveryService {
           metadata: JSON.stringify({ restoreId: req.restoreId, targetPath: canonicalTarget }),
           performedBy,
         },
-      }).catch(() => {});
+      }).catch(() => { });
 
       await systemPrisma.auditEvent.create({
         data: {
@@ -859,7 +859,7 @@ export class RecoveryService {
           metadata: JSON.stringify({ restoreId: req.restoreId, error: err?.message }),
           performedBy,
         },
-      }).catch(() => {});
+      }).catch(() => { });
       throw err;
     } finally {
       // Clean up swap file if somehow still existing on error
@@ -868,7 +868,7 @@ export class RecoveryService {
           if (!fs.existsSync(canonicalTarget)) {
             fs.renameSync(swapOldPath, canonicalTarget);
           }
-        } catch {}
+        } catch { }
       }
       this.activeRestoreLocks.delete(canonicalTarget);
     }
@@ -954,7 +954,7 @@ export class RecoveryService {
           try {
             fs.rmSync(stagingDir, { recursive: true, force: true });
             cleanedStagingCount++;
-          } catch {}
+          } catch { }
         }
         reconciledCount++;
       }
@@ -983,7 +983,7 @@ export class RecoveryService {
           .readdirSync(databasesDir)
           .filter((f) => (f.endsWith('.db') || f.endsWith('.sqlite')) && !f.endsWith('.partial') && !f.includes('.swap_old_'));
         previousDatabasesCount = dbFiles.length;
-      } catch {}
+      } catch { }
     }
 
     let previousBackupsCount = 0;
@@ -993,7 +993,7 @@ export class RecoveryService {
           .readdirSync(backupsDir)
           .filter((f) => (f.endsWith('.db') || f.endsWith('.sqlite')) && !f.endsWith('.partial'));
         previousBackupsCount = bkpFiles.length;
-      } catch {}
+      } catch { }
     }
 
     // Check existing users and database registries in Control DB
@@ -1036,165 +1036,6 @@ export class RecoveryService {
         ? `Detected ${previousDatabasesCount} existing database(s), ${previousBackupsCount} backup(s), and ${existingUsersCount} registered user(s). Classification: ${classification}.`
         : 'Clean first-time installation.',
     };
-  }
-
-  /**
-   * Section 27: Detailed Reinstall & Database Classification Taxonomy
-   * Classifies all profiles and physical databases on disk into:
-   * KNOWN_PROFILE, KNOWN_DATABASE, ORPHAN_DATABASE, ORPHAN_PROFILE,
-   * MISSING_DATABASE, CORRUPTED_DATABASE, DUPLICATE_DATABASE, UNSUPPORTED_DATABASE.
-   */
-  async classifyReinstallDatabases(): Promise<{
-    items: Array<{
-      target: string;
-      type: 'PROFILE' | 'DATABASE';
-      profileId?: string;
-      profileCode?: string;
-      canonicalPath?: string;
-      classification:
-        | 'KNOWN_PROFILE'
-        | 'KNOWN_DATABASE'
-        | 'ORPHAN_DATABASE'
-        | 'ORPHAN_PROFILE'
-        | 'MISSING_DATABASE'
-        | 'CORRUPTED_DATABASE'
-        | 'DUPLICATE_DATABASE'
-        | 'UNSUPPORTED_DATABASE';
-      reason: string;
-      recoverable: boolean;
-    }>;
-  }> {
-    ensureAllDataDirs();
-    const items: any[] = [];
-    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
-    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
-    const databasesDir = getDatabasesDir();
-
-    // 1. Inspect all Profiles and their Registries in system.db
-    const profiles = await systemPrisma.profile.findMany({
-      include: { databaseRegistries: true },
-    });
-
-    const registeredCanonicalPaths = new Map<string, string[]>();
-
-    for (const prof of profiles) {
-      const activeRegistries = (prof.databaseRegistries || []).filter((r: any) => r.status === 'ACTIVE');
-      if (activeRegistries.length === 0) {
-        items.push({
-          target: prof.code,
-          type: 'PROFILE',
-          profileId: prof.id,
-          profileCode: prof.code,
-          classification: 'ORPHAN_PROFILE',
-          reason: `Profile "${prof.code}" exists in system.db but has no active registered database registry.`,
-          recoverable: true,
-        });
-        continue;
-      }
-
-      for (const reg of activeRegistries) {
-        const canonical = path.resolve(reg.canonicalPath);
-        const lower = canonical.toLowerCase();
-        const existing = registeredCanonicalPaths.get(lower) || [];
-        existing.push(prof.code);
-        registeredCanonicalPaths.set(lower, existing);
-
-        if (!fs.existsSync(canonical)) {
-          items.push({
-            target: prof.code,
-            type: 'PROFILE',
-            profileId: prof.id,
-            profileCode: prof.code,
-            canonicalPath: canonical,
-            classification: 'MISSING_DATABASE',
-            reason: `Registered database file for profile "${prof.code}" is missing on disk: ${canonical}`,
-            recoverable: false,
-          });
-          continue;
-        }
-
-        const val = await databaseValidationService.validateDatabase(canonical);
-        if (!val.isValid) {
-          const classification = val.status === 'UNSUPPORTED' ? 'UNSUPPORTED_DATABASE' : 'CORRUPTED_DATABASE';
-          items.push({
-            target: prof.code,
-            type: 'DATABASE',
-            profileId: prof.id,
-            profileCode: prof.code,
-            canonicalPath: canonical,
-            classification,
-            reason: val.details || val.error || 'Database failed validation checks.',
-            recoverable: false,
-          });
-        } else {
-          items.push({
-            target: prof.code,
-            type: 'PROFILE',
-            profileId: prof.id,
-            profileCode: prof.code,
-            canonicalPath: canonical,
-            classification: 'KNOWN_PROFILE',
-            reason: `Active profile with healthy, validated database.`,
-            recoverable: true,
-          });
-          items.push({
-            target: canonical,
-            type: 'DATABASE',
-            profileId: prof.id,
-            profileCode: prof.code,
-            canonicalPath: canonical,
-            classification: 'KNOWN_DATABASE',
-            reason: `Registered, healthy database attached to profile "${prof.code}".`,
-            recoverable: true,
-          });
-        }
-      }
-    }
-
-    // Check duplicate paths
-    for (const [lowerPath, codes] of registeredCanonicalPaths.entries()) {
-      if (codes.length > 1) {
-        items.push({
-          target: lowerPath,
-          type: 'DATABASE',
-          canonicalPath: lowerPath,
-          classification: 'DUPLICATE_DATABASE',
-          reason: `Physical database is simultaneously mapped to multiple profiles: ${codes.join(', ')}`,
-          recoverable: false,
-        });
-      }
-    }
-
-    // 2. Inspect physical files on disk for orphan databases
-    if (fs.existsSync(databasesDir)) {
-      const files = fs.readdirSync(databasesDir);
-      for (const file of files) {
-        if (!file.endsWith('.db') && !file.endsWith('.sqlite')) continue;
-        const fullPath = path.resolve(databasesDir, file);
-        const lower = fullPath.toLowerCase();
-        if (lower === controlDb || lower === templateDb) continue;
-
-        if (!registeredCanonicalPaths.has(lower)) {
-          const val = await databaseValidationService.validateDatabase(fullPath);
-          let classification: any = 'ORPHAN_DATABASE';
-          if (!val.isValid) {
-            classification = val.status === 'UNSUPPORTED' ? 'UNSUPPORTED_DATABASE' : 'CORRUPTED_DATABASE';
-          }
-          items.push({
-            target: path.basename(fullPath),
-            type: 'DATABASE',
-            canonicalPath: fullPath,
-            classification,
-            reason: val.isValid
-              ? `Unregistered database file discovered on disk with valid ERP data.`
-              : (val.details || 'Corrupted or unsupported unregistered database file.'),
-            recoverable: val.isValid,
-          });
-        }
-      }
-    }
-
-    return { items };
   }
 
   /**
@@ -1289,7 +1130,7 @@ export class RecoveryService {
     const installFilePath = path.join(getConfigDir(), '.installation-id');
     try {
       fs.writeFileSync(installFilePath, updated.installationId, { encoding: 'utf-8', mode: 0o600 });
-    } catch {}
+    } catch { }
 
     await systemPrisma.auditEvent.create({
       data: {

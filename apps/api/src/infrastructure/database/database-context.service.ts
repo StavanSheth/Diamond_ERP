@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
-import { 
-  systemPrisma, 
-  getClientForProfile, 
-  getActiveProfile, 
+import {
+  systemPrisma,
+  getClientForProfile,
+  getActiveProfile,
   registerProfile,
   disconnectAllClients,
 } from './prisma';
@@ -176,19 +176,17 @@ export class DatabaseContextService {
       throw new ConflictError('Cannot use template database (template.db) as a profile business database.');
     }
 
-    // Invariant E: A physical database path can belong to ONLY ONE Profile (case-insensitive for Windows)
-    const allOtherRegistries = await systemPrisma.databaseRegistry.findMany({
+    // Invariant E: A physical database path can belong to ONLY ONE Profile
+    const conflictingRegistries = await systemPrisma.databaseRegistry.findMany({
       where: {
+        canonicalPath,
         NOT: { profileId: profile.id },
       },
       include: { profile: true },
     });
 
-    const conflict = allOtherRegistries.find(
-      (r) => path.resolve(r.canonicalPath).toLowerCase() === path.resolve(canonicalPath).toLowerCase()
-    );
-
-    if (conflict) {
+    if (conflictingRegistries.length > 0) {
+      const conflict = conflictingRegistries[0];
       throw new ConflictError(
         `Database ownership conflict: Path "${canonicalPath}" is already attached to profile "${conflict.profile?.code || conflict.profileId}". Two profiles cannot share the same database file.`
       );
@@ -258,24 +256,10 @@ export class DatabaseContextService {
     }
     const { canonicalPath } = pathRes;
 
-    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
-    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
-    const lowerPath = canonicalPath.toLowerCase();
-
-    if (lowerPath === controlDb) {
-      throw new ConflictError('Cannot use system control database (system.db) as a profile business database.');
-    }
-    if (templateDb && lowerPath === templateDb) {
-      throw new ConflictError('Cannot use template database (template.db) as a profile business database.');
-    }
-
-    const allRegistries = await systemPrisma.databaseRegistry.findMany({
+    const existing = await systemPrisma.databaseRegistry.findUnique({
+      where: { canonicalPath },
       include: { profile: true },
     });
-
-    const existing = allRegistries.find(
-      (r) => path.resolve(r.canonicalPath).toLowerCase() === path.resolve(canonicalPath).toLowerCase()
-    );
 
     if (existing && existing.databaseId !== excludeDatabaseId) {
       if (existing.profileId) {

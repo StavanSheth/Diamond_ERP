@@ -12,100 +12,18 @@
 
 ---
 
-## End-to-End Architectural Data Flows
+## Resolution Chain
 
-### 1. Profile → DB → Prisma → API → Frontend
-```text
-Profile ID / Profile Code
-        ↓
-DatabaseContextService.assertValidBusinessDatabaseContext()
-        ↓
-system.db `DatabaseRegistry` (canonicalPath, unique, active)
-        ↓
-Prisma Client Cache (`file:${canonicalPath}`)
-        ↓
-API Controller / Service
-        ↓
-Frontend (`X-Profile-Id` header + `profileChanged` custom event)
-        ↓
-UI Unmount/Remount via `key={profileId}` + isolated cache refetch
-```
-
-### 2. DB → Backup
-```text
-Customer Backup Request
-        ↓
-DatabaseContextService.getDatabaseForProfile()
-        ↓
-Authoritative BackupService (lock acquired, WAL checkpoint)
-        ↓
-VACUUM INTO staging
-        ↓
-SQLite header + PRAGMA integrity_check + PRAGMA foreign_key_check + SHA-256
-        ↓
-Move to `backups/` + register BackupRecord (status = 'VERIFIED')
-```
-
-### 3. DB → CSV & DB → XLSX
-```text
-Export Request
-        ↓
-DatabaseContextService.getDatabaseForProfile()
-        ↓
-Materialize In-Memory Snapshot Map via EXPORT_ENTITY_REGISTRY
-        ↓
-Generate CSV files (ORDER BY primary key, explicit headers)
-        ↓
-Generate business_data.xlsx (identical materialized rows)
-        ↓
-SemanticVerificationService: Live DB ↔ CSV ↔ XLSX
-        ↓
-Atomic Write of export-manifest.json (.tmp → fsync → rename)
-```
-
-### 4. DB → Preservation → Uninstall
-```text
-Windows Uninstall / Preservation Request
-        ↓
-PreservationService: Multi-Profile Discovery
-        ↓
-Iterate each Profile:
-  - Take VERIFIED DB Backup
-  - Materialize Snapshot Map
-  - Generate CSV & XLSX
-  - Run Semantic Verification (DB ↔ CSV ↔ XLSX)
-  - Write profile-manifest.json
-        ↓
-Write Root preservation-manifest.json (atomic)
-        ↓
-UninstallPreflightService verifies entire package
-        ↓
-Issue One-Time Token (`uninstall-authorization.json`)
-        ↓
-Windows Uninstaller consumes token → Removes binaries → Preserves customer AppData
-```
-
-### 5. Uninstall → Reinstall → Recovery
-```text
-Reinstall / Startup
-        ↓
-Detect Existing AppData (`system.db`, `databases/`, `backups/`)
-        ↓
-RecoveryService.classifyReinstallDatabases():
-  - KNOWN_PROFILE
-  - KNOWN_DATABASE
-  - ORPHAN_DATABASE
-  - ORPHAN_PROFILE
-  - MISSING_DATABASE
-  - CORRUPTED_DATABASE
-  - DUPLICATE_DATABASE
-  - UNSUPPORTED_DATABASE
-        ↓
-Valid Existing Data?
-  → Reconnect Existing Profile / Database (never create blank duplicate)
-Orphan Data?
-  → Require Explicit Attachment Preview & User Confirmation
-```
+`
+HTTP Request (x-profile-code header)
+  Profile Middleware
+  DatabaseContextService.getDatabaseForProfileCode()
+  system.db Profile record + DatabaseRegistry record
+  canonicalPath (validated, ownership-checked)
+  Prisma client (profile-scoped)
+  Profile SQLite .db file
+  Business data
+`
 
 ---
 
