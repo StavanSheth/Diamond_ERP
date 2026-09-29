@@ -25,12 +25,12 @@ function checkIsProduction(): boolean {
 }
 
 function getDefaultDataRoot(): string {
-  if (checkIsProduction()) {
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    return path.join(localAppData, 'DiamondERP');
+  // Test environment without explicit override uses repo-local sandbox
+  if (process.env.NODE_ENV === 'test' && !overriddenDataRoot && !process.env.DIAMOND_DATA_DIR) {
+    return path.resolve(__dirname, '../../../');
   }
-  // Development mode: backend root directory (apps/api)
-  return path.resolve(__dirname, '../../../');
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  return path.join(localAppData, 'DiamondERP');
 }
 
 let overriddenDataRoot: string | null = null;
@@ -88,22 +88,20 @@ export function getSystemDatabasePath(): string {
   if (process.env.DIAMOND_SYSTEM_DB) {
     return path.resolve(process.env.DIAMOND_SYSTEM_DB);
   }
-  if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
+  // In automated test environment, allow DATABASE_URL to isolate test control DB
+  if (process.env.NODE_ENV === 'test' && process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
     const rawPath = process.env.DATABASE_URL.slice(5);
     if (!path.isAbsolute(rawPath)) {
       return path.resolve(__dirname, '../../../prisma', rawPath);
     }
     return path.resolve(rawPath);
   }
-  if (checkIsProduction() || process.env.DIAMOND_DATA_DIR || overriddenDataRoot) {
-    // If system/ subdirectory exists, prioritize system/system.db, else root system.db
-    const systemSubdir = path.join(getDataRoot(), 'system', 'system.db');
-    if (fs.existsSync(systemSubdir)) {
-      return systemSubdir;
-    }
-    return path.join(getDataRoot(), 'system.db');
+  // Authoritative system control database: %LOCALAPPDATA%\DiamondERP\system.db
+  const systemSubdir = path.join(getDataRoot(), 'system', 'system.db');
+  if (fs.existsSync(systemSubdir)) {
+    return systemSubdir;
   }
-  return path.resolve(__dirname, '../../../system.db');
+  return path.join(getDataRoot(), 'system.db');
 }
 
 /**
@@ -118,10 +116,7 @@ export function getDatabaseRoot(): string {
   if (process.env.DIAMOND_DB_DIR) {
     return path.resolve(process.env.DIAMOND_DB_DIR);
   }
-  if (checkIsProduction() || process.env.DIAMOND_DATA_DIR || overriddenDataRoot) {
-    return path.join(getDataRoot(), 'databases');
-  }
-  return path.resolve(__dirname, '../../../');
+  return path.join(getDataRoot(), 'databases');
 }
 
 export const getDatabasesDir = getDatabaseRoot;
@@ -157,10 +152,7 @@ export function getUploadRoot(): string {
   if (process.env.DIAMOND_UPLOADS_DIR) {
     return path.resolve(process.env.DIAMOND_UPLOADS_DIR);
   }
-  if (checkIsProduction() || process.env.DIAMOND_DATA_DIR || overriddenDataRoot) {
-    return path.join(getDataRoot(), 'uploads', 'certs');
-  }
-  return path.resolve(__dirname, '../../../uploads/certs');
+  return path.join(getDataRoot(), 'uploads', 'certs');
 }
 
 export const getUploadsDir = getUploadRoot;

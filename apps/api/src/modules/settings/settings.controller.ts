@@ -680,6 +680,11 @@ export class SettingsController {
         where: { userId: user.id, profileId: profile.id },
       });
 
+      // Enforce: Each user is attached with only one DB and no other DB
+      await systemPrisma.userProfile.deleteMany({
+        where: { userId: user.id, profileId: { not: profile.id } },
+      });
+
       if (existingLink) {
         if (!existingLink.isActive) {
           await systemPrisma.userProfile.update({

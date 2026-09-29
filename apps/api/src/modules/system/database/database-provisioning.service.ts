@@ -658,7 +658,14 @@ export class DatabaseProvisioningService {
           },
         });
 
-        // Associating SOLELY the target user (Strict User-DB isolation)
+        // Associating SOLELY the target user (Strict User-DB isolation: each user attached with only one DB)
+        await tx.userProfile.deleteMany({
+          where: {
+            userId: targetUserId,
+            profileId: { not: profile.id },
+          },
+        });
+
         await tx.userProfile.upsert({
           where: {
             userId_profileId: {

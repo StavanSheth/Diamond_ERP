@@ -355,7 +355,10 @@ export class AuthService {
       });
 
       // Ensure default profiles exist in Profile table (only default when profileCodes is omitted and defaultProfile is set)
-      const targetProfiles = profileCodes !== undefined ? profileCodes : (defaultProfile ? [defaultProfile] : []);
+      // Enforce: Each user will be attached with only one DB and no other DB
+      const targetProfiles = profileCodes !== undefined
+        ? profileCodes.slice(0, 1)
+        : (defaultProfile ? [defaultProfile] : []);
       for (const pCode of targetProfiles) {
         let prof = await tx.profile.findUnique({ where: { code: pCode } });
         if (!prof) {

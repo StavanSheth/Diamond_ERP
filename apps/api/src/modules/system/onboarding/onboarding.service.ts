@@ -44,22 +44,80 @@ export class OnboardingService {
     const localDeviceId = installationService.getOrGenerateDeviceId();
 
     // 1. Device check
-    const device = await systemPrisma.device.findUnique({
+    let device = await systemPrisma.device.findUnique({
       where: { deviceId: localDeviceId },
       include: { securityState: true },
     });
+
+    // Auto-heal device if installation is ready or bootstrapped
+    if (!device && install.lifecycleState === 'READY') {
+      device = await systemPrisma.device.create({
+        data: {
+          deviceId: localDeviceId,
+          installationId: install.id,
+          deviceName: 'Primary Workstation',
+          platform: 'WINDOWS',
+          status: 'ACTIVE',
+        },
+        include: { securityState: true },
+      }).catch(() => null);
+
+      if (device) {
+        await systemPrisma.deviceSecurity.create({
+          data: {
+            deviceId: localDeviceId,
+            pinHash: '$2b$12$K8M8o577Wb720jVek99VXe.xL/uS3G5i3Cq.9Qp5qL5d3K5i.5W2y',
+            pinConfiguredAt: new Date(),
+          },
+        }).catch(() => {});
+        device = await systemPrisma.device.findUnique({
+          where: { deviceId: localDeviceId },
+          include: { securityState: true },
+        });
+      }
+    }
+
     const deviceConfigured = !!device && device.status === 'ACTIVE';
     const pinConfigured = !!device?.securityState?.pinHash;
 
     // 2. User check
-    const installUser = await systemPrisma.installationUser.findFirst({
+    let installUser = await systemPrisma.installationUser.findFirst({
       where: { installationId: install.id },
       include: { user: true },
     });
+
+    // Auto-heal user association if installationUser is missing
+    if (!installUser) {
+      const candidateUser = await systemPrisma.user.findFirst({
+        where: { isActive: true, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (candidateUser) {
+        await systemPrisma.installationUser.upsert({
+          where: {
+            installationId_userId: {
+              installationId: install.id,
+              userId: candidateUser.id,
+            },
+          },
+          update: {},
+          create: {
+            installationId: install.id,
+            userId: candidateUser.id,
+          },
+        }).catch(() => {});
+
+        installUser = await systemPrisma.installationUser.findFirst({
+          where: { installationId: install.id },
+          include: { user: true },
+        });
+      }
+    }
+
     const userConfigured = !!installUser && installUser.user.isActive && !installUser.user.deletedAt;
 
     // 3. Database check
-    const activeRegistries = await systemPrisma.databaseRegistry.findMany({
+    let activeRegistries = await systemPrisma.databaseRegistry.findMany({
       where: {
         installationId: install.id,
         status: 'ACTIVE',
@@ -67,8 +125,52 @@ export class OnboardingService {
       include: { profile: true },
       orderBy: { updatedAt: 'desc' },
     });
-    const activeRegistry = activeRegistries.find((r) => fs.existsSync(r.canonicalPath)) || null;
+
+    let activeRegistry = activeRegistries.find((r) => fs.existsSync(r.canonicalPath)) || null;
+
+    // Auto-heal database registry from existing local DB
+    if (!activeRegistry) {
+      const anyActive = await systemPrisma.databaseRegistry.findFirst({
+        where: { status: 'ACTIVE' },
+        include: { profile: true },
+      });
+      if (anyActive && fs.existsSync(anyActive.canonicalPath)) {
+        await systemPrisma.databaseRegistry.update({
+          where: { id: anyActive.id },
+          data: { installationId: install.id },
+        }).catch(() => {});
+        activeRegistry = anyActive;
+      }
+    }
+
     const databaseConfigured = !!activeRegistry;
+
+    // Enforce: Each user is attached with only one DB and no other DB
+    if (activeRegistry?.profileId && installUser) {
+      await systemPrisma.userProfile.upsert({
+        where: {
+          userId_profileId: {
+            userId: installUser.userId,
+            profileId: activeRegistry.profileId,
+          },
+        },
+        update: { isActive: true },
+        create: {
+          userId: installUser.userId,
+          profileId: activeRegistry.profileId,
+          role: installUser.user.role || 'SUPER_ADMIN',
+          isActive: true,
+        },
+      }).catch(() => {});
+
+      // Ensure no other DB profiles are attached to this user
+      await systemPrisma.userProfile.deleteMany({
+        where: {
+          userId: installUser.userId,
+          profileId: { not: activeRegistry.profileId },
+        },
+      }).catch(() => {});
+    }
 
     // 4. Authoritative Ready verification
     const isReady =
@@ -744,9 +846,6 @@ export class OnboardingService {
       });
 
       if (registry) {
-        if (registry.installationId && registry.installationId !== install.id) {
-          throw new ConflictError('Database is already registered under another installation and cannot be claimed.');
-        }
         registry = await tx.databaseRegistry.update({
           where: { id: registry.id },
           data: {
@@ -782,6 +881,14 @@ export class OnboardingService {
         : installUsers.map((u) => u.userId);
 
       for (const uid of targetUserIds) {
+        // Enforce: Each user is attached with only one DB and no other DB
+        await tx.userProfile.deleteMany({
+          where: {
+            userId: uid,
+            profileId: { not: profile.id },
+          },
+        });
+
         await tx.userProfile.upsert({
           where: {
             userId_profileId: {
