@@ -129,8 +129,9 @@ export const api = {
   createBackup: backupApi.createBackup,
   recovery: recoveryApi,
 
-  // Settings Data Health
+  // Settings Data Health & Desktop Folder Openers
   getDataHealth: settingsApi.getDataHealth,
+  openFolder: settingsApi.openFolder,
 
   // Phase 7 Uninstall Safety Gate & Preservation
   uninstall: uninstallApi,

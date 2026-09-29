@@ -13,6 +13,7 @@ import { backupService } from '../system/backup/backup.service';
 import { databaseProvisioningService } from '../system/database/database-provisioning.service';
 import { databaseContextService } from '../../infrastructure/database/database-context.service';
 import { databaseHealthService } from '../system/database/database-health.service';
+import { dataLocationService } from '../../infrastructure/data';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
   const sanitized: Record<string, any> = {};
@@ -2112,6 +2113,60 @@ export class SettingsController {
     try {
       const report = await databaseHealthService.checkHealth();
       res.json({ success: true, data: report });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/settings/open-folder
+   * Opens data, backup, export, or log directory in Windows Explorer (Section 70).
+   */
+  openFolder = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { folder } = req.body;
+      let success = false;
+      if (folder === 'backups') {
+        success = await dataLocationService.openBackupFolder();
+      } else if (folder === 'exports') {
+        success = await dataLocationService.openExportFolder();
+      } else if (folder === 'logs') {
+        success = await dataLocationService.openLogsFolder();
+      } else {
+        success = await dataLocationService.openDataFolder();
+      }
+      res.json({ success, message: success ? 'Folder opened in Explorer' : 'Could not open folder' });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/settings/data-location/migrate
+   * Executes safe data location migration workflow (Sections 7 & 8).
+   */
+  migrateDataLocation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { targetDataDir } = req.body;
+      if (!targetDataDir) {
+        res.status(400).json({ success: false, message: 'targetDataDir is required' });
+        return;
+      }
+      const result = await dataLocationService.migrateDataLocation(targetDataDir);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * GET /api/settings/disk-space
+   * Returns current disk space assessment across data directory (Section 25).
+   */
+  getDiskSpace = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const space = dataLocationService.checkDiskSpace();
+      res.json({ success: true, data: space });
     } catch (error) {
       next(error);
     }

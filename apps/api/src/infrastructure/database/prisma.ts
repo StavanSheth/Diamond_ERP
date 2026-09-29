@@ -362,6 +362,8 @@ export async function disconnectAllClients(): Promise<void> {
   await Promise.allSettled(disconnectPromises);
 }
 
+export const closeAllDynamicClients = disconnectAllClients;
+
 // ── Public API ──────────────────────────────────────────────────────────
 export function runWithProfile<T>(profileCode: string, fn: () => T | Promise<T>): Promise<T> {
   return requestContext.run({ profileId: profileCode, profileCode }, async () => {

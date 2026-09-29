@@ -1,7 +1,7 @@
 # DIAMOND ERP V3 — DATA LIFECYCLE & DESKTOP ARCHITECTURE (SSOT)
 
 > **AUTHORITATIVE ARCHITECTURAL SPECIFICATION**  
-> This document defines the single source of truth (SSOT) for DiamondERP V3 data lifecycle, profile ownership, database management, backup, export, preservation, uninstallation, and reinstallation.  
+> This document defines the single source of truth (SSOT) for DiamondERP V3 data lifecycle, profile ownership, database management, backup, export, preservation, uninstallation, reinstallation, and desktop runtime constraints.  
 > Any change that violates the invariants described herein breaks system consistency and desktop reliability.
 
 ---
@@ -166,7 +166,7 @@ ExportService.exportBusinessData(client, profileId, options)
   │ 2. Streams standard, unencrypted CSV files into export directory
   │ 3. Streams standard, unencrypted XLSX workbook (ExcelJS)
   ▼
-SemanticVerificationService.verifyExportAgainstDatabase(client, csvDir, xlsxPath)
+SemanticVerificationService.verifyDatabaseAgainstExports(client, csvDir, xlsxPath)
   │ For every registered business model:
   │   a. Loads live DB records from SQLite
   │   b. Loads CSV records & XLSX worksheet rows
@@ -238,13 +238,132 @@ Does valid existing customer data exist?
 
 ---
 
-## 4. Single Authoritative Services Directory
+## 4. Authoritative Data Directory & Path Authority
 
-To maintain architectural integrity, all operations must be routed through these authoritative services:
+DiamondERP centralizes all data paths through `apps/api/src/infrastructure/data/data-paths.ts`.
+Direct path construction via `path.join("C:\\...")` or un-governed environment variables is forbidden.
+
+### Directory Structure
+```text
+%LOCALAPPDATA%\DiamondERP\
+├── system/
+│   └── system.db          (Authoritative control registry, installation & user data)
+├── databases/
+│   ├── ProfileA.db        (Dedicated business SQLite DB for Profile A)
+│   ├── ProfileB.db        (Dedicated business SQLite DB for Profile B)
+│   └── ProfileC.db        (Dedicated business SQLite DB for Profile C)
+├── backups/
+│   ├── backup-staging/    (Temporary directory for atomic backup verification)
+│   └── [profile]_[date].db
+├── exports/
+│   └── DiamondERP_Export_[date]/
+│       ├── Stock.csv
+│       ├── DiamondItem.csv
+│       └── DiamondERP_Export.xlsx
+├── uploads/
+│   └── certs/             (Uploaded certificate PDF documents)
+├── logs/                  (Application runtime and crash logs)
+├── recovery/              (Disaster recovery artifacts and staged candidate DBs)
+├── restore-staging/       (Staged pre-restore checkpoints and rollback copies)
+└── config/                (.data-location.json, .installation-id, device lock credentials)
+```
+
+### Centralized Methods
+- `getDataRoot()`: Resolves active customer data root (default `%LOCALAPPDATA%\DiamondERP`).
+- `getSystemDatabasePath()`: Resolves `system.db` control database.
+- `getDatabaseRoot()`: Resolves business `.db` storage folder.
+- `getBackupRoot()`: Resolves database backups directory.
+- `getExportRoot()`: Resolves CSV and XLSX snapshots directory.
+- `getUploadRoot()`: Resolves certificate uploads directory.
+- `getLogRoot()`: Resolves log file directory.
+- `getRecoveryRoot()`: Resolves recovery candidates directory.
+- `getBackupStagingRoot()`: Resolves atomic backup scratch directory.
+- `getRestoreStagingRoot()`: Resolves pre-restore rollback staging directory.
+
+---
+
+## 5. Safe Data Location Migration Workflow
+
+DiamondERP supports migrating customer data to an alternate drive (e.g. `D:\DiamondERPData\`) via `DataLocationService.migrateDataLocation()`.
+
+```text
+User requests change (target: D:\DiamondERPData)
+        ↓
+1. Validate destination path (non-empty, absolute, not root drive, not reserved)
+        ↓
+2. Check destination creatable (`mkdir -p`)
+        ↓
+3. Check write & read permissions (write probe file, verify content, delete)
+        ↓
+4. Check destination collision (cannot be identical, nested, or parent of source)
+        ↓
+5. Check free disk space (source size + 500 MB safety buffer)
+        ↓
+6. Create verified safety backups for all active profiles
+        ↓
+7. Lock business DB writes (`isMigrationLocked = true`)
+        ↓
+8. Close all dynamic Prisma clients & systemPrisma connection
+        ↓
+9. Copy customer data recursively (`system/`, `databases/`, `backups/`, `uploads/`, `config/`)
+        ↓
+10. Verify copied databases (SQLite format header + PRAGMA integrity_check)
+        ↓
+11. Verify schema & profile mappings in copied system.db
+        ↓
+12. Update authoritative registry (`canonicalPath` in `DatabaseRegistry`)
+        ↓
+13. Persist new location in `.data-location.json` and update in-memory root
+        ↓
+14. Reconnect Prisma clients & run DatabaseHealthService check
+        ↓
+15. Unlock business writes (`isMigrationLocked = false`)
+        ↓
+16. Migration Successful (Original data retained safely as fallback)
+```
+
+*Rollback Guarantee*: If any step fails between 1 and 14, the migration aborts immediately, original data paths are restored, clients reconnected, lock released, and no source customer data is deleted.
+
+---
+
+## 6. Single Application Instance & Backend Ownership
+
+To prevent multiple instances from corrupting local SQLite databases concurrently:
+1. **WPF Global Mutex**: `installer/Launcher.cs` acquires a system-wide named mutex `Global\DiamondERP_SingleInstance_Mutex`.
+2. **Foreground Activation**: If another instance is launched, the second launcher brings the existing application window to the foreground via `ShowWindow(SW_RESTORE)` and `SetForegroundWindow()`, then exits immediately.
+3. **Managed Node Process**: The launcher starts exactly one Node.js child process, monitors its PID, checks loopback port `3002`, and establishes parent-child process tree termination on window close.
+4. **IPC Shutdown Signal**: Launcher communicates clean shutdown through `Global\DiamondERP_Shutdown_Event` allowing the Node backend to flush WAL journals before exiting.
+
+---
+
+## 7. Offline-First & Zero External Dependencies
+
+DiamondERP is strictly designed to operate 100% offline:
+- **No Internet Required**: Login, profile switching, business transactions, certificate management, exports, backups, and recovery function with network interfaces disabled.
+- **No Cloud Synchronization**: Cloud DB synchronization, Google Sheets sync, Google Drive sync, and multi-device live replication are explicitly prohibited.
+- **Bundled Fonts & Assets**: Fonts and icon glyphs (`Segoe UI`, Material Symbols) are embedded locally in the web distribution bundle without CDN dependencies.
+- **Bundled Runtimes**: Node.js v20.18.0 and WebView2 runtime are packaged directly with the Windows desktop installer.
+
+---
+
+## 8. Disk Space Assessment & Safety Thresholds
+
+All heavy file operations (Backup, Export, Preservation, Migration) execute pre-flight disk space assessments:
+- **`HEALTHY`**: > 5.0 GB available disk space. Normal operations permitted.
+- **`LOW`**: 1.0 GB – 5.0 GB available. Operations permitted with warning logged.
+- **`CRITICAL`**: 200 MB – 1.0 GB available. Non-essential operations flagged.
+- **`INSUFFICIENT`**: < 200 MB available. All mutating backups, exports, and migrations strictly fail fast with descriptive error to protect database files from disk exhaustion corruption.
+
+---
+
+## 9. Single Authoritative Services Directory
+
+All operations must be routed through these authoritative services:
 
 | Function | Authoritative Service | Location |
 | :--- | :--- | :--- |
 | **Profile & DB Resolution** | `DatabaseContextService` | `apps/api/src/infrastructure/database/database-context.service.ts` |
+| **Data Paths & Location** | `DataLocationService` | `apps/api/src/infrastructure/data/data-location.service.ts` |
 | **Database Provisioning** | `DatabaseProvisioningService` | `apps/api/src/modules/system/database/database-provisioning.service.ts` |
 | **Database Health & Invariants**| `DatabaseHealthService` | `apps/api/src/modules/system/database/database-health.service.ts` |
 | **Backup & Pruning** | `BackupService` | `apps/api/src/modules/system/backup/backup.service.ts` |
@@ -255,7 +374,7 @@ To maintain architectural integrity, all operations must be routed through these
 
 ---
 
-## 5. Model Classification Policy
+## 10. Model Classification Policy
 
 Every Prisma model in `schema.prisma` must have an explicit classification in `EXPORT_ENTITY_REGISTRY`:
 - **`BUSINESS`**: Customer work-product data (e.g., `DiamondItem`, `Certification`, `Repair`, `Transaction`, `TransactionItem`, `InventoryMovement`, `FinancialEntry`, `ItemEvent`, `ItemTransformation`, `TransformationProvenance`, `DocumentDraft`, `DraftRevision`). **Always exported.**

@@ -3,7 +3,8 @@ import path from 'path';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import { databaseValidationService } from './database-validation.service';
 import { databaseContextService } from '../../../infrastructure/database/database-context.service';
-import { getDatabasesDir, getControlDbPath, getDatabaseTemplatePath } from '../../../infrastructure/paths';
+import { getDatabasesDir, getControlDbPath, getDatabaseTemplatePath, getDataRoot } from '../../../infrastructure/paths';
+import { dataLocationService } from '../../../infrastructure/data';
 
 export interface ProfileDatabaseHealth {
   profileId: string;
@@ -31,6 +32,14 @@ export interface ProfileDatabaseHealth {
 
 export interface SystemDataHealthReport {
   overallStatus: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  dataRoot: string;
+  diskSpace: {
+    freeBytes: number;
+    totalBytes: number;
+    freeGb: number;
+    totalGb: number;
+    status: 'HEALTHY' | 'LOW' | 'CRITICAL' | 'INSUFFICIENT';
+  };
   totalProfiles: number;
   healthyProfiles: number;
   orphanedDatabases: { path: string; sizeBytes: number }[];
@@ -197,14 +206,29 @@ export class DatabaseHealthService {
         ? 'WARNING'
         : 'CRITICAL';
 
+    const diskSpace = dataLocationService.checkDiskSpace();
+
     return {
       overallStatus,
+      dataRoot: getDataRoot(),
+      diskSpace: {
+        freeBytes: diskSpace.freeBytes,
+        totalBytes: diskSpace.totalBytes,
+        freeGb: diskSpace.freeGb,
+        totalGb: diskSpace.totalGb,
+        status: diskSpace.status,
+      },
       totalProfiles: profiles.length,
       healthyProfiles: healthyCount,
       orphanedDatabases,
       profiles: reportProfiles,
       generatedAt: new Date().toISOString(),
     };
+  }
+
+  async checkAllProfiles(): Promise<ProfileDatabaseHealth[]> {
+    const report = await this.checkHealth();
+    return report.profiles;
   }
 }
 

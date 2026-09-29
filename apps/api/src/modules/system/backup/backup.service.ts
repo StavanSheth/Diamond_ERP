@@ -14,6 +14,7 @@ import {
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
 import { installationService } from '../installation.service';
+import { dataLocationService } from '../../../infrastructure/data';
 import { ValidationError, NotFoundError, ConflictError } from '../../../errors';
 import { logger } from '../../../infrastructure/logging';
 import type {
@@ -111,6 +112,9 @@ export class BackupService {
     if (stat.isDirectory()) {
       throw new ValidationError('Source path must be a regular file, not a directory.');
     }
+
+    // Disk space check (Section 25)
+    dataLocationService.assertDiskSpaceAvailable(stat.size * 2 + 10 * 1024 * 1024, getBackupsDir());
 
     // Prohibit backing up system control DB or template DB as a business profile backup
     const controlDb = getControlDbPath();

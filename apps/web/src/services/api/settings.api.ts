@@ -119,5 +119,13 @@ export const settingsApi = {
   getDataHealth(): Promise<{ success: boolean; data: any }> {
     return request('/api/settings/data-health');
   },
+
+  /** Open application data/backup/export/log folder in Windows Explorer */
+  openFolder(folder: 'data' | 'backups' | 'exports' | 'logs'): Promise<{ success: boolean; message: string }> {
+    return request('/api/settings/open-folder', {
+      method: 'POST',
+      body: JSON.stringify({ folder }),
+    });
+  },
 };
 

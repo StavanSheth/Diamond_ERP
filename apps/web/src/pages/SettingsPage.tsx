@@ -2173,10 +2173,81 @@ export const SettingsPage: React.FC = () => {
                       </div>
 
                       <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
-                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Last Inspection</div>
-                        <div className="text-xs font-semibold text-slate-700 mt-1">
-                          {new Date(dataHealthReport.generatedAt).toLocaleTimeString()}
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Free Disk Space</div>
+                        <div className="text-xs font-bold text-slate-800 mt-1 flex items-center gap-1.5">
+                          <span>{dataHealthReport.diskSpace?.freeGb ?? '—'} GB free</span>
+                          <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                            dataHealthReport.diskSpace?.status === 'HEALTHY' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {dataHealthReport.diskSpace?.status ?? 'HEALTHY'}
+                          </span>
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Data Directory & Desktop Openers (Section 70) */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                      <div className="space-y-0.5 truncate max-w-lg">
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Authoritative Data Root</div>
+                        <div className="font-mono text-[11px] text-slate-700 truncate">{dataHealthReport.dataRoot}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await api.openFolder('data');
+                            } catch (e: any) {
+                              alert(e.message || 'Could not open folder');
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">folder_open</span>
+                          Open Data
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await api.openFolder('backups');
+                            } catch (e: any) {
+                              alert(e.message || 'Could not open folder');
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">history</span>
+                          Backups
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await api.openFolder('exports');
+                            } catch (e: any) {
+                              alert(e.message || 'Could not open folder');
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">output</span>
+                          Exports
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await api.openFolder('logs');
+                            } catch (e: any) {
+                              alert(e.message || 'Could not open folder');
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">description</span>
+                          Logs
+                        </button>
                       </div>
                     </div>
 

@@ -18,6 +18,7 @@ import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { databaseValidationService } from '../database/database-validation.service';
 import { installationService } from '../installation.service';
 import { backupService } from '../backup/backup.service';
+import { dataLocationService } from '../../../infrastructure/data';
 import { ValidationError, NotFoundError, ConflictError } from '../../../errors';
 import { logger } from '../../../infrastructure/logging';
 import type {
@@ -326,6 +327,8 @@ export class PreservationService {
 
     // 2. Validate destination directory against source databases
     let destinationRoot = req.destinationDir ? path.resolve(req.destinationDir) : getExportDir();
+    // Disk space check (Section 25)
+    dataLocationService.assertDiskSpaceAvailable(50 * 1024 * 1024, destinationRoot);
     this.validateDestinationDirectory(destinationRoot, canonicalSource);
 
     const packageId = `pkg_${crypto.randomUUID()}`;

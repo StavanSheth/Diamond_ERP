@@ -14,6 +14,7 @@ import {
 } from '../../../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../database/database-path.util';
 import { installationService } from '../installation.service';
+import { dataLocationService } from '../../../infrastructure/data';
 import { NotFoundError, ValidationError, ConflictError } from '../../../errors';
 import type {
   ExportBusinessDataRequest,
@@ -113,6 +114,9 @@ export class ExportService {
     const destinationRoot = req.customDestinationDir
       ? path.resolve(req.customDestinationDir)
       : getExportDir();
+
+    // Disk space check (Section 25)
+    dataLocationService.assertDiskSpaceAvailable(25 * 1024 * 1024, destinationRoot);
 
     const bundlePath = path.join(destinationRoot, bundleDirName);
     fs.mkdirSync(bundlePath, { recursive: true });

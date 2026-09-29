@@ -58,6 +58,9 @@ export function createSettingsRouter(controller: SettingsController): Router {
 
   // Data Health & Diagnostics
   if (controller.getDataHealth) router.get('/data-health', controller.getDataHealth);
+  if (controller.getDiskSpace) router.get('/disk-space', controller.getDiskSpace);
+  if (controller.openFolder) router.post('/open-folder', controller.openFolder);
+  if (controller.migrateDataLocation) router.post('/data-location/migrate', controller.migrateDataLocation);
 
   // Factory reset
   router.post('/factory-reset', controller.factoryReset);

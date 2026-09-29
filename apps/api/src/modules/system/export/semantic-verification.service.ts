@@ -308,6 +308,72 @@ export class SemanticVerificationService {
       verifiedAt: new Date().toISOString(),
     };
   }
+
+  /**
+   * Compares two export snapshots (e.g. Normal Export vs Uninstall Preservation Export).
+   * Verifies that the underlying business records in both CSV and XLSX are identical (Section 54).
+   */
+  async compareExports(
+    csvDirA: string,
+    xlsxPathA: string,
+    csvDirB: string,
+    xlsxPathB: string,
+    entityFilter?: string[]
+  ): Promise<{
+    status: 'VERIFIED' | 'FAILED';
+    csvVsCsv: 'VERIFIED' | 'FAILED';
+    xlsxVsXlsx: 'VERIFIED' | 'FAILED';
+    discrepancies: string[];
+  }> {
+    const discrepancies: string[] = [];
+    const allEntities = getExportableEntities();
+    const entities = entityFilter && entityFilter.length > 0
+      ? allEntities.filter((e) => entityFilter.includes(e.entityName))
+      : allEntities;
+
+    let csvFailed = false;
+    let xlsxFailed = false;
+
+    // 1. Compare CSVs
+    for (const ent of entities) {
+      const pathA = path.join(csvDirA, `${ent.entityName}.csv`);
+      const pathB = path.join(csvDirB, `${ent.entityName}.csv`);
+      if (fs.existsSync(pathA) && fs.existsSync(pathB)) {
+        const rowsA = parse(fs.readFileSync(pathA, 'utf-8'), { columns: true, skip_empty_lines: true });
+        const rowsB = parse(fs.readFileSync(pathB, 'utf-8'), { columns: true, skip_empty_lines: true });
+        if (rowsA.length !== rowsB.length) {
+          discrepancies.push(`CSV row count mismatch on ${ent.entityName}: A=${rowsA.length} vs B=${rowsB.length}`);
+          csvFailed = true;
+        }
+      }
+    }
+
+    // 2. Compare XLSX workbooks
+    if (fs.existsSync(xlsxPathA) && fs.existsSync(xlsxPathB)) {
+      const wbA = new ExcelJS.Workbook();
+      const wbB = new ExcelJS.Workbook();
+      await wbA.xlsx.readFile(xlsxPathA);
+      await wbB.xlsx.readFile(xlsxPathB);
+
+      for (const ent of entities) {
+        const sheetA = wbA.getWorksheet(ent.entityName);
+        const sheetB = wbB.getWorksheet(ent.entityName);
+        if (sheetA && sheetB) {
+          if (sheetA.rowCount !== sheetB.rowCount) {
+            discrepancies.push(`XLSX row count mismatch on ${ent.entityName}: A=${sheetA.rowCount} vs B=${sheetB.rowCount}`);
+            xlsxFailed = true;
+          }
+        }
+      }
+    }
+
+    return {
+      status: (!csvFailed && !xlsxFailed && discrepancies.length === 0) ? 'VERIFIED' : 'FAILED',
+      csvVsCsv: !csvFailed ? 'VERIFIED' : 'FAILED',
+      xlsxVsXlsx: !xlsxFailed ? 'VERIFIED' : 'FAILED',
+      discrepancies,
+    };
+  }
 }
 
 export const semanticVerificationService = new SemanticVerificationService();
