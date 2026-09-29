@@ -84,8 +84,8 @@ export const settingsApi = {
     return request('/api/settings/databases');
   },
 
-  /** Update database display name */
-  updateDatabase(profileId: string, data: { name: string }): Promise<{ success: boolean; message: string; data: any }> {
+  /** Update database display name & associated file path */
+  updateDatabase(profileId: string, data: { name: string; path?: string }): Promise<{ success: boolean; message: string; data: any }> {
     return request(`/api/settings/databases/${profileId}`, {
       method: 'PUT',
       body: JSON.stringify(data),

@@ -134,6 +134,7 @@ export const SettingsPage: React.FC = () => {
   // Database Edit State
   const [editingDbId, setEditingDbId] = useState<string | null>(null);
   const [editDbName, setEditDbName] = useState('');
+  const [editDbPath, setEditDbPath] = useState('');
   const [savingDb, setSavingDb] = useState(false);
 
   // Link Modal State
@@ -294,6 +295,7 @@ export const SettingsPage: React.FC = () => {
     try {
       await api.updateDatabase(dbId, {
         name: editDbName,
+        path: editDbPath.trim() || undefined,
       });
       setEditingDbId(null);
       await fetchDatabases();
@@ -694,10 +696,10 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                        {t('App Lock & Device Security')}
+                        Screen Lock &amp; Safety
                       </h3>
                       <p className="text-[11px] text-on-surface-variant m-0">
-                        {t('Biometric authentication, device lock screen & automatic inactivity timeout')}
+                        Locks your screen with a PIN or fingerprint after you step away so your diamond records stay private
                       </p>
                     </div>
                   </div>
@@ -969,10 +971,10 @@ export const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                      Workspace &amp; Profile Selection
+                      Company Book &amp; Workspace
                     </h3>
                     <p className="text-[11px] text-on-surface-variant m-0">
-                      Select your active company database or create a new isolated tenant profile
+                      Choose which company book you want to work on today, or create a brand new company book
                     </p>
                   </div>
                 </div>
@@ -1294,10 +1296,10 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                        User &amp; Database Management
+                        Team Members &amp; Company Databases
                       </h3>
                       <p className="text-[11px] text-on-surface-variant m-0">
-                        Edit user details, modify databases, and link or unlink databases to and from users
+                        Manage user logins, rename databases, or change which .db file is loaded for your company
                       </p>
                     </div>
                   </div>
@@ -1519,33 +1521,73 @@ export const SettingsPage: React.FC = () => {
                               className="flex flex-col gap-3 p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs"
                             >
                               {isEditing ? (
-                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-indigo-50/40 p-3 rounded-lg border border-indigo-100">
-                                  <div className="flex flex-col gap-1 flex-1">
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Database Display Name</label>
-                                    <input
-                                      type="text"
-                                      value={editDbName}
-                                      onChange={(e) => setEditDbName(e.target.value)}
-                                      className="px-2.5 py-1 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                                      placeholder="Database Name"
-                                    />
+                                <div className="flex flex-col gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-200">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="flex flex-col gap-1">
+                                      <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                                        Database Display Name
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={editDbName}
+                                        onChange={(e) => setEditDbName(e.target.value)}
+                                        className="px-3 py-1.5 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold text-slate-800"
+                                        placeholder="e.g. Stavan Company"
+                                      />
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center justify-between">
+                                        <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                                          Associated .db File Path
+                                        </label>
+                                        <label className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5">
+                                          <span className="material-symbols-outlined text-[13px]">folder_open</span>
+                                          Pick .db File
+                                          <input
+                                            type="file"
+                                            accept=".db,.sqlite"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                              const file = e.target.files?.[0];
+                                              if (file) {
+                                                const fallback = `C:\\Users\\Stavan\\AppData\\Local\\DiamondERP\\databases\\${file.name}`;
+                                                setEditDbPath(fallback);
+                                              }
+                                            }}
+                                          />
+                                        </label>
+                                      </div>
+                                      <input
+                                        type="text"
+                                        value={editDbPath}
+                                        onChange={(e) => setEditDbPath(e.target.value)}
+                                        className="px-3 py-1.5 text-xs font-mono border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
+                                        placeholder="C:\Users\Stavan\AppData\Local\DiamondERP\databases\Stavan.db"
+                                      />
+                                    </div>
                                   </div>
-                                  <div className="flex items-center gap-2 self-end sm:self-center pt-2 sm:pt-0">
-                                    <button
-                                      type="button"
-                                      disabled={savingDb}
-                                      onClick={() => handleSaveDb(db.id)}
-                                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs disabled:opacity-50"
-                                    >
-                                      {savingDb ? 'Saving...' : 'Save'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setEditingDbId(null)}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
-                                    >
-                                      Cancel
-                                    </button>
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-indigo-100">
+                                    <span className="text-[11px] text-slate-500">
+                                      💡 Point this profile to any SQLite database file on your computer.
+                                    </span>
+                                    <div className="flex items-center gap-2 self-end sm:self-center">
+                                      <button
+                                        type="button"
+                                        disabled={savingDb}
+                                        onClick={() => handleSaveDb(db.id)}
+                                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <span className="material-symbols-outlined text-[15px]">save</span>
+                                        {savingDb ? 'Saving...' : 'Save Changes'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingDbId(null)}
+                                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               ) : (
@@ -1564,6 +1606,9 @@ export const SettingsPage: React.FC = () => {
                                           Active Live DB
                                         </span>
                                       )}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-mono truncate max-w-lg">
+                                      Path: {db.canonicalPath || db.dbPath || 'Default location'}
                                     </div>
                                     <div className="text-[11px] text-on-surface-variant flex flex-wrap items-center gap-2 mt-0.5">
                                       <span className="text-[10px] font-semibold text-slate-400">Linked Users:</span>
@@ -1613,12 +1658,13 @@ export const SettingsPage: React.FC = () => {
                                       onClick={() => {
                                         setEditingDbId(db.id);
                                         setEditDbName(db.name || db.code);
+                                        setEditDbPath(db.canonicalPath || db.dbPath || '');
                                       }}
-                                      className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
-                                      title="Edit database display name"
+                                      className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                                      title="Edit database name or change database file path"
                                     >
                                       <span className="material-symbols-outlined text-[14px]">edit</span>
-                                      Edit
+                                      Edit / Change Path
                                     </button>
 
                                     <button
@@ -1655,10 +1701,10 @@ export const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                      Local Data Saving &amp; Backups
+                      Safety Copies &amp; Backups
                     </h3>
                     <p className="text-[11px] text-on-surface-variant m-0">
-                      Export and save your live databases and verified offline snapshots to your computer
+                      Save backup copies of your diamonds and accounts directly to your computer so nothing ever gets lost
                     </p>
                   </div>
                 </div>
@@ -1859,10 +1905,10 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                        Pre-Uninstall Customer Data Preservation &amp; Safety Gate
+                        Uninstall Safety &amp; Data Preservation
                       </h3>
                       <p className="text-[11px] text-on-surface-variant m-0">
-                        Mandatory multi-format backup (Database, CSVs, XLSX) and one-time authorization token required by Windows Installer
+                        Guarantees all your diamonds and company books are saved safely before the software can be removed
                       </p>
                     </div>
                   </div>
@@ -2102,10 +2148,10 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                        Database Health &amp; Diagnostics
+                        System Health &amp; Diagnostics
                       </h3>
                       <p className="text-[11px] text-on-surface-variant m-0">
-                        Central verification of profile database integrity, ownership invariants, WAL state, and backups
+                        Checks that your database file, disk space, and memory are healthy and working with zero errors
                       </p>
                     </div>
                   </div>

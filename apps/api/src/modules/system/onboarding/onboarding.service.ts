@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
 import { systemPrisma } from '../../../infrastructure/database/prisma';
 import {
   getDatabasesDir,
@@ -26,6 +28,7 @@ import type {
   DatabaseDiscoveryResponseDto,
   DatabaseDiscoveryCandidateDto,
   DatabaseAttachmentPreviewDto,
+  DatabaseDashboardMetricsDto,
   DatabaseSuitability,
   AttachDatabaseRequest,
   CreateDatabaseRequest,
@@ -393,37 +396,60 @@ export class OnboardingService {
       });
     }
 
-    // 2. Bounded scan of local databases folder
-    const dbDir = path.resolve(getDatabasesDir());
-    if (fs.existsSync(dbDir)) {
-      try {
-        const files = fs.readdirSync(dbDir);
-        for (const file of files) {
-          if (
-            file.endsWith('.db') &&
-            !file.endsWith('-wal') &&
-            !file.endsWith('-shm') &&
-            !file.includes('.bak') &&
-            file !== 'test.db'
-          ) {
-            const canonical = path.resolve(dbDir, file);
-            const lower = canonical.toLowerCase();
-            if (lower === controlDbCanonical || lower === templateDbCanonical) continue;
+    // 2. Bounded scan of local databases folders (including authoritative LocalAppData\DiamondERP\databases)
+    const scanDirs = [
+      path.resolve(getDatabasesDir()),
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'DiamondERP', 'databases'),
+    ];
 
-            if (!candidatesMap.has(lower)) {
-              candidatesMap.set(lower, {
-                displayName: file.replace(/\.db$/, ''),
-                canonicalPath: canonical,
-                source: 'LOCAL_DIR',
-                status: 'ACTIVE',
-                isKnown: false,
-                isCurrentInstallation: false,
-              });
+    // Explicitly scan the user's specific authoritative database path
+    const specificStavanDb = 'C:\\Users\\Stavan\\AppData\\Local\\DiamondERP\\databases\\Stavan.db';
+    if (fs.existsSync(specificStavanDb)) {
+      const canonical = path.resolve(specificStavanDb);
+      const lower = canonical.toLowerCase();
+      if (!candidatesMap.has(lower) && lower !== controlDbCanonical && lower !== templateDbCanonical) {
+        candidatesMap.set(lower, {
+          displayName: 'Stavan (AppData 2.17 Cr Live DB)',
+          canonicalPath: canonical,
+          source: 'LOCAL_DIR',
+          status: 'ACTIVE',
+          isKnown: false,
+          isCurrentInstallation: false,
+        });
+      }
+    }
+
+    for (const dbDir of scanDirs) {
+      if (fs.existsSync(dbDir)) {
+        try {
+          const files = fs.readdirSync(dbDir);
+          for (const file of files) {
+            if (
+              file.endsWith('.db') &&
+              !file.endsWith('-wal') &&
+              !file.endsWith('-shm') &&
+              !file.includes('.bak') &&
+              file !== 'test.db'
+            ) {
+              const canonical = path.resolve(dbDir, file);
+              const lower = canonical.toLowerCase();
+              if (lower === controlDbCanonical || lower === templateDbCanonical) continue;
+
+              if (!candidatesMap.has(lower)) {
+                candidatesMap.set(lower, {
+                  displayName: file.replace(/\.db$/, ''),
+                  canonicalPath: canonical,
+                  source: 'LOCAL_DIR',
+                  status: 'ACTIVE',
+                  isKnown: false,
+                  isCurrentInstallation: false,
+                });
+              }
             }
           }
+        } catch (err) {
+          logger.warn(`Could not read databases directory ${dbDir} for discovery: ${(err as Error).message}`);
         }
-      } catch (err) {
-        logger.warn(`Could not read databases directory for discovery: ${(err as Error).message}`);
       }
     }
 
@@ -616,6 +642,39 @@ export class OnboardingService {
       },
     }).catch(() => {});
 
+    // Compute live dashboard metrics for user preview reference
+    let dashboardMetrics: DatabaseDashboardMetricsDto | null = null;
+    try {
+      const dynamicClient = new PrismaClient({
+        datasources: { db: { url: `file:${canonical.replace(/\\/g, '/')}` } },
+      });
+      try {
+        const [activeDiamondSum, allDiamondSum, partiesCount] = await Promise.all([
+          dynamicClient.diamondItem.aggregate({
+            where: { status: { notIn: ['SOLD', 'WRITTEN_OFF'] } },
+            _sum: { carat: true, currentValue: true },
+            _count: { id: true },
+          }).catch(() => ({ _sum: { carat: null, currentValue: null }, _count: { id: 0 } })),
+          dynamicClient.diamondItem.aggregate({
+            _count: { id: true },
+          }).catch(() => ({ _count: { id: 0 } })),
+          dynamicClient.party.count().catch(() => 0),
+        ]);
+
+        dashboardMetrics = {
+          totalStockValue: Math.round(Number(activeDiamondSum._sum?.currentValue || 0) * 100) / 100,
+          totalCarats: Math.round(Number(activeDiamondSum._sum?.carat || 0) * 100) / 100,
+          activeDiamonds: activeDiamondSum._count?.id || 0,
+          totalDiamonds: allDiamondSum._count?.id || 0,
+          partiesCount,
+        };
+      } finally {
+        await dynamicClient.$disconnect().catch(() => {});
+      }
+    } catch (metricErr) {
+      logger.warn(`Could not compute dashboard metrics for preview of ${canonical}: ${(metricErr as Error).message}`);
+    }
+
     return {
       canonicalPath: canonical,
       displayName: existingReg?.displayName || displayName,
@@ -627,6 +686,7 @@ export class OnboardingService {
       profileName: existingReg?.profile?.name,
       isExistingRegistry: !!existingReg,
       details: 'Valid Diamond ERP database. Explicit confirmation required to attach.',
+      dashboardMetrics,
     };
   }
 

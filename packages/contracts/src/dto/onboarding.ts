@@ -91,6 +91,14 @@ export interface InspectDatabaseRequest {
   path: string;
 }
 
+export interface DatabaseDashboardMetricsDto {
+  totalStockValue: number;
+  totalCarats: number;
+  activeDiamonds: number;
+  totalDiamonds: number;
+  partiesCount?: number;
+}
+
 export interface DatabaseAttachmentPreviewDto {
   canonicalPath: string;
   displayName: string;
@@ -103,6 +111,7 @@ export interface DatabaseAttachmentPreviewDto {
   isExistingRegistry: boolean;
   conflictReason?: string | null;
   details?: string | null;
+  dashboardMetrics?: DatabaseDashboardMetricsDto | null;
 }
 
 export interface AttachDatabaseRequest {

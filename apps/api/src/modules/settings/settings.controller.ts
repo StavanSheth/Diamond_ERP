@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES, updateProfileDbPath } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, NotFoundError } from '../../errors';
@@ -13,6 +13,7 @@ import { backupService } from '../system/backup/backup.service';
 import { databaseProvisioningService } from '../system/database/database-provisioning.service';
 import { databaseContextService } from '../../infrastructure/database/database-context.service';
 import { databaseHealthService } from '../system/database/database-health.service';
+import { databaseRegistryService } from '../system/database/database-registry.service';
 import { dataLocationService } from '../../infrastructure/data';
 
 function sanitizeSpreadsheetRow<T extends Record<string, any>>(row: T): T {
@@ -1925,6 +1926,7 @@ export class SettingsController {
           code: p.code,
           name: p.name,
           dbPath: canonicalPath,
+          canonicalPath,
           filename,
           sizeBytes,
           exists,
@@ -1950,7 +1952,7 @@ export class SettingsController {
   updateDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const profileId = String(req.params.profileId || req.params.id);
-      const { name } = req.body;
+      const { name, path: newPath, canonicalPath } = req.body;
       if (!name || typeof name !== 'string') {
         throw new ValidationError('Database name is required');
       }
@@ -1973,6 +1975,17 @@ export class SettingsController {
         where: { profileId: prof.id },
         data: { displayName: name.trim() },
       });
+
+      const targetPath = (newPath || canonicalPath)?.trim();
+      if (targetPath) {
+        const reg = await systemPrisma.databaseRegistry.findFirst({
+          where: { profileId: prof.id },
+        });
+        if (reg) {
+          await databaseRegistryService.updateDatabasePath(reg.databaseId, targetPath);
+          updateProfileDbPath(prof.code, targetPath);
+        }
+      }
 
       res.json({
         success: true,

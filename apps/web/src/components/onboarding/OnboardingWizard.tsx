@@ -833,6 +833,49 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                       )}
                     </div>
 
+                    {inspectPreview.dashboardMetrics && (
+                      <div className="my-3 p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-2">
+                        <div className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-[15px]">diamond</span>
+                          Database Content Reference (Dashboard Summary)
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                          <div className="p-2 bg-slate-900/80 border border-slate-800 rounded-lg">
+                            <div className="text-[10px] text-slate-400 font-medium">Active Stock Value</div>
+                            <div className="font-bold text-emerald-400 text-xs sm:text-sm mt-0.5 truncate">
+                              ₹{inspectPreview.dashboardMetrics.totalStockValue.toLocaleString('en-IN')}
+                            </div>
+                            <div className="text-[10px] text-emerald-300/80 font-mono">
+                              ≈ {(inspectPreview.dashboardMetrics.totalStockValue / 10000000).toFixed(2)} Crore
+                            </div>
+                          </div>
+                          <div className="p-2 bg-slate-900/80 border border-slate-800 rounded-lg">
+                            <div className="text-[10px] text-slate-400 font-medium">Diamonds In Stock</div>
+                            <div className="font-bold text-slate-100 text-xs sm:text-sm mt-0.5">
+                              {inspectPreview.dashboardMetrics.activeDiamonds} active
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              ({inspectPreview.dashboardMetrics.totalDiamonds} total recorded)
+                            </div>
+                          </div>
+                          <div className="p-2 bg-slate-900/80 border border-slate-800 rounded-lg">
+                            <div className="text-[10px] text-slate-400 font-medium">Total Carats</div>
+                            <div className="font-bold text-slate-100 text-xs sm:text-sm mt-0.5">
+                              {inspectPreview.dashboardMetrics.totalCarats.toFixed(2)} cts
+                            </div>
+                            <div className="text-[10px] text-slate-400">Total Diamond Weight</div>
+                          </div>
+                          <div className="p-2 bg-slate-900/80 border border-slate-800 rounded-lg">
+                            <div className="text-[10px] text-slate-400 font-medium">Parties &amp; Ledgers</div>
+                            <div className="font-bold text-slate-100 text-xs sm:text-sm mt-0.5">
+                              {inspectPreview.dashboardMetrics.partiesCount || 0} Parties
+                            </div>
+                            <div className="text-[10px] text-slate-400">Customer &amp; Vendor Books</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {inspectPreview.details && (
                       <div className="text-xs text-slate-400 pt-1">{inspectPreview.details}</div>
                     )}

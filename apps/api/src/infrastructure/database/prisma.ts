@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import { getDatabasesDir, getConfigDir, getDatabaseTemplatePath, getControlDbPath } from '../paths';
 
@@ -86,6 +87,26 @@ export interface CanonicalProfile {
 const configuredProfiles = new Map<string, CanonicalProfile>();
 export const FORBIDDEN_PROFILE_NAMES = new Set(['system', 'template', 'test']);
 
+export function resolveProfileDbPath(code: string, explicitPath?: string): string {
+  if (explicitPath && fs.existsSync(explicitPath)) {
+    return explicitPath;
+  }
+  const defaultDirDb = path.resolve(DB_DIR, `${code}.db`);
+  if (fs.existsSync(defaultDirDb)) {
+    return defaultDirDb;
+  }
+  const localAppDb = path.join(
+    process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+    'DiamondERP',
+    'databases',
+    `${code}.db`
+  );
+  if (fs.existsSync(localAppDb)) {
+    return localAppDb;
+  }
+  return defaultDirDb;
+}
+
 function initConfiguredProfiles() {
   const currentCfg = readConfig();
   configuredProfiles.clear();
@@ -100,7 +121,7 @@ function initConfiguredProfiles() {
 
   for (const code of allowed) {
     if (PROFILE_REGEX.test(code) && !FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) {
-      const dbPath = path.resolve(DB_DIR, `${code}.db`);
+      const dbPath = resolveProfileDbPath(code);
       configuredProfiles.set(code.toLowerCase(), {
         id: code.toLowerCase(),
         code,
@@ -142,14 +163,7 @@ export function registerProfile(profile: { code: string; name?: string; dbPath?:
   }
 
   const key = profile.code.toLowerCase();
-  const canonicalDbPath = profile.dbPath
-    ? path.resolve(DB_DIR, path.basename(profile.dbPath))
-    : path.resolve(DB_DIR, `${profile.code}.db`);
-
-  // Ensure DB path remains strictly under DB_DIR to prevent path traversal
-  if (!canonicalDbPath.startsWith(DB_DIR)) {
-    throw new Error(`Invalid database path outside allowed directory: ${canonicalDbPath}`);
-  }
+  const canonicalDbPath = resolveProfileDbPath(profile.code, profile.dbPath);
 
   // Phase 7: registerProfile() should NOT create or provision the physical DB file.
   // The database file MUST already exist before registering the profile.
@@ -304,6 +318,12 @@ export async function getClientForProfileAsync(profileCode: string): Promise<Pri
       }
 
       // Ensure database file exists with complete schema
+      if (!fs.existsSync(canonical.dbPath)) {
+        const resolved = resolveProfileDbPath(canonical.code);
+        if (fs.existsSync(resolved)) {
+          canonical.dbPath = resolved;
+        }
+      }
       ensureProfileDbFile(canonical.dbPath);
 
       const client = createPrismaClient(`file:${canonical.dbPath}`);
@@ -318,6 +338,19 @@ export async function getClientForProfileAsync(profileCode: string): Promise<Pri
 
   clientInitLocks.set(key, initPromise);
   return initPromise;
+}
+
+export function updateProfileDbPath(profileCode: string, newDbPath: string): void {
+  const key = profileCode.toLowerCase();
+  const canonical = configuredProfiles.get(key);
+  if (canonical) {
+    canonical.dbPath = newDbPath;
+  }
+  const entry = clientRegistry.get(key);
+  if (entry) {
+    clientRegistry.delete(key);
+    entry.client.$disconnect().catch(() => {});
+  }
 }
 
 export function getClientForProfile(profileCode: string): PrismaClient {
@@ -337,7 +370,12 @@ export function getClientForProfile(profileCode: string): PrismaClient {
   }
 
   if (!fs.existsSync(canonical.dbPath)) {
-    throw new Error(`Database file for profile "${profileCode}" is missing at "${canonical.dbPath}".`);
+    const resolved = resolveProfileDbPath(canonical.code);
+    if (fs.existsSync(resolved)) {
+      canonical.dbPath = resolved;
+    } else {
+      throw new Error(`Database file for profile "${profileCode}" is missing at "${canonical.dbPath}".`);
+    }
   }
 
   const client = createPrismaClient(`file:${canonical.dbPath}`);
