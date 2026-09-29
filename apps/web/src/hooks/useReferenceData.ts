@@ -17,6 +17,14 @@ export function invalidateReferenceData() {
   inFlightFetch = null;
 }
 
+// Section 5: Profile cache isolation - purge module-level cache on profile switch
+if (typeof window !== 'undefined') {
+  window.addEventListener('profileChanged', () => {
+    invalidateReferenceData();
+    notifyAll();
+  });
+}
+
 export function useReferenceData() {
   const [stocks, setStocks] = useState<StockItem[]>(cachedStocks || []);
   const [parties, setParties] = useState<PartyItem[]>(cachedParties || []);
@@ -60,11 +68,18 @@ export function useReferenceData() {
 
   useEffect(() => {
     const handleUpdate = () => {
-      if (cachedStocks) setStocks(cachedStocks);
-      if (cachedParties) setParties(cachedParties);
+      setStocks(cachedStocks || []);
+      setParties(cachedParties || []);
+    };
+
+    const handleProfileChange = () => {
+      setStocks([]);
+      setParties([]);
+      fetchReferenceData(true);
     };
 
     listeners.add(handleUpdate);
+    window.addEventListener('profileChanged', handleProfileChange);
 
     if (!cachedStocks || !cachedParties) {
       fetchReferenceData();
@@ -72,6 +87,7 @@ export function useReferenceData() {
 
     return () => {
       listeners.delete(handleUpdate);
+      window.removeEventListener('profileChanged', handleProfileChange);
     };
   }, [fetchReferenceData]);
 

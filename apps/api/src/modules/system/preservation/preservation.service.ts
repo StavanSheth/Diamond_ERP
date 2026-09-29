@@ -325,6 +325,8 @@ export class PreservationService {
       }
     }
 
+    // COMPATIBILITY_ONLY (Section 15): Legacy single-database consumers inspect top-level fields.
+    // Authoritative multi-profile preservation data resides in `databases[]` and `profiles/${profileCode}/`.
     const primaryDb = databasesToPreserve[0];
     const canonicalSource = primaryDb.canonicalPath;
 
@@ -675,13 +677,19 @@ export class PreservationService {
           sizeBytes: primaryXlsxSize,
         },
       };
-      fs.writeFileSync(exportManifestPath, JSON.stringify(exportManifest, null, 2), 'utf-8');
+      const tmpExportManifestPath = `${exportManifestPath}.tmp_${crypto.randomUUID()}`;
+      fs.writeFileSync(tmpExportManifestPath, JSON.stringify(exportManifest, null, 2), 'utf-8');
+      fs.renameSync(tmpExportManifestPath, exportManifestPath);
 
       const preservationManifestPath = path.join(bundleDir, 'preservation-manifest.json');
       const preservationManifest = {
         formatVersion: 2,
         packageId,
         createdAt: new Date().toISOString(),
+        compatibility: {
+          note: 'COMPATIBILITY_ONLY: Top-level database and artifacts fields exist for backwards compatibility. Authoritative multi-profile preservation data resides in databases[] and profiles/${profileCode}/',
+          databaseId: primaryDb.databaseId,
+        },
         installation: {
           installationId: install.installationId,
           appVersion: install.appVersion,
@@ -715,7 +723,9 @@ export class PreservationService {
         status: 'VERIFIED',
         dataDirectoryPreserved: true,
       };
-      fs.writeFileSync(preservationManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
+      const tmpPreservationManifestPath = `${preservationManifestPath}.tmp_${crypto.randomUUID()}`;
+      fs.writeFileSync(tmpPreservationManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
+      fs.renameSync(tmpPreservationManifestPath, preservationManifestPath);
 
       const manifestSha256 = this.calculateSha256(preservationManifestPath);
 

@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
-import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
 import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getExportDir,
@@ -22,8 +22,16 @@ import type {
   ExportVerificationDto,
   ExportResponseDto,
 } from '@diamond-erp/contracts';
-import { buildExportQueries } from './export-entity-registry';
+import { buildExportQueries, EXPORT_ENTITY_REGISTRY, SENSITIVE_COLUMN_PATTERN } from './export-entity-registry';
 import { semanticVerificationService } from './semantic-verification.service';
+
+export interface ExportResult extends ExportResponseDto {
+  bundlePath: string;
+  csvFiles: string[];
+  xlsxPath?: string;
+  manifestPath: string;
+  verification?: any;
+}
 
 export class ExportService {
   /**
@@ -123,7 +131,7 @@ export class ExportService {
   async exportBusinessData(
     req: ExportBusinessDataRequest,
     performedBy: string = 'system'
-  ): Promise<ExportResponseDto> {
+  ): Promise<ExportResult> {
     ensureAllDataDirs();
     const install = await installationService.getOrCreateInstallation();
 
@@ -178,14 +186,7 @@ export class ExportService {
       } else if (req.profileCode) {
         dbContext = await databaseContextService.getDatabaseForProfileCode(req.profileCode);
       } else {
-        try {
-          dbContext = await databaseContextService.getActiveProfileDatabase();
-        } catch {
-          const fallback = getActiveProfileOrDefault();
-          if (fallback) {
-            dbContext = await databaseContextService.getDatabaseForProfileCode(fallback);
-          }
-        }
+        dbContext = await databaseContextService.getActiveProfileDatabase();
       }
 
       if (!dbContext) {
@@ -221,6 +222,9 @@ export class ExportService {
 
     let totalRows = 0;
     let totalSizeBytes = 0;
+    const csvFiles: string[] = [];
+    let xlsxPath: string | undefined = undefined;
+    let semanticResult: any = null;
 
     const tableEntities = buildExportQueries(client);
     const requiredEntities = req.tables && req.tables.length > 0
@@ -299,15 +303,20 @@ export class ExportService {
           if (sanitizedRows.length > 0) {
             columns = Object.keys(sanitizedRows[0]);
           } else {
-            try {
-              const tableInfo = await (client as any).$queryRawUnsafe(
-                `PRAGMA table_info("${entity.name}");`
-              ) as Array<{ name: string }>;
-              columns = tableInfo
-                .map((c) => c.name)
-                .filter((k) => !/password|pin|hash|secret|token/i.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
-            } catch {
-              columns = ['id'];
+            const regEntity = EXPORT_ENTITY_REGISTRY.find((e) => e.entityName === entity.name);
+            if (regEntity?.expectedColumns && regEntity.expectedColumns.length > 0) {
+              columns = regEntity.expectedColumns.filter((c) => !SENSITIVE_COLUMN_PATTERN.test(c));
+            } else {
+              try {
+                const tableInfo = await (client as any).$queryRawUnsafe(
+                  `PRAGMA table_info("${entity.name}");`
+                ) as Array<{ name: string }>;
+                columns = tableInfo
+                  .map((c) => c.name)
+                  .filter((k) => !SENSITIVE_COLUMN_PATTERN.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
+              } catch {
+                columns = ['id'];
+              }
             }
           }
 
@@ -323,6 +332,7 @@ export class ExportService {
         for (const [entityName, snapshot] of snapshotMap.entries()) {
           const fileName = `${entityName}.csv`;
           const filePath = path.join(bundlePath, fileName);
+          csvFiles.push(filePath);
 
           // stringify with header: true and columns outputs header row even if rows is empty
           const csvOutput = stringify(snapshot.rows, {
@@ -363,14 +373,14 @@ export class ExportService {
         }
 
         const xlsxFileName = 'business_data.xlsx';
-        const xlsxPath = path.join(bundlePath, xlsxFileName);
+        xlsxPath = path.join(bundlePath, xlsxFileName);
         await workbook.xlsx.writeFile(xlsxPath);
 
         const xlsxStats = fs.statSync(xlsxPath);
         totalSizeBytes += xlsxStats.size;
 
         // Section 8: Export verification MUST run during normal export
-        const semanticResult = await semanticVerificationService.verifyDatabaseAgainstExports(
+        semanticResult = await semanticVerificationService.verifyDatabaseAgainstExports(
           client,
           bundlePath,
           xlsxPath,
@@ -412,7 +422,9 @@ export class ExportService {
       };
 
       const manifestPath = path.join(bundlePath, 'export-manifest.json');
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      const tmpManifestPath = `${manifestPath}.tmp_${crypto.randomUUID()}`;
+      fs.writeFileSync(tmpManifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      fs.renameSync(tmpManifestPath, manifestPath);
 
       await systemPrisma.auditEvent.create({
         data: {
@@ -434,10 +446,15 @@ export class ExportService {
         success: true,
         exportId,
         filePath: bundlePath,
+        bundlePath,
+        csvFiles,
+        xlsxPath,
+        manifestPath,
         format: requestedFormat,
         totalRows,
         sizeBytes: totalSizeBytes,
         manifest,
+        verification: semanticResult,
       };
     } catch (err: any) {
       if (fs.existsSync(bundlePath)) {

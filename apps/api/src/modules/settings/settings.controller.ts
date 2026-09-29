@@ -5,7 +5,6 @@ import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, FORBID
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, NotFoundError } from '../../errors';
-import { getDatabasesDir } from '../../infrastructure/paths';
 import { userLifecycleService } from '../system/user-lifecycle/user-lifecycle.service';
 import { backupService } from '../system/backup/backup.service';
 import { databaseProvisioningService } from '../system/database/database-provisioning.service';
@@ -100,14 +99,15 @@ export class SettingsController {
         (req as any).user?.id || 'user'
       );
 
-      if (!exportResult.filePath) {
-        res.status(500).json({ success: false, message: 'Export generated no XLSX output.' });
+      const targetXlsx = exportResult.xlsxPath || path.join(exportResult.bundlePath || exportResult.filePath, 'business_data.xlsx');
+      if (!fs.existsSync(targetXlsx)) {
+        res.status(500).json({ success: false, message: 'Export generated no XLSX output file.' });
         return;
       }
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="diamond_inventory_export.xlsx"');
-      const readStream = fs.createReadStream(exportResult.filePath);
+      const readStream = fs.createReadStream(targetXlsx);
       readStream.pipe(res);
       readStream.on('error', (err: Error) => next(err));
     } catch (error) {
@@ -481,7 +481,7 @@ export class SettingsController {
         return;
       }
 
-      const { FORBIDDEN_PROFILE_NAMES, registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
+      const { FORBIDDEN_PROFILE_NAMES, registerProfile } = require('../../infrastructure/database/prisma');
       if (FORBIDDEN_PROFILE_NAMES.has(cleanName.toLowerCase())) {
         res.status(400).json({
           success: false,
@@ -489,24 +489,22 @@ export class SettingsController {
         });
         return;
       }
-      const canonical = registerProfile({ code: cleanName });
-      await getClientForProfileAsync(cleanName);
 
-      try {
-        await systemPrisma.profile.upsert({
-          where: { code: cleanName },
-          update: { isActive: true },
-          create: { code: cleanName, name: cleanName, dbPath: canonical.dbPath, isActive: true },
-        });
-      } catch {
-        // ignore
-      }
+      // Section 4: Authoritative database context validation before switching
+      const dbContext = await databaseContextService.assertValidBusinessDatabaseContext(cleanName);
+
+      // Invalidate and register canonical profile in in-memory Prisma client cache
+      registerProfile({
+        code: dbContext.profileCode,
+        name: dbContext.profileName,
+        dbPath: dbContext.canonicalPath,
+      });
 
       const allProfiles = getAllProfiles();
       res.json({
         success: true,
-        message: `Verified profile: ${cleanName}`,
-        data: { active: cleanName, profiles: allProfiles }
+        message: `Switched to profile: ${dbContext.profileCode}`,
+        data: { active: dbContext.profileCode, profileId: dbContext.profileId, profiles: allProfiles }
       });
     } catch (error) {
       next(error);
@@ -1238,8 +1236,10 @@ export class SettingsController {
    */
   backupDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
-      const dbContext = await databaseContextService.getDatabaseForProfileCode(activeProfile);
+      const activeProfile = (req as any).profileCode || String(req.headers['x-profile-code'] || '');
+      const dbContext = activeProfile
+        ? await databaseContextService.getDatabaseForProfileCode(activeProfile)
+        : await databaseContextService.getActiveProfileDatabase();
 
       const backupRecord = await backupService.createBackup({
         databasePath: dbContext.canonicalPath,
@@ -1270,9 +1270,11 @@ export class SettingsController {
    */
   checkpointWAL = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
-      const { getClientForProfileAsync } = require('../../infrastructure/database/prisma');
-      const client = await getClientForProfileAsync(activeProfile);
+      const activeProfile = (req as any).profileCode || String(req.headers['x-profile-code'] || '');
+      const dbContext = activeProfile
+        ? await databaseContextService.getDatabaseForProfileCode(activeProfile)
+        : await databaseContextService.getActiveProfileDatabase();
+      const client = databaseContextService.getClientForProfile(dbContext.profileCode);
 
       const result: any = await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
       res.json({
@@ -1444,9 +1446,10 @@ export class SettingsController {
       const activeProfile = getActiveProfileOrDefault();
 
       const formatted = profiles.map((p) => {
-        const canonicalPath = p.databaseRegistries[0]?.canonicalPath || p.dbPath || path.resolve(getDatabasesDir(), `${p.code}.db`);
-        const filename = path.basename(canonicalPath);
-        const exists = fs.existsSync(canonicalPath);
+        const activeReg = (p.databaseRegistries || []).find((r: any) => r.status === 'ACTIVE') || p.databaseRegistries[0];
+        const canonicalPath = activeReg?.canonicalPath || '';
+        const filename = canonicalPath ? path.basename(canonicalPath) : '';
+        const exists = canonicalPath ? fs.existsSync(canonicalPath) : false;
         const sizeBytes = exists ? fs.statSync(canonicalPath).size : 0;
 
         return {
@@ -1604,8 +1607,10 @@ export class SettingsController {
    */
   downloadActiveDatabase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
-      const dbContext = await databaseContextService.getDatabaseForProfileCode(activeProfile);
+      const activeProfile = (req as any).profileCode || String(req.headers['x-profile-code'] || '');
+      const dbContext = activeProfile
+        ? await databaseContextService.getDatabaseForProfileCode(activeProfile)
+        : await databaseContextService.getActiveProfileDatabase();
       const resolvedDbPath = dbContext.canonicalPath;
 
       if (!fs.existsSync(resolvedDbPath)) {

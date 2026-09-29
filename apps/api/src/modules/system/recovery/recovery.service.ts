@@ -1039,6 +1039,165 @@ export class RecoveryService {
   }
 
   /**
+   * Section 27: Detailed Reinstall & Database Classification Taxonomy
+   * Classifies all profiles and physical databases on disk into:
+   * KNOWN_PROFILE, KNOWN_DATABASE, ORPHAN_DATABASE, ORPHAN_PROFILE,
+   * MISSING_DATABASE, CORRUPTED_DATABASE, DUPLICATE_DATABASE, UNSUPPORTED_DATABASE.
+   */
+  async classifyReinstallDatabases(): Promise<{
+    items: Array<{
+      target: string;
+      type: 'PROFILE' | 'DATABASE';
+      profileId?: string;
+      profileCode?: string;
+      canonicalPath?: string;
+      classification:
+        | 'KNOWN_PROFILE'
+        | 'KNOWN_DATABASE'
+        | 'ORPHAN_DATABASE'
+        | 'ORPHAN_PROFILE'
+        | 'MISSING_DATABASE'
+        | 'CORRUPTED_DATABASE'
+        | 'DUPLICATE_DATABASE'
+        | 'UNSUPPORTED_DATABASE';
+      reason: string;
+      recoverable: boolean;
+    }>;
+  }> {
+    ensureAllDataDirs();
+    const items: any[] = [];
+    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
+    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
+    const databasesDir = getDatabasesDir();
+
+    // 1. Inspect all Profiles and their Registries in system.db
+    const profiles = await systemPrisma.profile.findMany({
+      include: { databaseRegistries: true },
+    });
+
+    const registeredCanonicalPaths = new Map<string, string[]>();
+
+    for (const prof of profiles) {
+      const activeRegistries = (prof.databaseRegistries || []).filter((r: any) => r.status === 'ACTIVE');
+      if (activeRegistries.length === 0) {
+        items.push({
+          target: prof.code,
+          type: 'PROFILE',
+          profileId: prof.id,
+          profileCode: prof.code,
+          classification: 'ORPHAN_PROFILE',
+          reason: `Profile "${prof.code}" exists in system.db but has no active registered database registry.`,
+          recoverable: true,
+        });
+        continue;
+      }
+
+      for (const reg of activeRegistries) {
+        const canonical = path.resolve(reg.canonicalPath);
+        const lower = canonical.toLowerCase();
+        const existing = registeredCanonicalPaths.get(lower) || [];
+        existing.push(prof.code);
+        registeredCanonicalPaths.set(lower, existing);
+
+        if (!fs.existsSync(canonical)) {
+          items.push({
+            target: prof.code,
+            type: 'PROFILE',
+            profileId: prof.id,
+            profileCode: prof.code,
+            canonicalPath: canonical,
+            classification: 'MISSING_DATABASE',
+            reason: `Registered database file for profile "${prof.code}" is missing on disk: ${canonical}`,
+            recoverable: false,
+          });
+          continue;
+        }
+
+        const val = await databaseValidationService.validateDatabase(canonical);
+        if (!val.isValid) {
+          const classification = val.status === 'UNSUPPORTED' ? 'UNSUPPORTED_DATABASE' : 'CORRUPTED_DATABASE';
+          items.push({
+            target: prof.code,
+            type: 'DATABASE',
+            profileId: prof.id,
+            profileCode: prof.code,
+            canonicalPath: canonical,
+            classification,
+            reason: val.details || val.error || 'Database failed validation checks.',
+            recoverable: false,
+          });
+        } else {
+          items.push({
+            target: prof.code,
+            type: 'PROFILE',
+            profileId: prof.id,
+            profileCode: prof.code,
+            canonicalPath: canonical,
+            classification: 'KNOWN_PROFILE',
+            reason: `Active profile with healthy, validated database.`,
+            recoverable: true,
+          });
+          items.push({
+            target: canonical,
+            type: 'DATABASE',
+            profileId: prof.id,
+            profileCode: prof.code,
+            canonicalPath: canonical,
+            classification: 'KNOWN_DATABASE',
+            reason: `Registered, healthy database attached to profile "${prof.code}".`,
+            recoverable: true,
+          });
+        }
+      }
+    }
+
+    // Check duplicate paths
+    for (const [lowerPath, codes] of registeredCanonicalPaths.entries()) {
+      if (codes.length > 1) {
+        items.push({
+          target: lowerPath,
+          type: 'DATABASE',
+          canonicalPath: lowerPath,
+          classification: 'DUPLICATE_DATABASE',
+          reason: `Physical database is simultaneously mapped to multiple profiles: ${codes.join(', ')}`,
+          recoverable: false,
+        });
+      }
+    }
+
+    // 2. Inspect physical files on disk for orphan databases
+    if (fs.existsSync(databasesDir)) {
+      const files = fs.readdirSync(databasesDir);
+      for (const file of files) {
+        if (!file.endsWith('.db') && !file.endsWith('.sqlite')) continue;
+        const fullPath = path.resolve(databasesDir, file);
+        const lower = fullPath.toLowerCase();
+        if (lower === controlDb || lower === templateDb) continue;
+
+        if (!registeredCanonicalPaths.has(lower)) {
+          const val = await databaseValidationService.validateDatabase(fullPath);
+          let classification: any = 'ORPHAN_DATABASE';
+          if (!val.isValid) {
+            classification = val.status === 'UNSUPPORTED' ? 'UNSUPPORTED_DATABASE' : 'CORRUPTED_DATABASE';
+          }
+          items.push({
+            target: path.basename(fullPath),
+            type: 'DATABASE',
+            canonicalPath: fullPath,
+            classification,
+            reason: val.isValid
+              ? `Unregistered database file discovered on disk with valid ERP data.`
+              : (val.details || 'Corrupted or unsupported unregistered database file.'),
+            recoverable: val.isValid,
+          });
+        }
+      }
+    }
+
+    return { items };
+  }
+
+  /**
    * Start fresh installation:
    * Retires previous active installation(s); old database files, backups, and historical records remain 100% untouched on disk!
    */

@@ -2,7 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 import { LOCATIONS as BASE_LOCATIONS, DEFAULT_LOCATION } from '@diamond-erp/contracts';
 
-const STORAGE_KEY = 'diamond_erp_locations';
+function getStorageKey(): string {
+  const profileId = typeof localStorage !== 'undefined' ? localStorage.getItem('profileId') : null;
+  return profileId ? `diamond_erp_locations_${profileId}` : 'diamond_erp_locations';
+}
+
 const OBSOLETE_LOCATIONS = new Set([
   'Mumbai - Main Office',
   'Surat - Cutting Unit',
@@ -46,7 +50,7 @@ function sanitizeLocations(list: string[]): string[] {
 
 function getInitialLocations(): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getStorageKey());
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -87,7 +91,7 @@ export function useLocations() {
           if (Array.isArray(parsed) && parsed.length > 0) {
             const sanitized = sanitizeLocations(parsed);
             setLocations(sanitized);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+            localStorage.setItem(getStorageKey(), JSON.stringify(sanitized));
           }
         }
       } catch (err) {
@@ -97,9 +101,17 @@ export function useLocations() {
       }
     };
 
+    const handleProfileChange = () => {
+      setLocations(getInitialLocations());
+      fetchRemote();
+    };
+
+    window.addEventListener('profileChanged', handleProfileChange);
     fetchRemote();
+
     return () => {
       active = false;
+      window.removeEventListener('profileChanged', handleProfileChange);
     };
   }, []);
 
@@ -107,7 +119,7 @@ export function useLocations() {
     const sanitized = sanitizeLocations(updated);
     setLocations(sanitized);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+      localStorage.setItem(getStorageKey(), JSON.stringify(sanitized));
     } catch {
       // ignore
     }

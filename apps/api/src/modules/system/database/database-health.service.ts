@@ -73,8 +73,11 @@ export class DatabaseHealthService {
         issues.push(`Database Context Resolution Error: ${err.message}`);
       }
 
-      const dbPath = dbContext?.canonicalPath || prof.dbPath || path.resolve(getDatabasesDir(), `${prof.code}.db`);
-      registeredPaths.add(path.resolve(dbPath).toLowerCase());
+      const activeReg = (prof.databaseRegistries || []).find((r: any) => r.status === 'ACTIVE') || prof.databaseRegistries[0];
+      const dbPath = dbContext?.canonicalPath || activeReg?.canonicalPath || '';
+      if (dbPath) {
+        registeredPaths.add(path.resolve(dbPath).toLowerCase());
+      }
 
       const exists = fs.existsSync(dbPath);
       let readable = false;
@@ -134,18 +137,23 @@ export class DatabaseHealthService {
           })
         : null;
 
-      // Ownership invariants: Verify no duplicate profile assignment for this DB
+      // Ownership invariants: Verify no duplicate profile assignment for this DB (case-insensitive for Windows)
       let ownershipValid = true;
-      const otherRegistries = await systemPrisma.databaseRegistry.findMany({
-        where: {
-          canonicalPath: path.resolve(dbPath),
-          NOT: { profileId: prof.id },
-        },
-      });
+      if (dbPath) {
+        const allOtherRegistries = await systemPrisma.databaseRegistry.findMany({
+          where: {
+            NOT: { profileId: prof.id },
+          },
+        });
 
-      if (otherRegistries.length > 0) {
-        ownershipValid = false;
-        issues.push(`Ownership Conflict: Database path is simultaneously mapped to another profile/registry.`);
+        const hasConflict = allOtherRegistries.some(
+          (r) => path.resolve(r.canonicalPath).toLowerCase() === path.resolve(dbPath).toLowerCase()
+        );
+
+        if (hasConflict) {
+          ownershipValid = false;
+          issues.push('Ownership Conflict: Database path is simultaneously mapped to another profile/registry.');
+        }
       }
 
       // Explicit Status Taxonomy (Section 16)
