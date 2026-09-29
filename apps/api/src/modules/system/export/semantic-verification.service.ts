@@ -56,14 +56,32 @@ export class SemanticVerificationService {
       return true;
     }
 
-    // Number comparison (handles Decimal, float, int string representations)
-    if (typeof valA === 'number' || typeof valB === 'number' ||
-        (!isNaN(Number(valA)) && !isNaN(Number(valB)) && typeof valA !== 'boolean' && typeof valB !== 'boolean')) {
-      const numA = Number(valA);
-      const numB = Number(valB);
-      if (!isNaN(numA) && !isNaN(numB)) {
-        return Math.abs(numA - numB) < 0.0001;
+    // Boolean representation (Section 7.C: normalize true/false vs 1/0 vs 'true'/'false' vs '1'/'0')
+    const toBool = (val: any): boolean | null => {
+      if (typeof val === 'boolean') return val;
+      if (val === 1 || val === '1' || val === 'true' || val === 'TRUE') return true;
+      if (val === 0 || val === '0' || val === 'false' || val === 'FALSE') return false;
+      return null;
+    };
+    if (typeof valA === 'boolean' || typeof valB === 'boolean' || valA === 'true' || valA === 'false' || valB === 'true' || valB === 'false') {
+      const bA = toBool(valA);
+      const bB = toBool(valB);
+      if (bA !== null && bB !== null) {
+        return bA === bB;
       }
+    }
+
+    // Number comparison (handles Decimal, float, int string representations, stripping quotes)
+    const cleanNum = (val: any): number => {
+      if (typeof val === 'number') return val;
+      if (typeof val === 'object' && val !== null && typeof val.toNumber === 'function') return val.toNumber();
+      const s = String(val ?? '').replace(/^["']|["']$/g, '').trim();
+      return s === '' ? NaN : Number(s);
+    };
+    const numA = cleanNum(valA);
+    const numB = cleanNum(valB);
+    if (!isNaN(numA) && !isNaN(numB) && typeof valA !== 'boolean' && typeof valB !== 'boolean') {
+      return Math.abs(numA - numB) < 0.0001;
     }
 
     // Date comparison
@@ -76,9 +94,9 @@ export class SemanticVerificationService {
       }
     }
 
-    // String comparison (trimmed, stripping formula escape quote)
-    const strA = String(valA ?? '').trim().replace(/^'/, '');
-    const strB = String(valB ?? '').trim().replace(/^'/, '');
+    // String comparison (trimmed, stripping formula escape quote and wrapping quotes)
+    const strA = String(valA ?? '').replace(/^["']|["']$/g, '').trim().replace(/^'/, '');
+    const strB = String(valB ?? '').replace(/^["']|["']$/g, '').trim().replace(/^'/, '');
     return strA === strB;
   }
 
@@ -224,26 +242,89 @@ export class SemanticVerificationService {
         }
       }
 
-      // Check column completeness (Section 15 & 16)
+      // Check column completeness (Section 7, 23: exact columns including empty tables)
+      let expectedCols: string[] = [];
       if (dbRows.length > 0) {
-        const expectedCols = Object.keys(dbRows[0]).filter(
+        expectedCols = Object.keys(dbRows[0]).filter(
           (c) => !SENSITIVE_COLUMN_PATTERN.test(c) && c !== 'createdAt' && c !== 'updatedAt' && c !== 'lastValidatedAt'
         );
-        if (csvRows.length > 0) {
-          const actualCsvCols = new Set(Object.keys(csvRows[0]));
-          for (const col of expectedCols) {
-            if (!actualCsvCols.has(col)) {
-              errors.push(`Missing expected column "${col}" from CSV export on ${entity.entityName}`);
+      } else {
+        try {
+          const tableInfo = await (client as any).$queryRawUnsafe(
+            `PRAGMA table_info("${entity.entityName}");`
+          ) as Array<{ name: string }>;
+          expectedCols = tableInfo
+            .map((col) => col.name)
+            .filter((c) => !SENSITIVE_COLUMN_PATTERN.test(c) && c !== 'createdAt' && c !== 'updatedAt' && c !== 'lastValidatedAt');
+        } catch {
+          expectedCols = [];
+        }
+      }
+
+      // Read actual CSV header columns
+      let actualCsvCols: string[] = [];
+      if (fs.existsSync(csvPath)) {
+        try {
+          const raw = fs.readFileSync(csvPath, 'utf-8');
+          const firstLine = raw.split(/\r?\n/).find((l) => l.trim().length > 0);
+          if (firstLine) {
+            const parsed = parse(firstLine);
+            if (parsed && parsed.length > 0) {
+              actualCsvCols = parsed[0];
             }
+          }
+        } catch {}
+      }
+
+      // Read actual XLSX header columns
+      let actualXlsxCols: string[] = [];
+      if (workbook) {
+        const sheet = workbook.getWorksheet(entity.entityName);
+        if (sheet) {
+          const headers: string[] = [];
+          sheet.getRow(1).eachCell((cell, col) => {
+            if (cell.value) headers[col] = String(cell.value);
+          });
+          actualXlsxCols = headers.filter(Boolean);
+        }
+      }
+
+      // Check CSV columns against expected
+      if (expectedCols.length > 0) {
+        const csvSet = new Set(actualCsvCols);
+        for (const col of expectedCols) {
+          if (!csvSet.has(col)) {
+            errors.push(`Missing expected column "${col}" from CSV export on ${entity.entityName}`);
           }
         }
-        if (xlsxRows.length > 0) {
-          const actualXlsxCols = new Set(Object.keys(xlsxRows[0]));
-          for (const col of expectedCols) {
-            if (!actualXlsxCols.has(col)) {
-              errors.push(`Missing expected column "${col}" from XLSX export on ${entity.entityName}`);
-            }
+        for (const col of actualCsvCols) {
+          if (!expectedCols.includes(col) && !SENSITIVE_COLUMN_PATTERN.test(col) && col !== 'createdAt' && col !== 'updatedAt') {
+            errors.push(`Unexpected column "${col}" found in CSV export on ${entity.entityName}`);
           }
+        }
+      }
+
+      // Check XLSX columns against expected
+      if (expectedCols.length > 0 && workbook) {
+        const xlsxSet = new Set(actualXlsxCols);
+        for (const col of expectedCols) {
+          if (!xlsxSet.has(col)) {
+            errors.push(`Missing expected column "${col}" from XLSX export on ${entity.entityName}`);
+          }
+        }
+        for (const col of actualXlsxCols) {
+          if (!expectedCols.includes(col) && !SENSITIVE_COLUMN_PATTERN.test(col) && col !== 'createdAt' && col !== 'updatedAt') {
+            errors.push(`Unexpected column "${col}" found in XLSX export on ${entity.entityName}`);
+          }
+        }
+      }
+
+      // Exact CSV columns === XLSX columns
+      if (workbook && actualCsvCols.length > 0 && actualXlsxCols.length > 0) {
+        const sortedCsv = [...actualCsvCols].sort().join(',');
+        const sortedXlsx = [...actualXlsxCols].sort().join(',');
+        if (sortedCsv !== sortedXlsx) {
+          errors.push(`Column set mismatch between CSV and XLSX on ${entity.entityName}`);
         }
       }
 
@@ -358,14 +439,13 @@ export class SemanticVerificationService {
   }
 
   /**
-   * Compares two export snapshots (e.g. Normal Export vs Uninstall Preservation Export).
-   * Verifies that the underlying business records in both CSV and XLSX are identical (Section 54).
+   * Compares two export snapshots (Section 9: Normal Export vs Uninstall Preservation Export).
+   * Verifies that the underlying business records in both CSV and XLSX are identical row-for-row,
+   * column-for-column, and value-for-value across normalized semantic records.
    */
-  async compareExports(
-    csvDirA: string,
-    xlsxPathA: string,
-    csvDirB: string,
-    xlsxPathB: string,
+  async compareExportSnapshots(
+    snapshotA: { csvDir?: string; xlsxPath?: string },
+    snapshotB: { csvDir?: string; xlsxPath?: string },
     entityFilter?: string[]
   ): Promise<{
     status: 'VERIFIED' | 'FAILED';
@@ -382,34 +462,139 @@ export class SemanticVerificationService {
     let csvFailed = false;
     let xlsxFailed = false;
 
-    // 1. Compare CSVs
-    for (const ent of entities) {
-      const pathA = path.join(csvDirA, `${ent.entityName}.csv`);
-      const pathB = path.join(csvDirB, `${ent.entityName}.csv`);
-      if (fs.existsSync(pathA) && fs.existsSync(pathB)) {
-        const rowsA = parse(fs.readFileSync(pathA, 'utf-8'), { columns: true, skip_empty_lines: true });
-        const rowsB = parse(fs.readFileSync(pathB, 'utf-8'), { columns: true, skip_empty_lines: true });
-        if (rowsA.length !== rowsB.length) {
-          discrepancies.push(`CSV row count mismatch on ${ent.entityName}: A=${rowsA.length} vs B=${rowsB.length}`);
-          csvFailed = true;
+    // 1. Deep Compare CSVs
+    if (snapshotA.csvDir && snapshotB.csvDir) {
+      for (const ent of entities) {
+        const keyField = this.getKeyField(ent.entityName);
+        const pathA = path.join(snapshotA.csvDir, `${ent.entityName}.csv`);
+        const pathB = path.join(snapshotB.csvDir, `${ent.entityName}.csv`);
+        if (fs.existsSync(pathA) && fs.existsSync(pathB)) {
+          const rowsA = parse(fs.readFileSync(pathA, 'utf-8'), { columns: true, skip_empty_lines: true }) as Array<Record<string, any>>;
+          const rowsB = parse(fs.readFileSync(pathB, 'utf-8'), { columns: true, skip_empty_lines: true }) as Array<Record<string, any>>;
+
+          if (rowsA.length !== rowsB.length) {
+            discrepancies.push(`CSV row count mismatch on ${ent.entityName}: A=${rowsA.length} vs B=${rowsB.length}`);
+            csvFailed = true;
+          }
+
+          // Column comparison
+          const colsA = rowsA.length > 0 ? Object.keys(rowsA[0]).sort() : [];
+          const colsB = rowsB.length > 0 ? Object.keys(rowsB[0]).sort() : [];
+          if (colsA.join(',') !== colsB.join(',')) {
+            discrepancies.push(`CSV column mismatch on ${ent.entityName}: A=[${colsA.join(',')}] vs B=[${colsB.join(',')}]`);
+            csvFailed = true;
+          }
+
+          // Key and Value comparison (symmetric)
+          const mapA = new Map<string, any>();
+          for (const r of rowsA) mapA.set(String(r[keyField] || r.id || ''), r);
+          const mapB = new Map<string, any>();
+          for (const r of rowsB) mapB.set(String(r[keyField] || r.id || ''), r);
+
+          for (const [key] of mapA.entries()) {
+            if (!mapB.has(key)) {
+              discrepancies.push(`Row key "${key}" present in Snapshot A but missing in Snapshot B for ${ent.entityName}`);
+              csvFailed = true;
+            }
+          }
+
+          for (const rB of rowsB) {
+            const key = String(rB[keyField] || rB.id || '');
+            if (!key) continue;
+            const rA = mapA.get(key);
+            if (!rA) {
+              discrepancies.push(`Row key "${key}" present in Snapshot B but missing in Snapshot A for ${ent.entityName}`);
+              csvFailed = true;
+              continue;
+            }
+            for (const [col, valB] of Object.entries(rB)) {
+              if (col in rA && !this.valuesMatch(rA[col], valB)) {
+                discrepancies.push(`Value mismatch on ${ent.entityName} [${key}].${col}: A="${rA[col]}" vs B="${valB}"`);
+                csvFailed = true;
+                break;
+              }
+            }
+          }
         }
       }
     }
 
-    // 2. Compare XLSX workbooks
-    if (fs.existsSync(xlsxPathA) && fs.existsSync(xlsxPathB)) {
+    // 2. Deep Compare XLSX workbooks
+    if (snapshotA.xlsxPath && snapshotB.xlsxPath && fs.existsSync(snapshotA.xlsxPath) && fs.existsSync(snapshotB.xlsxPath)) {
       const wbA = new ExcelJS.Workbook();
       const wbB = new ExcelJS.Workbook();
-      await wbA.xlsx.readFile(xlsxPathA);
-      await wbB.xlsx.readFile(xlsxPathB);
+      await wbA.xlsx.readFile(snapshotA.xlsxPath);
+      await wbB.xlsx.readFile(snapshotB.xlsxPath);
 
       for (const ent of entities) {
+        const keyField = this.getKeyField(ent.entityName);
         const sheetA = wbA.getWorksheet(ent.entityName);
         const sheetB = wbB.getWorksheet(ent.entityName);
         if (sheetA && sheetB) {
-          if (sheetA.rowCount !== sheetB.rowCount) {
-            discrepancies.push(`XLSX row count mismatch on ${ent.entityName}: A=${sheetA.rowCount} vs B=${sheetB.rowCount}`);
+          const rowsA: any[] = [];
+          const rowsB: any[] = [];
+
+          const headersA: string[] = [];
+          sheetA.getRow(1).eachCell((cell, col) => { headersA[col] = String(cell.value || ''); });
+          for (let r = 2; r <= sheetA.rowCount; r++) {
+            const row = sheetA.getRow(r);
+            if (!row.hasValues) continue;
+            const obj: Record<string, any> = {};
+            row.eachCell((cell, col) => { if (headersA[col]) obj[headersA[col]] = cell.value; });
+            rowsA.push(obj);
+          }
+
+          const headersB: string[] = [];
+          sheetB.getRow(1).eachCell((cell, col) => { headersB[col] = String(cell.value || ''); });
+          for (let r = 2; r <= sheetB.rowCount; r++) {
+            const row = sheetB.getRow(r);
+            if (!row.hasValues) continue;
+            const obj: Record<string, any> = {};
+            row.eachCell((cell, col) => { if (headersB[col]) obj[headersB[col]] = cell.value; });
+            rowsB.push(obj);
+          }
+
+          if (rowsA.length !== rowsB.length) {
+            discrepancies.push(`XLSX row count mismatch on ${ent.entityName}: A=${rowsA.length} vs B=${rowsB.length}`);
             xlsxFailed = true;
+          }
+
+          // Column comparison
+          const cleanHA = headersA.filter(Boolean).sort().join(',');
+          const cleanHB = headersB.filter(Boolean).sort().join(',');
+          if (cleanHA !== cleanHB) {
+            discrepancies.push(`XLSX column mismatch on ${ent.entityName}: A=[${cleanHA}] vs B=[${cleanHB}]`);
+            xlsxFailed = true;
+          }
+
+          const mapA = new Map<string, any>();
+          for (const r of rowsA) mapA.set(String(r[keyField] || r.id || ''), r);
+          const mapB = new Map<string, any>();
+          for (const r of rowsB) mapB.set(String(r[keyField] || r.id || ''), r);
+
+          for (const [key] of mapA.entries()) {
+            if (!mapB.has(key)) {
+              discrepancies.push(`XLSX row key "${key}" present in Snapshot A but missing in Snapshot B for ${ent.entityName}`);
+              xlsxFailed = true;
+            }
+          }
+
+          for (const rB of rowsB) {
+            const key = String(rB[keyField] || rB.id || '');
+            if (!key) continue;
+            const rA = mapA.get(key);
+            if (!rA) {
+              discrepancies.push(`XLSX row key "${key}" present in Snapshot B but missing in Snapshot A for ${ent.entityName}`);
+              xlsxFailed = true;
+              continue;
+            }
+            for (const [col, valB] of Object.entries(rB)) {
+              if (col in rA && !this.valuesMatch(rA[col], valB)) {
+                discrepancies.push(`XLSX value mismatch on ${ent.entityName} [${key}].${col}: A="${rA[col]}" vs B="${valB}"`);
+                xlsxFailed = true;
+                break;
+              }
+            }
           }
         }
       }
@@ -421,6 +606,23 @@ export class SemanticVerificationService {
       xlsxVsXlsx: !xlsxFailed ? 'VERIFIED' : 'FAILED',
       discrepancies,
     };
+  }
+
+  /**
+   * Alias for backward compatibility with compareExports callers.
+   */
+  async compareExports(
+    csvDirA: string,
+    xlsxPathA: string,
+    csvDirB: string,
+    xlsxPathB: string,
+    entityFilter?: string[]
+  ) {
+    return this.compareExportSnapshots(
+      { csvDir: csvDirA, xlsxPath: xlsxPathA },
+      { csvDir: csvDirB, xlsxPath: xlsxPathB },
+      entityFilter
+    );
   }
 }
 

@@ -243,6 +243,12 @@ export class BackupService {
           throw new ValidationError(`SQLite integrity check failed: ${integrityResult}`);
         }
 
+        // Run PRAGMA foreign_key_check (Section 17)
+        const fkRows: any = await verifyClient.$queryRawUnsafe('PRAGMA foreign_key_check;');
+        if (fkRows && fkRows.length > 0) {
+          throw new ValidationError(`SQLite foreign key check failed with ${fkRows.length} violation(s)`);
+        }
+
         const tables: any = await verifyClient.$queryRawUnsafe(
           "SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
         );
@@ -571,16 +577,37 @@ export class BackupService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (verifiedBackups.length <= retainCount) {
+    // Safety 1: Never retain less than 2 verified backups per profile (Section 18)
+    const safeRetainCount = Math.max(retainCount, 2);
+    if (verifiedBackups.length <= safeRetainCount) {
       return 0;
     }
 
-    // Keep the first `retainCount` records (which are newest)
-    const toPrune = verifiedBackups.slice(retainCount);
+    // Keep the first `safeRetainCount` records (which are newest verified)
+    const toPrune = verifiedBackups.slice(safeRetainCount);
     let pruned = 0;
 
     for (const bkp of toPrune) {
       try {
+        // Safety 3: Never delete backup referenced by a preservation package
+        const inPreservation = await systemPrisma.preservationPackage.findFirst({
+          where: {
+            destinationPath: { contains: bkp.backupId },
+          },
+        });
+        if (inPreservation) {
+          logger.info(`[BackupService] Skipping prune for backup ${bkp.backupId}: referenced by preservation package ${inPreservation.packageId}`);
+          continue;
+        }
+
+        // Safety 4: Retain PROFILE_DELETE backups for safety window
+        if (bkp.backupType === 'PROFILE_DELETE') {
+          const ageMs = Date.now() - new Date(bkp.createdAt).getTime();
+          if (ageMs < 30 * 24 * 60 * 60 * 1000) {
+            continue;
+          }
+        }
+
         if (fs.existsSync(bkp.backupPath)) {
           fs.unlinkSync(bkp.backupPath);
         }

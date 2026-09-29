@@ -220,6 +220,25 @@ export class DatabaseValidationService {
         };
       }
 
+      // Run PRAGMA foreign_key_check (Section 17)
+      const fkResult = await readOnlyClient.$queryRawUnsafe<any[]>('PRAGMA foreign_key_check;');
+      if (fkResult && fkResult.length > 0) {
+        logger.warn(`Foreign key check failed on ${canonicalPath}: ${fkResult.length} violation(s)`);
+        return {
+          status: 'CORRUPTED',
+          canonicalPath,
+          isValid: false,
+          tableCount: 0,
+          schemaVersion: 0,
+          integrityCheck: 'foreign_key_violations',
+          tablesFound: [],
+          missingRequiredTables: REQUIRED_ERP_TABLES,
+          detectedType: 'CORRUPTED',
+          details: `SQLite foreign_key_check detected ${fkResult.length} foreign key violation(s)`,
+          error: 'Foreign key integrity violation',
+        };
+      }
+
       // Query tables from sqlite_master
       const tablesMaster = await readOnlyClient.$queryRawUnsafe<{ name: string }[]>(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_prisma_%';"

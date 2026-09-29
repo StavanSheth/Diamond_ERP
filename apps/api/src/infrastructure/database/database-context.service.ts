@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { PrismaClient } from '@prisma/client';
 import { 
   systemPrisma, 
@@ -11,10 +10,9 @@ import {
 } from './prisma';
 import { canonicalizeDatabasePath } from '../../modules/system/database/database-path.util';
 import { databaseValidationService } from '../../modules/system/database/database-validation.service';
-import { databaseRegistryService } from '../../modules/system/database/database-registry.service';
 import { ValidationError, NotFoundError, ConflictError } from '../../errors';
 import { logger } from '../logging';
-import { getControlDbPath, getDatabaseTemplatePath, getDatabasesDir } from '../paths';
+import { getControlDbPath, getDatabaseTemplatePath } from '../paths';
 
 
 export interface ProfileDatabaseContext {
@@ -47,6 +45,7 @@ export interface ProfileDatabaseContext {
 export class DatabaseContextService {
   /**
    * Sync in-memory prisma configured profiles strictly with system.db (authoritative SSOT).
+   * Invariant C: Never search for <profileCode>.db when DatabaseRegistry is missing.
    */
   async syncProfilesFromSystemDb(): Promise<void> {
     try {
@@ -60,24 +59,17 @@ export class DatabaseContextService {
       });
 
       for (const prof of activeProfiles) {
-        let canonicalDbPath = prof.databaseRegistries[0]?.canonicalPath || prof.dbPath;
-        if (!canonicalDbPath) {
-          const candidatePaths = [
-            path.resolve(getDatabasesDir(), `${prof.code}.db`),
-            path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'DiamondERP', 'databases', `${prof.code}.db`),
-          ];
-          for (const cand of candidatePaths) {
-            if (fs.existsSync(cand)) {
-              canonicalDbPath = cand;
-              await databaseRegistryService.registerDatabase({
-                rawPath: cand,
-                profileId: prof.id,
-                displayName: prof.name || prof.code,
-              }).catch(() => {});
-              break;
-            }
-          }
+        if (!prof.databaseRegistries || prof.databaseRegistries.length === 0) {
+          logger.warn(`[DatabaseContextService] Lifecycle notice: Profile "${prof.code}" has no active registered DatabaseRegistry. Guessing DB path is forbidden.`);
+          continue;
         }
+
+        if (prof.databaseRegistries.length > 1) {
+          logger.warn(`[DatabaseContextService] Lifecycle error: Profile "${prof.code}" is mapped to ${prof.databaseRegistries.length} active databases. Expected exactly one.`);
+          continue;
+        }
+
+        const canonicalDbPath = prof.databaseRegistries[0].canonicalPath;
         if (canonicalDbPath && fs.existsSync(canonicalDbPath)) {
           try {
             registerProfile({
@@ -88,6 +80,8 @@ export class DatabaseContextService {
           } catch {
             // Profile may already be registered
           }
+        } else {
+          logger.warn(`[DatabaseContextService] Physical DB file missing on disk for active profile "${prof.code}": "${canonicalDbPath}"`);
         }
       }
     } catch (err: any) {
@@ -96,39 +90,22 @@ export class DatabaseContextService {
   }
 
   /**
-   * Resolve authoritative database context for a profile by profile ID.
+   * Authoritative validation of business database context (Section 1.E).
+   * Rejects: system.db, template.db, missing file, non-canonical path, duplicate ownership,
+   * multiple active DBs, profile without active registry.
    */
-  async getDatabaseForProfile(profileId: string): Promise<ProfileDatabaseContext> {
-    if (!profileId || !profileId.trim()) {
-      throw new ValidationError('Profile ID is required to resolve database context.');
+  async assertValidBusinessDatabaseContext(profileIdOrCode: string): Promise<ProfileDatabaseContext> {
+    if (!profileIdOrCode || !profileIdOrCode.trim()) {
+      throw new ValidationError('Profile identifier is required to validate database context.');
     }
+    const clean = profileIdOrCode.trim();
 
-    const profile = await systemPrisma.profile.findUnique({
-      where: { id: profileId.trim() },
-      include: {
-        databaseRegistries: true,
-      },
-    });
-
-    if (!profile) {
-      throw new NotFoundError(`Profile not found for ID: "${profileId}"`);
-    }
-
-    return this.resolveContextFromProfile(profile);
-  }
-
-  /**
-   * Resolve authoritative database context for a profile by profile code.
-   */
-  async getDatabaseForProfileCode(profileCode: string): Promise<ProfileDatabaseContext> {
-    if (!profileCode || !profileCode.trim()) {
-      throw new ValidationError('Profile code is required to resolve database context.');
-    }
-
-    const cleanCode = profileCode.trim();
     const profile = await systemPrisma.profile.findFirst({
       where: {
-        code: { equals: cleanCode },
+        OR: [
+          { id: clean },
+          { code: { equals: clean } },
+        ],
       },
       include: {
         databaseRegistries: true,
@@ -136,54 +113,68 @@ export class DatabaseContextService {
     });
 
     if (!profile) {
-      throw new NotFoundError(`Profile not found for code: "${profileCode}"`);
+      throw new NotFoundError(`Profile not found for identifier: "${clean}"`);
     }
 
-    return this.resolveContextFromProfile(profile);
-  }
+    if (!profile.isActive) {
+      throw new ConflictError(`Profile "${profile.code}" is not active.`);
+    }
 
-  /**
-   * Resolve authoritative database context for the active request's profile.
-   * Fails closed if no profile context is established.
-   */
-  async getActiveProfileDatabase(): Promise<ProfileDatabaseContext> {
-    const activeProfileCode = getActiveProfile();
-    return this.getDatabaseForProfileCode(activeProfileCode);
-  }
-
-  /**
-   * Internal helper: validates ownership invariants on a loaded profile.
-   */
-  private async resolveContextFromProfile(profile: any): Promise<ProfileDatabaseContext> {
     const activeRegistries = (profile.databaseRegistries || []).filter(
       (r: any) => r.status === 'ACTIVE'
     );
 
-    // Invariant F: A Profile can point to ONLY ONE active physical database
+    // Invariant D: Exactly one active registry per profile
+    if (activeRegistries.length === 0) {
+      throw new NotFoundError(
+        `Database lifecycle error: Profile "${profile.code}" (${profile.id}) exists but has no active registered DatabaseRegistry entry. Silent database path inference is forbidden.`
+      );
+    }
+
     if (activeRegistries.length > 1) {
       throw new ConflictError(
         `Database ownership conflict: Profile "${profile.code}" (${profile.id}) is mapped to ${activeRegistries.length} active databases. Expected exactly one.`
       );
     }
 
-    let targetRegistry = activeRegistries[0];
+    const targetRegistry = activeRegistries[0];
 
-    // If no active registry, inspect all registries for this profile
-    if (!targetRegistry && (profile.databaseRegistries || []).length > 0) {
-      targetRegistry = profile.databaseRegistries[0];
-    }
-
-    // Invariant: Profile exists BUT DatabaseRegistry entry does not exist -> Deterministic Lifecycle Error
-    if (!targetRegistry) {
-      throw new NotFoundError(
-        `Database lifecycle error: Profile "${profile.code}" (${profile.id}) exists but has no registered DatabaseRegistry entry. Silent database path inference is forbidden.`
+    // Invariant: Registry must belong to this profile
+    if (!targetRegistry.profileId || targetRegistry.profileId !== profile.id) {
+      throw new ConflictError(
+        `Database ownership conflict: Registry entry "${targetRegistry.databaseId}" is not attached to profile "${profile.id}".`
       );
     }
 
-    const canonicalPath = targetRegistry.canonicalPath;
-    const databaseId = targetRegistry.databaseId;
-    let status: string = targetRegistry.status || 'ACTIVE';
-    const schemaVersion: number = targetRegistry.schemaVersion || profile.schemaVersion || 1;
+    if (!targetRegistry.databaseId) {
+      throw new ConflictError(`Database registry record is missing a stable databaseId.`);
+    }
+
+    // Canonical path validation
+    const pathRes = canonicalizeDatabasePath(targetRegistry.canonicalPath);
+    if (!pathRes.valid) {
+      throw new ValidationError(`Non-canonical database path in registry: ${pathRes.error}`);
+    }
+    const canonicalPath = pathRes.canonicalPath;
+
+    // Physical file must exist
+    if (!fs.existsSync(canonicalPath)) {
+      throw new NotFoundError(
+        `Database file is missing on disk for profile "${profile.code}": "${canonicalPath}".`
+      );
+    }
+
+    // Invariant: Reject internal control & template databases as business databases
+    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
+    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
+    const lowerPath = canonicalPath.toLowerCase();
+
+    if (lowerPath === controlDb) {
+      throw new ConflictError('Cannot use system control database (system.db) as a profile business database.');
+    }
+    if (templateDb && lowerPath === templateDb) {
+      throw new ConflictError('Cannot use template database (template.db) as a profile business database.');
+    }
 
     // Invariant E: A physical database path can belong to ONLY ONE Profile
     const conflictingRegistries = await systemPrisma.databaseRegistry.findMany({
@@ -201,32 +192,40 @@ export class DatabaseContextService {
       );
     }
 
-    // Invariant: Reject internal control & template databases as business databases
-    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
-    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
-    const lowerPath = canonicalPath.toLowerCase();
-
-    if (lowerPath === controlDb) {
-      throw new ConflictError('Cannot use system control database (system.db) as a profile business database.');
-    }
-    if (templateDb && lowerPath === templateDb) {
-      throw new ConflictError('Cannot use template database (template.db) as a profile business database.');
-    }
-
-    if (!fs.existsSync(canonicalPath)) {
-      status = 'MISSING';
-    }
-
     return {
       profileId: profile.id,
       profileCode: profile.code,
       profileName: profile.name,
-      databaseId,
+      databaseId: targetRegistry.databaseId,
       canonicalPath,
-      status,
-      schemaVersion,
+      status: targetRegistry.status || 'ACTIVE',
+      schemaVersion: targetRegistry.schemaVersion || profile.schemaVersion || 1,
     };
   }
+
+  /**
+   * Resolve authoritative database context for a profile by profile ID.
+   */
+  async getDatabaseForProfile(profileId: string): Promise<ProfileDatabaseContext> {
+    return this.assertValidBusinessDatabaseContext(profileId);
+  }
+
+  /**
+   * Resolve authoritative database context for a profile by profile code.
+   */
+  async getDatabaseForProfileCode(profileCode: string): Promise<ProfileDatabaseContext> {
+    return this.assertValidBusinessDatabaseContext(profileCode);
+  }
+
+  /**
+   * Resolve authoritative database context for the active request's profile.
+   * Fails closed if no profile context is established.
+   */
+  async getActiveProfileDatabase(): Promise<ProfileDatabaseContext> {
+    const activeProfileCode = getActiveProfile();
+    return this.getDatabaseForProfileCode(activeProfileCode);
+  }
+
 
   /**
    * Validate that a database belongs strictly to the specified profile.

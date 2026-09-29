@@ -106,6 +106,26 @@ export class UninstallController {
       next(err);
     }
   };
+
+  /**
+   * Section 12: Standard 1-step automated uninstall flow endpoint.
+   */
+  autoPreserveAndAuthorize = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const performedBy = (req as any).user?.username || (req as any).user?.displayName || 'admin';
+      const result = await uninstallPreflightService.runAutomatedUninstallPreservation({
+        destinationDir: req.body?.destinationDir,
+        performedBy,
+      });
+      res.status(201).json({
+        success: true,
+        message: 'Automated preservation and uninstall authorization completed successfully',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 export const uninstallController = new UninstallController();

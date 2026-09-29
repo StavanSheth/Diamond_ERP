@@ -14,5 +14,6 @@ router.get('/authorization', adminStack, uninstallController.checkAuthorization)
 router.post('/validate-destination', adminStack, uninstallController.validateDestination);
 router.post('/browse-destination', adminStack, uninstallController.browseDestination);
 router.post('/export', adminStack, uninstallController.createUninstallExport);
+router.post('/auto-preserve', adminStack, uninstallController.autoPreserveAndAuthorize);
 
 export default router;

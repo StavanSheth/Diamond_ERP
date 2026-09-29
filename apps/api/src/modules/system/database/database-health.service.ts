@@ -148,7 +148,23 @@ export class DatabaseHealthService {
         issues.push(`Ownership Conflict: Database path is simultaneously mapped to another profile/registry.`);
       }
 
-      const isHealthy = exists && readable && integrityCheck === 'ok' && ownershipValid && missingTables.length === 0;
+      // Explicit Status Taxonomy (Section 16)
+      let profileStatus: 'HEALTHY' | 'MISSING_DATABASE' | 'CORRUPTED_DATABASE' | 'REGISTRY_CONFLICT' | 'MULTIPLE_DATABASES' | 'SCHEMA_INVALID' | 'OWNERSHIP_CONFLICT' = 'HEALTHY';
+      if (!exists) {
+        profileStatus = 'MISSING_DATABASE';
+      } else if (!ownershipValid) {
+        profileStatus = 'OWNERSHIP_CONFLICT';
+      } else if (prof.databaseRegistries.length > 1) {
+        profileStatus = 'MULTIPLE_DATABASES';
+      } else if (prof.databaseRegistries.length === 0) {
+        profileStatus = 'REGISTRY_CONFLICT';
+      } else if (integrityCheck !== 'ok') {
+        profileStatus = 'CORRUPTED_DATABASE';
+      } else if (missingTables.length > 0) {
+        profileStatus = 'SCHEMA_INVALID';
+      }
+
+      const isHealthy = profileStatus === 'HEALTHY';
       if (isHealthy) healthyCount++;
 
       reportProfiles.push({
@@ -160,7 +176,7 @@ export class DatabaseHealthService {
         exists,
         readable,
         sizeBytes,
-        status: isHealthy ? 'HEALTHY' : 'NEEDS_ATTENTION',
+        status: profileStatus,
         schemaVersion,
         integrityCheck,
         tablesFound,

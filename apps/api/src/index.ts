@@ -52,10 +52,16 @@ async function bootstrap(): Promise<void> {
 
   // 2. Database connection check - MUST fail fast if database is unreachable (Finding 57)
   try {
+    await systemPrisma.$connect();
     await databaseContextService.syncProfilesFromSystemDb();
     logger.info('Synchronized active profile databases from system.db');
-    await prisma.$connect();
-    logger.info('Connected to SQLite database via Prisma');
+    const activeProfileCount = await systemPrisma.profile.count({ where: { isActive: true } });
+    if (activeProfileCount > 0) {
+      await prisma.$connect();
+      logger.info('Connected to SQLite database via Prisma');
+    } else {
+      logger.info('No active profiles registered yet in system.db. Ready for onboarding / discovery.');
+    }
   } catch (err) {
     logger.error('FATAL: Failed to connect to database during bootstrap', undefined, err);
     process.exit(1);

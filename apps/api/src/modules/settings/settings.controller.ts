@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, removeConfiguredProfile, FORBIDDEN_PROFILE_NAMES, updateProfileDbPath } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, FORBIDDEN_PROFILE_NAMES, updateProfileDbPath } from '../../infrastructure/database/prisma';
 import ExcelJS from 'exceljs';
 import { v4 as uuidv4 } from 'uuid';
 import { ValidationError, NotFoundError } from '../../errors';
@@ -12,6 +12,7 @@ import { databaseProvisioningService } from '../system/database/database-provisi
 import { databaseContextService } from '../../infrastructure/database/database-context.service';
 import { databaseHealthService } from '../system/database/database-health.service';
 import { databaseRegistryService } from '../system/database/database-registry.service';
+import { databaseDeletionService } from '../system/database/database-deletion.service';
 import { dataLocationService } from '../../infrastructure/data';
 
 
@@ -444,91 +445,19 @@ export class SettingsController {
     try {
       const profileCode = String(req.params.profileCode);
       const deleteDatabase = req.query.deleteDatabase === 'true' || req.body?.deleteDatabase === true;
+      const performedBy = (req as any).user?.username || (req as any).user?.displayName || 'admin';
 
-      if (profileCode.toLowerCase() === 'stavan') {
-        throw new ValidationError('The primary profile "Stavan" cannot be deleted.');
-      }
-      if (FORBIDDEN_PROFILE_NAMES.has(profileCode.toLowerCase())) {
-        throw new ValidationError(`Cannot delete reserved profile "${profileCode}".`);
-      }
-
-      removeConfiguredProfile(profileCode);
-
-      const profile = await systemPrisma.profile.findFirst({
-        where: { code: { equals: profileCode } },
-        include: { databaseRegistries: true, userProfiles: true },
+      const result = await databaseDeletionService.deletePhysicalDatabaseSafely({
+        profileCode,
+        deleteDatabaseFile: deleteDatabase,
+        performedBy,
       });
-
-      const deletedDatabases: string[] = [];
-
-      if (profile) {
-        for (const reg of profile.databaseRegistries) {
-          const dbFile = reg.canonicalPath;
-          const baseName = path.basename(dbFile).toLowerCase();
-
-          if (deleteDatabase) {
-            // Invariant L: Never silently delete a customer's physical .db without verified backup.
-            // SAFETY GATE: If backup fails, the deletion MUST NOT proceed.
-            if (
-              baseName !== 'system.db' &&
-              baseName !== 'template.db' &&
-              baseName !== 'stavan.db' &&
-              fs.existsSync(dbFile)
-            ) {
-              // Step 1: Take verified PROFILE_DELETE backup — failure blocks deletion entirely
-              await backupService.createBackup({
-                databasePath: dbFile,
-                backupType: 'PROFILE_DELETE',
-              });
-              // Step 2: Only reach here if backup succeeded
-              try {
-                fs.unlinkSync(dbFile);
-                deletedDatabases.push(dbFile);
-                if (fs.existsSync(`${dbFile}-wal`)) fs.unlinkSync(`${dbFile}-wal`);
-                if (fs.existsSync(`${dbFile}-shm`)) fs.unlinkSync(`${dbFile}-shm`);
-              } catch (delErr: any) {
-                throw new Error(`Backup succeeded but physical deletion failed for ${dbFile}: ${(delErr as Error).message}`);
-              }
-            }
-            await systemPrisma.databaseRegistry.delete({ where: { id: reg.id } }).catch(() => { });
-          } else {
-            // Invariant K: If DB retained, explicitly mark ORPHANED / AVAILABLE rather than disappearing
-            await systemPrisma.databaseRegistry.update({
-              where: { id: reg.id },
-              data: {
-                status: 'ORPHANED',
-                profileId: null,
-              },
-            }).catch(() => { });
-          }
-        }
-
-        await systemPrisma.userProfile.deleteMany({ where: { profileId: profile.id } }).catch(() => { });
-        await systemPrisma.profile.delete({ where: { id: profile.id } }).catch(() => { });
-      }
-
-      // Also check if any standalone file exists on disk when physical deletion requested
-      if (deleteDatabase) {
-        const directFile = path.resolve(getDatabasesDir(), `${profileCode}.db`);
-        if (
-          path.basename(directFile).toLowerCase() !== 'stavan.db' &&
-          path.basename(directFile).toLowerCase() !== 'system.db' &&
-          path.basename(directFile).toLowerCase() !== 'template.db' &&
-          fs.existsSync(directFile)
-        ) {
-          try {
-            fs.unlinkSync(directFile);
-            deletedDatabases.push(directFile);
-            if (fs.existsSync(`${directFile}-wal`)) fs.unlinkSync(`${directFile}-wal`);
-            if (fs.existsSync(`${directFile}-shm`)) fs.unlinkSync(`${directFile}-shm`);
-          } catch { }
-        }
-      }
 
       res.json({
         success: true,
-        message: `Profile "${profileCode}" deleted successfully.${deleteDatabase ? ' Physical database removed.' : ' Physical database retained as ORPHANED/RECOVERABLE.'}`,
-        deletedDatabases,
+        message: result.message,
+        deletedDatabases: result.deletedFiles,
+        backupId: result.backupId,
       });
     } catch (error) {
       next(error);

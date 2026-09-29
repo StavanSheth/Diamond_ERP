@@ -23,6 +23,7 @@ import type {
   ExportResponseDto,
 } from '@diamond-erp/contracts';
 import { buildExportQueries } from './export-entity-registry';
+import { semanticVerificationService } from './semantic-verification.service';
 
 export class ExportService {
   /**
@@ -30,6 +31,9 @@ export class ExportService {
    */
   public sanitizeCellValue(value: any): any {
     if (value === null || value === undefined) return '';
+    if (typeof value === 'object' && value !== null && typeof value.toNumber === 'function') {
+      return value.toNumber();
+    }
     if (typeof value === 'string') {
       const trimmed = value.trim();
       if (/^[=+\-@\t\r]/.test(trimmed)) {
@@ -81,13 +85,28 @@ export class ExportService {
       });
 
       const sheet = workbook.addWorksheet(entity.name);
+      let columnKeys: string[] = [];
       if (sanitizedRows.length > 0) {
-        const columns = Object.keys(sanitizedRows[0]).map((key) => ({
-          header: key,
-          key,
-          width: Math.max(key.length + 4, 12),
-        }));
-        sheet.columns = columns;
+        columnKeys = Object.keys(sanitizedRows[0]);
+      } else {
+        try {
+          const colInfo = await (client as any).$queryRawUnsafe(
+            `PRAGMA table_info("${entity.name}");`
+          ) as Array<{ name: string }>;
+          columnKeys = colInfo
+            .map((c) => c.name)
+            .filter((k) => !/password|pin|hash|secret|token/i.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
+        } catch {
+          columnKeys = ['id'];
+        }
+      }
+
+      sheet.columns = columnKeys.map((key) => ({
+        header: key,
+        key,
+        width: Math.max(key.length + 4, 12),
+      }));
+      if (sanitizedRows.length > 0) {
         sheet.addRows(sanitizedRows);
       }
     }
@@ -221,34 +240,7 @@ export class ExportService {
         },
       });
 
-      // Handle XLSX format
-      if (requestedFormat === 'XLSX') {
-        const workbook = await this.generateWorkbook(
-          client,
-          req.tables && req.tables.length > 0 ? req.tables : undefined
-        );
-
-        const xlsxFileName = 'business_data.xlsx';
-        const xlsxPath = path.join(bundlePath, xlsxFileName);
-        await workbook.xlsx.writeFile(xlsxPath);
-
-        const stats = fs.statSync(xlsxPath);
-        totalSizeBytes = stats.size;
-        const sha256 = this.calculateSha256(xlsxPath);
-
-        let xlsxRowCount = 0;
-        workbook.eachSheet((sheet) => {
-          xlsxRowCount += Math.max(0, sheet.rowCount - 1);
-        });
-
-        exportedTables.push({
-          tableName: 'AllEntities',
-          rowCount: xlsxRowCount,
-          fileName: xlsxFileName,
-          sha256,
-        });
-        totalRows = xlsxRowCount;
-      } else if (requestedFormat === 'SQLITE') {
+      if (requestedFormat === 'SQLITE') {
         const sqliteFileName = 'business_data.db';
         const sqlitePath = path.join(bundlePath, sqliteFileName);
 
@@ -273,7 +265,16 @@ export class ExportService {
           sha256,
         });
       } else {
-        // Handle CSV format (default)
+        // Section 5 & 6: Single logical snapshot in memory for both CSV and XLSX
+        interface EntitySnapshot {
+          name: string;
+          rows: any[];
+          columns: string[];
+          primaryKey: string;
+        }
+
+        const snapshotMap = new Map<string, EntitySnapshot>();
+
         for (const entity of requiredEntities) {
           let rows: any[] = [];
           try {
@@ -293,43 +294,99 @@ export class ExportService {
             return clean;
           });
 
-          const fileName = `${entity.name}.csv`;
+          // Section 7 & 23: Determine authoritative schema columns (headers even if zero rows)
+          let columns: string[] = [];
+          if (sanitizedRows.length > 0) {
+            columns = Object.keys(sanitizedRows[0]);
+          } else {
+            try {
+              const tableInfo = await (client as any).$queryRawUnsafe(
+                `PRAGMA table_info("${entity.name}");`
+              ) as Array<{ name: string }>;
+              columns = tableInfo
+                .map((c) => c.name)
+                .filter((k) => !/password|pin|hash|secret|token/i.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
+            } catch {
+              columns = ['id'];
+            }
+          }
+
+          snapshotMap.set(entity.name, {
+            name: entity.name,
+            rows: sanitizedRows,
+            columns,
+            primaryKey: 'id',
+          });
+        }
+
+        // 1. Generate CSV files for all entities from snapshot
+        for (const [entityName, snapshot] of snapshotMap.entries()) {
+          const fileName = `${entityName}.csv`;
           const filePath = path.join(bundlePath, fileName);
 
-          if (sanitizedRows.length > 0) {
-            const csvOutput = stringify(sanitizedRows, { header: true });
-            fs.writeFileSync(filePath, csvOutput, 'utf-8');
-          } else {
-            fs.writeFileSync(filePath, '', 'utf-8');
-          }
+          // stringify with header: true and columns outputs header row even if rows is empty
+          const csvOutput = stringify(snapshot.rows, {
+            header: true,
+            columns: snapshot.columns,
+          });
+          fs.writeFileSync(filePath, csvOutput, 'utf-8');
 
           const stats = fs.statSync(filePath);
           const sha256 = this.calculateSha256(filePath);
 
           exportedTables.push({
-            tableName: entity.name,
-            rowCount: sanitizedRows.length,
+            tableName: entityName,
+            rowCount: snapshot.rows.length,
             fileName,
             sha256,
           });
 
-          totalRows += sanitizedRows.length;
+          totalRows += snapshot.rows.length;
           totalSizeBytes += stats.size;
         }
 
-        // Also generate matching plain unencrypted XLSX for universal portability
-        const workbook = await this.generateWorkbook(
-          client,
-          req.tables && req.tables.length > 0 ? req.tables : undefined
-        );
+        // 2. Generate matching XLSX workbook from the exact same in-memory snapshot
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Diamond ERP V3';
+        workbook.created = new Date();
+
+        for (const [entityName, snapshot] of snapshotMap.entries()) {
+          const sheet = workbook.addWorksheet(entityName);
+          sheet.columns = snapshot.columns.map((key) => ({
+            header: key,
+            key,
+            width: Math.max(key.length + 4, 12),
+          }));
+          if (snapshot.rows.length > 0) {
+            sheet.addRows(snapshot.rows);
+          }
+        }
+
         const xlsxFileName = 'business_data.xlsx';
         const xlsxPath = path.join(bundlePath, xlsxFileName);
         await workbook.xlsx.writeFile(xlsxPath);
+
+        const xlsxStats = fs.statSync(xlsxPath);
+        totalSizeBytes += xlsxStats.size;
+
+        // Section 8: Export verification MUST run during normal export
+        const semanticResult = await semanticVerificationService.verifyDatabaseAgainstExports(
+          client,
+          bundlePath,
+          xlsxPath,
+          requiredEntities.map((e) => e.name)
+        );
+
+        if (semanticResult.status !== 'VERIFIED') {
+          throw new ConflictError(
+            `Export semantic verification failed: databaseVsCsv=${semanticResult.databaseVsCsv}, databaseVsXlsx=${semanticResult.databaseVsXlsx}, csvVsXlsx=${semanticResult.csvVsXlsx}. All-or-nothing export aborted.`
+          );
+        }
       }
 
-      // Write Manifest JSON
+      // Write Manifest JSON (Section 24: Hardened Export Manifest)
       const manifest: ExportManifestDto = {
-        formatVersion: 1,
+        formatVersion: 2,
         exportId,
         createdAt: new Date().toISOString(),
         application: {

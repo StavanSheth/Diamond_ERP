@@ -160,11 +160,10 @@ export function removeConfiguredProfile(profileCode: string): void {
 // End profile cache management
 
 /**
- * Check if a profile is configured on the server.
+ * Check if a profile is configured in the in-memory Prisma client cache.
  */
 export function isConfiguredProfile(code: string): boolean {
   if (!code || !PROFILE_REGEX.test(code) || FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) return false;
-  getAllProfiles(); // Refresh from disk if needed
   return configuredProfiles.has(code.toLowerCase());
 }
 
@@ -173,17 +172,13 @@ export function isConfiguredProfile(code: string): boolean {
  */
 export function getCanonicalProfile(code: string): CanonicalProfile | undefined {
   if (!code || !PROFILE_REGEX.test(code) || FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) return undefined;
-  if (!configuredProfiles.has(code.toLowerCase())) {
-    getAllProfiles(); // Refresh
-  }
   return configuredProfiles.get(code.toLowerCase());
 }
 
 /**
- * Return all registered canonical profile codes (including newly discovered DBs on disk).
+ * Return all registered canonical profile codes from authoritative cache.
  */
 export function getAllProfiles(): string[] {
-  initConfiguredProfiles();
   return Array.from(configuredProfiles.values()).map((p) => p.code);
 }
 

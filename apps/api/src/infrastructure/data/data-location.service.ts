@@ -225,6 +225,10 @@ class DataLocationService {
       }
 
       const health = await databaseHealthService.checkAllProfiles();
+      const hasUnhealthy = health.some((h) => h.status !== 'HEALTHY');
+      if (hasUnhealthy) {
+        throw new Error('Database health check failed after updating registry paths.');
+      }
       this.setLock(false);
 
       // COMPLETED
@@ -233,7 +237,7 @@ class DataLocationService {
       this.clearMigrationState();
 
       return {
-        success: !health.some((h) => h.status !== 'HEALTHY'),
+        success: true,
         previousDataRoot: sourceDataDir, newDataRoot: targetDir,
         databasesMigrated: migratedCount, safetyBackupsCreated: safetyBackups,
         integrityCheckPassed: true, migratedAt: new Date().toISOString(),
@@ -250,6 +254,13 @@ class DataLocationService {
         for (const [regId, originalPath] of Object.entries(stateRecord.originalRegistryPaths)) {
           try { await systemPrisma.databaseRegistry.update({ where: { id: regId }, data: { canonicalPath: originalPath } }); } catch {}
         }
+        // Verify every registry path restored
+        for (const [regId, originalPath] of Object.entries(stateRecord.originalRegistryPaths)) {
+          const current = await systemPrisma.databaseRegistry.findUnique({ where: { id: regId } });
+          if (current && current.canonicalPath !== originalPath) {
+            console.error(`Rollback verification warning for ${regId}: expected ${originalPath}, got ${current.canonicalPath}`);
+          }
+        }
       } catch {}
       // FAILED
       stateRecord.state = 'FAILED'; stateRecord.updatedAt = new Date().toISOString();
@@ -259,8 +270,8 @@ class DataLocationService {
   }
 
   /**
-   * Real SQLite integrity verification using PRAGMA integrity_check (Phase 23).
-   * 16-byte header alone is insufficient â€” a corrupted page would pass header check.
+   * Real SQLite integrity verification using PRAGMA integrity_check and PRAGMA foreign_key_check.
+   * Section 14: Migration MUST FAIL if actual SQLite integrity verification cannot execute.
    */
   private async verifySqliteFile(dbPath: string): Promise<void> {
     if (!fs.existsSync(dbPath)) throw new Error(`Database file missing for integrity check: ${dbPath}`);
@@ -271,19 +282,63 @@ class DataLocationService {
     if (!header.toString('utf-8').startsWith('SQLite format 3')) {
       throw new Error(`Invalid SQLite header in copied database: ${dbPath}`);
     }
+
+    let checkPassed = false;
+    let fkPassed = false;
+
+    // 1. Try better-sqlite3 first
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const Database = require('better-sqlite3');
       const db = new Database(dbPath, { readonly: true, fileMustExist: true });
       try {
         const rows: Array<{ integrity_check: string }> = db.prepare('PRAGMA integrity_check;').all();
-        if (!rows || rows.length === 0 || rows[0].integrity_check !== 'ok') {
+        if (rows && rows.length > 0 && rows[0].integrity_check === 'ok') {
+          checkPassed = true;
+        } else {
           throw new Error(`PRAGMA integrity_check failed for ${dbPath}: ${rows.map((r) => r.integrity_check).join(', ')}`);
         }
-      } finally { db.close(); }
+        const fkRows: any[] = db.prepare('PRAGMA foreign_key_check;').all();
+        if (fkRows && fkRows.length > 0) {
+          throw new Error(`PRAGMA foreign_key_check failed for ${dbPath}: ${fkRows.length} foreign key violations found.`);
+        }
+        fkPassed = true;
+      } finally {
+        db.close();
+      }
     } catch (err: any) {
-      if (err.message && err.message.includes('integrity_check failed')) throw err;
-      // ponytail: better-sqlite3 unavailable in test env; header check already passed
+      if (err.message && (err.message.includes('integrity_check failed') || err.message.includes('foreign_key_check failed'))) {
+        throw err;
+      }
+      // 2. If better-sqlite3 cannot be loaded, execute via PrismaClient
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { PrismaClient: CheckClient } = require('@prisma/client');
+        const checkClient = new CheckClient({
+          datasources: { db: { url: `file:${dbPath.replace(/\\/g, '/')}` } },
+        });
+        try {
+          const rows = await checkClient.$queryRawUnsafe('PRAGMA integrity_check;') as Array<{ integrity_check: string }>;
+          if (rows && rows.length > 0 && rows[0].integrity_check === 'ok') {
+            checkPassed = true;
+          } else {
+            throw new Error(`PRAGMA integrity_check failed for ${dbPath}: ${rows?.map((r: any) => r.integrity_check).join(', ')}`);
+          }
+          const fkRows = await checkClient.$queryRawUnsafe('PRAGMA foreign_key_check;') as any[];
+          if (fkRows && fkRows.length > 0) {
+            throw new Error(`PRAGMA foreign_key_check failed for ${dbPath}: ${fkRows.length} foreign key violations found.`);
+          }
+          fkPassed = true;
+        } finally {
+          await checkClient.$disconnect();
+        }
+      } catch (prismaErr: any) {
+        throw new Error(`SQLite integrity check could not be executed or failed for ${dbPath}: ${prismaErr.message}`);
+      }
+    }
+
+    if (!checkPassed || !fkPassed) {
+      throw new Error(`SQLite integrity verification failed for ${dbPath}. Migration aborted.`);
     }
   }
 

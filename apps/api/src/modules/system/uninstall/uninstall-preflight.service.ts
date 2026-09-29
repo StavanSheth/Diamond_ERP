@@ -525,6 +525,59 @@ export class UninstallPreflightService {
       suggestedPaths,
     };
   }
+
+  /**
+   * Section 12: Automated Uninstall Flow.
+   * Detects customer data -> Creates preservation package across all profiles -> Verifies package -> Issues authorization token.
+   * If any step fails, fails closed and customer data is NOT deleted.
+   */
+  async runAutomatedUninstallPreservation(
+    options: { destinationDir?: string; performedBy?: string } = {}
+  ): Promise<{
+    success: boolean;
+    preservationPackage: any;
+    authorization: any;
+  }> {
+    const performedBy = options.performedBy || 'system';
+    logger.info('[UninstallPreflightService] Starting automated uninstall preservation flow...');
+
+    // 1. Detect customer data
+    const preflight = await this.getPreflightStatus();
+    if (preflight.classification === 'BLOCKED') {
+      throw new ConflictError(
+        preflight.warningMessage || 'Uninstall blocked: pending operations in progress.'
+      );
+    }
+
+    // 2. Automatically create & verify preservation package for all profiles
+    const preservationResult = await preservationService.createPreservationPackage(
+      {
+        confirmPreservation: true,
+        destinationDir: options.destinationDir || preflight.lastPreservationDestination || undefined,
+        preserveAll: true,
+      },
+      performedBy
+    );
+
+    if (preservationResult.status !== 'VERIFIED') {
+      throw new ConflictError(
+        'Automated preservation failed: Package could not be verified. Customer data has NOT been deleted.'
+      );
+    }
+
+    // 3. Issue uninstall authorization token automatically
+    const authResult = await this.issueUninstallAuthorization(preservationResult.packageId);
+
+    logger.info(
+      `[UninstallPreflightService] Automated uninstall flow completed successfully. Package: ${preservationResult.packageId}, Auth: ${authResult.authorizationId}`
+    );
+
+    return {
+      success: true,
+      preservationPackage: preservationResult,
+      authorization: authResult,
+    };
+  }
 }
 
 export const uninstallPreflightService = new UninstallPreflightService();

@@ -108,6 +108,9 @@ export class PreservationService {
 
   private sanitizeCellValue(value: any): any {
     if (value === null || value === undefined) return '';
+    if (typeof value === 'object' && value !== null && typeof value.toNumber === 'function') {
+      return value.toNumber();
+    }
     if (typeof value === 'string') {
       const trimmed = value.trim();
       if (/^[=+\-@\t\r]/.test(trimmed)) {
@@ -414,6 +417,18 @@ export class PreservationService {
         };
         fs.writeFileSync(targetDbBackupManifestPath, JSON.stringify(dbBackupManifest, null, 2), 'utf-8');
 
+        // Section 10: Create per-profile directory structure (profiles/ProfileName/)
+        const profileBaseDir = path.join(bundleDir, 'profiles', dbFolderName);
+        const profileDbDir = path.join(profileBaseDir, 'database');
+        const profileCsvDir = path.join(profileBaseDir, 'csv');
+        const profileXlsxDir = path.join(profileBaseDir, 'xlsx');
+        fs.mkdirSync(profileDbDir, { recursive: true });
+        fs.mkdirSync(profileCsvDir, { recursive: true });
+        fs.mkdirSync(profileXlsxDir, { recursive: true });
+
+        fs.copyFileSync(targetDbBackupPath, path.join(profileDbDir, 'database_backup.db'));
+        fs.copyFileSync(targetDbBackupManifestPath, path.join(profileDbDir, 'database_backup.db.manifest.json'));
+
         // Backwards compatibility for primary DB
         if (isPrimary) {
           primaryDbBackupPath = path.join(bundleDir, 'database_backup.db');
@@ -466,7 +481,7 @@ export class PreservationService {
               );
               columnNames = colInfo
                 .map((c) => c.name)
-                .filter((k) => !/password|pin|hash|secret|token/i.test(k));
+                .filter((k) => !/password|pin|hash|secret|token/i.test(k) && k !== 'createdAt' && k !== 'updatedAt' && k !== 'lastValidatedAt');
             } catch {}
 
             const sanitizedRows = rows.map((row) => {
@@ -489,6 +504,7 @@ export class PreservationService {
               columns: columnNames,
             });
             fs.writeFileSync(csvPath, csvOutput, 'utf-8');
+            fs.copyFileSync(csvPath, path.join(profileCsvDir, csvFileName));
 
             const csvStat = fs.statSync(csvPath);
             const csvSha = this.calculateSha256(csvPath);
@@ -529,6 +545,7 @@ export class PreservationService {
           const dbXlsxFileName = `${dbFolderName}_business_data.xlsx`;
           const dbXlsxPath = path.join(xlsxBundleDir, dbXlsxFileName);
           await workbook.xlsx.writeFile(dbXlsxPath);
+          fs.copyFileSync(dbXlsxPath, path.join(profileXlsxDir, 'business_data.xlsx'));
 
           const xlsxStat = fs.statSync(dbXlsxPath);
           const xlsxSha = this.calculateSha256(dbXlsxPath);
@@ -550,6 +567,54 @@ export class PreservationService {
             dbXlsxPath
           );
 
+          // Section 11: Fail closed if ANY profile fails semantic verification
+          if (semanticResult.status !== 'VERIFIED') {
+            const failed = Object.entries(semanticResult.entityResults || {})
+              .filter(([_, r]) => r.status === 'FAILED')
+              .map(([name, r]) => `${name}: [${r.errors.join('; ')}]`);
+            console.error('[PreservationService] Semantic verification failures:', failed);
+            logger.error(`Preservation semantic verification failed for profile "${dbFolderName}": ${failed.join(' | ')}`);
+            throw new ConflictError(
+              `Preservation semantic verification failed for profile "${dbFolderName}". Package aborted.`
+            );
+          }
+
+          // Write per-profile manifest (Section 10)
+          const profileManifest = {
+            packageId,
+            profileId: dbItem.profileId,
+            profileCode: dbFolderName,
+            databaseId: dbItem.databaseId,
+            schemaVersion: dbItem.schemaVersion,
+            sourcePath: dbItem.canonicalPath,
+            backup: {
+              fileName: 'database/database_backup.db',
+              sha256: dbBackupSha256,
+              sizeBytes: dbBackupStat.size,
+            },
+            csv: {
+              directory: 'csv',
+              files: dbCsvFiles,
+            },
+            xlsx: {
+              file: 'xlsx/business_data.xlsx',
+              sha256: xlsxSha,
+              sizeBytes: xlsxStat.size,
+            },
+            semanticVerification: {
+              status: semanticResult.status,
+              databaseVsCsv: semanticResult.databaseVsCsv,
+              databaseVsXlsx: semanticResult.databaseVsXlsx,
+              csvVsXlsx: semanticResult.csvVsXlsx,
+            },
+            createdAt: new Date().toISOString(),
+          };
+          fs.writeFileSync(
+            path.join(profileBaseDir, 'profile-manifest.json'),
+            JSON.stringify(profileManifest, null, 2),
+            'utf-8'
+          );
+
           manifestDatabases.push({
             databaseId: dbItem.databaseId,
             profileId: dbItem.profileId,
@@ -558,6 +623,8 @@ export class PreservationService {
             username: dbItem.username,
             canonicalPath: dbItem.canonicalPath,
             ownershipState: dbItem.ownershipState || 'CURRENT_INSTALLATION',
+            profileDir: path.posix.join('profiles', dbFolderName),
+            profileManifest: path.posix.join('profiles', dbFolderName, 'profile-manifest.json'),
             backupPath: path.posix.join('databases', dbFolderName, 'database_backup.db'),
             backupManifest: path.posix.join('databases', dbFolderName, 'database_backup.db.manifest.json'),
             backupSha256: dbBackupSha256,

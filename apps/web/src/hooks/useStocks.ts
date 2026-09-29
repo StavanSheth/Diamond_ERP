@@ -47,12 +47,24 @@ export function useStocks(): UseStocksReturn {
   }, []);
 
   // Initial fetch + periodic refresh (30s interval)
-  // TODO: Consider reducing interval or switching to event-driven updates now that we use a local DB
+  // Section 20: Immediately purge and refresh data on profile switch
   useEffect(() => {
     fetchStocks(true);
     intervalRef.current = window.setInterval(() => fetchStocks(false), 30000);
+
+    const handleProfileChange = () => {
+      setStocks([]);
+      setLastSyncedAt(null);
+      setPerformance(null);
+      setError(null);
+      fetchStocks(true);
+    };
+
+    window.addEventListener('profileChanged', handleProfileChange);
+
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      window.removeEventListener('profileChanged', handleProfileChange);
     };
   }, [fetchStocks]);
 
