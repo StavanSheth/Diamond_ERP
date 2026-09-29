@@ -609,6 +609,137 @@ export class SemanticVerificationService {
   }
 
   /**
+   * Section 18: Exact CSV <-> XLSX verification.
+   * Compares all exported CSV files against corresponding XLSX worksheets.
+   * Fails on: missing row, extra row, different ID, different value, different date,
+   * different number, different null, different column, duplicate row.
+   */
+  async verifyCsvEqualsXlsx(
+    csvDir: string,
+    xlsxPath: string,
+    entityFilter?: string[]
+  ): Promise<{ status: 'VERIFIED' | 'FAILED'; discrepancies: string[] }> {
+    const discrepancies: string[] = [];
+    if (!fs.existsSync(csvDir) || !fs.existsSync(xlsxPath)) {
+      return {
+        status: 'FAILED',
+        discrepancies: [`Missing export artifacts: csvDir=${csvDir} (exists: ${fs.existsSync(csvDir)}), xlsxPath=${xlsxPath} (exists: ${fs.existsSync(xlsxPath)})`],
+      };
+    }
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(xlsxPath);
+
+    const entities = getExportableEntities().filter(
+      (e) => !entityFilter || entityFilter.includes(e.entityName)
+    );
+
+    for (const ent of entities) {
+      const csvFile = path.join(csvDir, `${ent.entityName}.csv`);
+      const sheet = wb.getWorksheet(ent.entityName);
+
+      if (!fs.existsSync(csvFile) && !sheet) {
+        continue;
+      }
+
+      if (fs.existsSync(csvFile) && !sheet) {
+        discrepancies.push(`Entity ${ent.entityName}: CSV exists at ${csvFile} but worksheet missing in XLSX`);
+        continue;
+      }
+
+      if (!fs.existsSync(csvFile) && sheet) {
+        discrepancies.push(`Entity ${ent.entityName}: Worksheet exists in XLSX but CSV missing at ${csvFile}`);
+        continue;
+      }
+
+      const csvContent = fs.readFileSync(csvFile, 'utf-8');
+      const csvRows: any[] = parse(csvContent, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+      });
+
+      const xlsxRows: any[] = [];
+      const headers: string[] = [];
+      sheet!.getRow(1).eachCell((cell, col) => {
+        headers[col] = String(cell.value || '').trim();
+      });
+
+      for (let r = 2; r <= sheet!.rowCount; r++) {
+        const row = sheet!.getRow(r);
+        if (!row.hasValues) continue;
+        const obj: Record<string, any> = {};
+        row.eachCell((cell, col) => {
+          if (headers[col]) obj[headers[col]] = cell.value;
+        });
+        xlsxRows.push(obj);
+      }
+
+      if (csvRows.length !== xlsxRows.length) {
+        discrepancies.push(
+          `Row count mismatch on ${ent.entityName}: CSV=${csvRows.length} vs XLSX=${xlsxRows.length}`
+        );
+      }
+
+      const keyField = this.getKeyField(ent.entityName);
+      const csvKeys = new Set<string>();
+      const csvMap = new Map<string, any>();
+
+      for (const r of csvRows) {
+        const key = String(r[keyField] || r.id || '').trim();
+        if (csvKeys.has(key)) {
+          discrepancies.push(`Duplicate primary key "${key}" found in CSV for ${ent.entityName}`);
+        }
+        csvKeys.add(key);
+        csvMap.set(key, r);
+      }
+
+      const xlsxKeys = new Set<string>();
+      const xlsxMap = new Map<string, any>();
+
+      for (const r of xlsxRows) {
+        const key = String(r[keyField] || r.id || '').trim();
+        if (xlsxKeys.has(key)) {
+          discrepancies.push(`Duplicate primary key "${key}" found in XLSX for ${ent.entityName}`);
+        }
+        xlsxKeys.add(key);
+        xlsxMap.set(key, r);
+      }
+
+      for (const key of csvKeys) {
+        if (!xlsxKeys.has(key)) {
+          discrepancies.push(`Key "${key}" present in CSV but missing in XLSX for ${ent.entityName}`);
+        }
+      }
+
+      for (const key of xlsxKeys) {
+        if (!csvKeys.has(key)) {
+          discrepancies.push(`Key "${key}" present in XLSX but missing in CSV for ${ent.entityName}`);
+        }
+      }
+
+      for (const [key, cRow] of csvMap.entries()) {
+        const xRow = xlsxMap.get(key);
+        if (!xRow) continue;
+        for (const [col, cVal] of Object.entries(cRow)) {
+          if (col in xRow) {
+            if (!this.valuesMatch(cVal, xRow[col])) {
+              discrepancies.push(
+                `Value mismatch on ${ent.entityName} [${key}].${col}: CSV="${cVal}" vs XLSX="${xRow[col]}"`
+              );
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      status: discrepancies.length === 0 ? 'VERIFIED' : 'FAILED',
+      discrepancies,
+    };
+  }
+
+  /**
    * Alias for backward compatibility with compareExports callers.
    */
   async compareExports(

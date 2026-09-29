@@ -1,10 +1,12 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { installationService } from '../modules/system/installation.service';
 import { deviceSecurityService } from '../modules/security/device-security.service';
 import { onboardingService } from '../modules/system/onboarding/onboarding.service';
-import { systemPrisma } from '../infrastructure/database/prisma';
+import { systemPrisma, registerProfileInCache } from '../infrastructure/database/prisma';
 import { ensureAllDataDirs, getControlDbPath } from '../infrastructure/paths';
 import { createRoutes } from '../routes';
 
@@ -68,8 +70,7 @@ describe('Phase 1.9 — Architecture-to-Runtime Traceability Verification', () =
       getSettings: noop,
       updateSettings: noop,
       exportExcel: noop,
-      downloadTemplate: noop,
-      importExcel: noop,
+      exportCsv: noop,
       getProfiles: noop,
       createProfile: noopCreated,
       switchProfile: noop,
@@ -184,6 +185,12 @@ describe('Phase 1.9 — Architecture-to-Runtime Traceability Verification', () =
       where: { id: install.id },
       data: { lifecycleState: 'READY' },
     });
+
+    const testDbPath = path.resolve(__dirname, '../../test.db');
+    if (!fs.existsSync(testDbPath)) {
+      fs.writeFileSync(testDbPath, '');
+    }
+    registerProfileInCache({ code: 'Stavan', name: 'Stavan', dbPath: testDbPath });
 
     const res = await request(app)
       .get('/api/stocks')

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
 import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getBackupsDir,
@@ -72,14 +72,7 @@ export class BackupService {
       } else if (reqBody.profileCode) {
         dbContext = await databaseContextService.getDatabaseForProfileCode(reqBody.profileCode);
       } else {
-        try {
-          dbContext = await databaseContextService.getActiveProfileDatabase();
-        } catch {
-          const fallbackProfile = getActiveProfileOrDefault();
-          if (fallbackProfile) {
-            dbContext = await databaseContextService.getDatabaseForProfileCode(fallbackProfile);
-          }
-        }
+        dbContext = await databaseContextService.getActiveProfileDatabase();
       }
 
       if (!dbContext) {

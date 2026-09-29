@@ -226,28 +226,44 @@ export class DatabaseContextService {
     return this.getDatabaseForProfileCode(activeProfileCode);
   }
 
+  /**
+   * Resolve authoritative database context for a profile by profile ID or profile code.
+   */
+  async resolveDatabaseContext(profileIdOrCode: string): Promise<ProfileDatabaseContext> {
+    return this.assertValidBusinessDatabaseContext(profileIdOrCode);
+  }
 
   /**
    * Validate that a database belongs strictly to the specified profile.
+   * Supports databaseId or canonicalPath.
    */
-  async assertDatabaseOwnership(profileId: string, databaseId: string): Promise<void> {
-    const registry = await systemPrisma.databaseRegistry.findUnique({
-      where: { databaseId },
-    });
+  async assertDatabaseOwnership(profileId: string, databaseIdOrPath: string): Promise<void> {
+    const isPath = databaseIdOrPath.includes(path.sep) || databaseIdOrPath.endsWith('.db');
+    let registry: any = null;
+    if (isPath) {
+      const canonical = path.resolve(databaseIdOrPath).toLowerCase();
+      const allRegs = await systemPrisma.databaseRegistry.findMany();
+      registry = allRegs.find((r) => r.canonicalPath && path.resolve(r.canonicalPath).toLowerCase() === canonical);
+    } else {
+      registry = await systemPrisma.databaseRegistry.findUnique({
+        where: { databaseId: databaseIdOrPath },
+      });
+    }
 
     if (!registry) {
-      throw new NotFoundError(`Database not found for ID: "${databaseId}"`);
+      throw new NotFoundError(`Database not found for identifier: "${databaseIdOrPath}"`);
     }
 
     if (!registry.profileId || registry.profileId !== profileId) {
       throw new ConflictError(
-        `Database ownership conflict: Database "${databaseId}" is not owned by profile "${profileId}".`
+        `Database ownership conflict: Database "${databaseIdOrPath}" is not owned by profile "${profileId}".`
       );
     }
   }
 
   /**
    * Validate that a physical database path is available for registration/use by a given profile.
+   * Rejects system.db, template.db, and paths attached to other profiles.
    */
   async assertDatabasePathAvailable(rawPath: string, excludeDatabaseId?: string): Promise<string> {
     const pathRes = canonicalizeDatabasePath(rawPath);
@@ -256,17 +272,28 @@ export class DatabaseContextService {
     }
     const { canonicalPath } = pathRes;
 
-    const existing = await systemPrisma.databaseRegistry.findUnique({
-      where: { canonicalPath },
+    const controlDb = path.resolve(getControlDbPath()).toLowerCase();
+    const templateDb = getDatabaseTemplatePath() ? path.resolve(getDatabaseTemplatePath()!).toLowerCase() : '';
+    const lowerPath = canonicalPath.toLowerCase();
+
+    if (lowerPath === controlDb) {
+      throw new ConflictError('Cannot use system control database (system.db) as a profile business database.');
+    }
+    if (templateDb && lowerPath === templateDb) {
+      throw new ConflictError('Cannot use template database (template.db) as a profile business database.');
+    }
+
+    const allRegistries = await systemPrisma.databaseRegistry.findMany({
       include: { profile: true },
     });
+    const conflict = allRegistries.find(
+      (r) => r.databaseId !== excludeDatabaseId && r.canonicalPath && path.resolve(r.canonicalPath).toLowerCase() === lowerPath
+    );
 
-    if (existing && existing.databaseId !== excludeDatabaseId) {
-      if (existing.profileId) {
-        throw new ConflictError(
-          `Database path "${canonicalPath}" is already attached to profile "${existing.profile?.code || existing.profileId}".`
-        );
-      }
+    if (conflict && conflict.profileId) {
+      throw new ConflictError(
+        `Database path "${canonicalPath}" is already attached to profile "${conflict.profile?.code || conflict.profileId}".`
+      );
     }
 
     return canonicalPath;

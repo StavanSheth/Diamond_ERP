@@ -41,18 +41,6 @@ export const settingsApi = {
     return requestBlob(`/api/settings/export/excel${params}`);
   },
 
-  /** Download Excel template */
-  downloadTemplate(): Promise<Blob> {
-    return requestBlob('/api/settings/export/template');
-  },
-
-  /** Import data from Excel */
-  async importExcel(file: File, mode: 'merge' | 'overwrite' = 'merge'): Promise<{ success: boolean; message?: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    return requestUpload(`/api/settings/import/excel?mode=${mode}`, formData);
-  },
-
   /** Get lifetime activation / master lock status */
   getActivationStatus(): Promise<{ success: boolean; isActivated: boolean }> {
     return request<{ success: boolean; isActivated: boolean }>('/api/system/activation-status');

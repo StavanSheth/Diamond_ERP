@@ -1,13 +1,11 @@
 import dotenv from 'dotenv';
-import path from 'path';
-import { getDatabasesDir } from '../infrastructure/paths';
 
 dotenv.config();
 
 export const config = {
   port: Number(process.env.PORT) || 3002,
   host: process.env.HOST || '127.0.0.1',
-  databaseUrl: process.env.DATABASE_URL || `file:${path.join(getDatabasesDir(), 'Stavan.db')}`,
+  databaseUrl: process.env.DATABASE_URL || '',
   corsOrigins: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
     : [

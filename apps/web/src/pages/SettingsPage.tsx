@@ -53,9 +53,6 @@ export const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [profiles, setProfiles] = useState<string[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('Stavan');
-  const [importModalOpen, setImportModalOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
 
   const [newProfileModalOpen, setNewProfileModalOpen] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
@@ -100,7 +97,6 @@ export const SettingsPage: React.FC = () => {
           isLocalOnly: true,
         },
       ];
-  const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportArrangement, setExportArrangement] = useState<'default' | 'party' | 'stock'>('default');
   const directoryInputRef = React.useRef<HTMLInputElement>(null);
@@ -602,27 +598,6 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleImportExecution = async (mode: 'merge' | 'overwrite') => {
-    if (!selectedFile) return;
-    setImporting(true);
-    setImportError(null);
-    try {
-      const res = await api.importExcel(selectedFile, mode);
-      if (!res?.success) {
-        setImportError(res?.message || 'Import failed. The file format is incorrect or corrupted.');
-      } else {
-        alert('Import successful!');
-        setImportModalOpen(false);
-        setSelectedFile(null);
-        window.location.reload();
-      }
-    } catch(err: any) {
-      setImportError(err.message || 'Import failed. Please use the correct Excel format.');
-    } finally {
-      setImporting(false);
-    }
-  };
-
   useEffect(() => {
     fetchSettings();
   }, []);
@@ -654,7 +629,7 @@ export const SettingsPage: React.FC = () => {
             </div>
             <div>
               <h2 className="text-xl font-bold text-on-surface m-0 leading-tight">{t('System Settings')}</h2>
-              <p className="text-xs text-on-surface-variant m-0 mt-0.5">{t('Configure application parameters, cloud sync, security & defaults.')}</p>
+              <p className="text-xs text-on-surface-variant m-0 mt-0.5">{t('Configure application parameters, security & defaults.')}</p>
             </div>
           </div>
           <button 
@@ -1210,49 +1185,26 @@ export const SettingsPage: React.FC = () => {
             </section>
 
             {/* ══════════════════════════════════════════════════════════ */}
-            {/* SECTION 6: SYSTEM & CLOUD SYNC                            */}
+            {/* SECTION 6: SYSTEM MAINTENANCE                              */}
             {/* ══════════════════════════════════════════════════════════ */}
             <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-rose-600" />
               <div className="p-lg flex flex-col gap-md">
                 <div className="flex items-center gap-2.5 pb-sm border-b border-outline-variant/60">
                   <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-700 flex items-center justify-center shrink-0 shadow-2xs">
-                    <span className="material-symbols-outlined text-[18px]">sync</span>
+                    <span className="material-symbols-outlined text-[18px]">build</span>
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                      System &amp; Cloud Sync
+                      System Maintenance
                     </h3>
                     <p className="text-[11px] text-on-surface-variant m-0">
-                      Automated periodic sync with Google Sheets and profile maintenance
+                      Profile maintenance, safety snapshot, and reset controls
                     </p>
                   </div>
                 </div>
                 
                 <div className="flex flex-col gap-md">
-                  <div className="flex items-center justify-between p-md bg-white border border-outline-variant/50 rounded-xl shadow-2xs opacity-75">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-bold text-on-surface m-0">Auto-Sync to Google Sheets</h4>
-                        <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 rounded-full border border-amber-300">
-                          Coming Soon
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-on-surface-variant m-0 mt-0.5">
-                        Automated periodic cloud backup &amp; sync (Feature Coming Soon).
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-not-allowed opacity-50" title="Coming Soon">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only peer" 
-                        checked={false}
-                        disabled
-                        readOnly
-                      />
-                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                    </label>
-                  </div>
                   
                   <div className="p-md bg-rose-50/60 border border-rose-200 rounded-xl shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md">
                     <div>
@@ -2367,21 +2319,21 @@ export const SettingsPage: React.FC = () => {
             </section>
 
             {/* ══════════════════════════════════════════════════════════ */}
-            {/* SECTION 8: DATA MANAGEMENT & EXCEL PORTABILITY            */}
+            {/* SECTION 8: DATA EXPORT & PORTABILITY                       */}
             {/* ══════════════════════════════════════════════════════════ */}
             <section className="bg-[#F8FAFC] rounded-2xl border border-outline-variant overflow-hidden shadow-2xs">
               <div className="h-1 bg-violet-600" />
               <div className="p-lg flex flex-col gap-md">
                 <div className="flex items-center gap-2.5 pb-sm border-b border-outline-variant/60">
                   <div className="w-8 h-8 rounded-lg bg-violet-50 text-violet-700 flex items-center justify-center shrink-0 shadow-2xs">
-                    <span className="material-symbols-outlined text-[18px]">import_export</span>
+                    <span className="material-symbols-outlined text-[18px]">download</span>
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-on-surface m-0 leading-tight">
-                      Data Management &amp; Excel Portability
+                      Data Export &amp; Excel Portability
                     </h3>
                     <p className="text-[11px] text-on-surface-variant m-0">
-                      Export full 9-table schema or import structured diamond databases losslessly
+                      Export full 9-table schema in structured, unencrypted Excel format
                     </p>
                   </div>
                 </div>
@@ -2389,10 +2341,10 @@ export const SettingsPage: React.FC = () => {
                 <div className="flex flex-col gap-md bg-white p-md rounded-xl border border-outline-variant/50 shadow-2xs">
                   <div>
                     <p className="text-xs text-on-surface m-0 leading-relaxed">
-                      Import or Export your Inventory &amp; Ledger Data in Excel format for seamless, lossless transfer between users or profiles.
+                      Export your Inventory &amp; Ledger Data in Excel format for seamless, lossless transfer or offline analysis.
                     </p>
                     <p className="text-[11px] text-on-surface-variant m-0 mt-1">
-                      Supports 9 comprehensive tables: <strong>Stocks</strong>, <strong>Locations</strong>, <strong>Parties</strong>, <strong>Diamonds</strong>, <strong>Certificates</strong>, <strong>Repairs</strong>, <strong>Ledgers</strong>, <strong>Transactions</strong>, and <strong>Transaction Items</strong>.
+                      Exports 9 comprehensive tables: <strong>Stocks</strong>, <strong>Locations</strong>, <strong>Parties</strong>, <strong>Diamonds</strong>, <strong>Certificates</strong>, <strong>Repairs</strong>, <strong>Ledgers</strong>, <strong>Transactions</strong>, and <strong>Transaction Items</strong>.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-outline-variant/40">
@@ -2427,41 +2379,6 @@ export const SettingsPage: React.FC = () => {
                       <span className="material-symbols-outlined text-[16px]">download</span>
                       {exporting ? 'Exporting...' : 'Export Data (Excel)'}
                     </button>
-                    
-                    <button 
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const blob = await api.downloadTemplate();
-                          downloadBlob(blob, `Import_Template.xlsx`);
-                        } catch(e: any) {
-                          alert(e.message || 'Download template failed');
-                        }
-                      }}
-                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-on-surface border border-outline-variant/60 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors shadow-2xs"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">description</span>
-                      Download Template
-                    </button>
-                    
-                    <label className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer shadow-xs">
-                      <span className="material-symbols-outlined text-[16px]">upload</span>
-                      {importing ? 'Importing...' : 'Import Excel'}
-                      <input 
-                        type="file" 
-                        accept=".xlsx,.xls,.csv" 
-                        className="hidden" 
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          setSelectedFile(file);
-                          setImportError(null);
-                          setImportModalOpen(true);
-                          e.target.value = '';
-                        }}
-                        disabled={importing}
-                      />
-                    </label>
                   </div>
                 </div>
               </div>
@@ -2562,75 +2479,7 @@ export const SettingsPage: React.FC = () => {
         )}
       </div>
 
-      {importModalOpen && selectedFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-surface rounded-xl shadow-lg w-full max-w-md p-lg flex flex-col gap-md">
-            <h3 className="font-title-lg font-bold">Import Strategy</h3>
-            <p className="font-body-md text-on-surface-variant">
-              Before importing, we strongly recommend taking a backup. How would you like to import <strong>{selectedFile.name}</strong>?
-            </p>
-            
-            <button 
-              onClick={async () => {
-                setExporting(true);
-                try {
-                  const blob = await api.exportExcel();
-                  downloadBlob(blob, `PreImport_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
-                } catch(e: any) {
-                  alert(e.message || 'Backup failed');
-                } finally {
-                  setExporting(false);
-                }
-              }}
-              className="w-full text-left p-sm border border-outline-variant rounded-md hover:bg-surface-container transition-colors font-bold text-primary flex items-center gap-sm"
-            >
-              <span className="material-symbols-outlined">download</span> Download Backup First
-            </button>
 
-            {importError && (
-              <div className="bg-error-container text-on-error-container p-md rounded-md flex flex-col gap-sm">
-                <div className="flex items-center gap-xs font-bold">
-                  <span className="material-symbols-outlined">error</span>
-                  Incorrect Format
-                </div>
-                <p className="font-body-md">{importError}</p>
-                <button 
-                  onClick={async () => {
-                    try {
-                      const blob = await api.downloadTemplate();
-                      downloadBlob(blob, `Import_Template.xlsx`);
-                    } catch(e: any) {
-                      alert(e.message || 'Download template failed');
-                    }
-                  }}
-                  className="bg-surface text-primary border border-primary px-sm py-xs rounded hover:bg-surface-container transition-colors w-fit font-bold flex items-center gap-xs"
-                >
-                  <span className="material-symbols-outlined text-[16px]">download</span>
-                  Download Correct Template
-                </button>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-sm mt-sm">
-              <button 
-                onClick={() => handleImportExecution('merge')}
-                className="w-full p-sm bg-primary hover:bg-[#0D47A1] text-white rounded-md font-bold transition-colors"
-              >
-                Merge Data (Update existing, add new)
-              </button>
-              <button 
-                onClick={() => handleImportExecution('overwrite')}
-                className="w-full p-sm bg-error hover:bg-error-container text-white rounded-md font-bold transition-colors"
-              >
-                Delete All Current Data & Import New Data
-              </button>
-              
-            </div>
-
-            <button onClick={() => setImportModalOpen(false)} className="mt-md text-on-surface-variant hover:text-on-surface font-bold">Cancel</button>
-          </div>
-        </div>
-      )}
 
       {deleteUserModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

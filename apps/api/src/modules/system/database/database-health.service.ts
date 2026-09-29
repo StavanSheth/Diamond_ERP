@@ -242,6 +242,27 @@ export class DatabaseHealthService {
     };
   }
 
+  async checkProfile(profileIdOrCode: string): Promise<ProfileDatabaseHealth> {
+    const report = await this.checkHealth();
+    const clean = profileIdOrCode.trim().toLowerCase();
+    const found = report.profiles.find(
+      (p) => p.profileId.toLowerCase() === clean || p.profileCode.toLowerCase() === clean
+    );
+    if (!found) {
+      throw new Error(`Profile not found for health check: "${profileIdOrCode}"`);
+    }
+    return found;
+  }
+
+  async checkDatabase(databaseId: string): Promise<ProfileDatabaseHealth> {
+    const report = await this.checkHealth();
+    const found = report.profiles.find((p) => p.databaseId === databaseId);
+    if (!found) {
+      throw new Error(`Database not found for health check: "${databaseId}"`);
+    }
+    return found;
+  }
+
   async checkAllProfiles(): Promise<ProfileDatabaseHealth[]> {
     const report = await this.checkHealth();
     return report.profiles;

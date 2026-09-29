@@ -100,8 +100,6 @@ export const api = {
   deleteProfile: settingsApi.deleteProfile,
   factoryReset: settingsApi.factoryReset,
   exportExcel: settingsApi.exportExcel,
-  downloadTemplate: settingsApi.downloadTemplate,
-  importExcel: settingsApi.importExcel,
   getActivationStatus: settingsApi.getActivationStatus,
   activateApp: settingsApi.activateApp,
   listUsers: settingsApi.listUsers,

@@ -1,27 +1,6 @@
 import { Router } from 'express';
 import { SettingsController } from './settings.controller';
 
-import multer from 'multer';
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB max for Excel files
-  },
-  fileFilter: (_req, file, cb) => {
-    // Only allow .xlsx files
-    const allowedMimes = [
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-    ];
-    if (allowedMimes.includes(file.mimetype) || file.originalname.endsWith('.xlsx')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only .xlsx Excel files are allowed'));
-    }
-  },
-});
-
 export function createSettingsRouter(controller: SettingsController): Router {
   const router = Router();
 
@@ -30,8 +9,6 @@ export function createSettingsRouter(controller: SettingsController): Router {
   
   router.get('/export/excel', controller.exportExcel);
   router.get('/export/csv', controller.exportCsv);
-  router.get('/export/template', controller.downloadTemplate);
-  router.post('/import/excel', upload.single('file'), controller.importExcel);
 
   router.get('/profiles', controller.getProfiles);
   router.post('/profiles', controller.createProfile);
