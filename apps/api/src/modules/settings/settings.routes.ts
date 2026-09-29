@@ -29,6 +29,7 @@ export function createSettingsRouter(controller: SettingsController): Router {
   router.put('/', controller.updateSettings);
   
   router.get('/export/excel', controller.exportExcel);
+  router.get('/export/csv', controller.exportCsv);
   router.get('/export/template', controller.downloadTemplate);
   router.post('/import/excel', upload.single('file'), controller.importExcel);
 

@@ -531,6 +531,13 @@ export class DatabaseProvisioningService {
           where: { canonicalPath: targetDbPath },
           include: { profile: true },
         });
+        if (existingReg) {
+          if (existingReg.profile && existingReg.profile.code.toLowerCase() !== profileCode.toLowerCase()) {
+            throw new ConflictError(
+              `Database ownership conflict: Path "${targetDbPath}" is already owned by profile "${existingReg.profile.code}". Two profiles cannot share the same database file.`
+            );
+          }
+        }
         if (existingReg && existingReg.installationId === install.id) {
           logger.info(`Idempotent return for already registered database: ${targetDbPath}`);
           await systemPrisma.provisioningOperation.update({

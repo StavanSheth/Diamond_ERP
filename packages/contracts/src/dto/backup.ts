@@ -2,7 +2,7 @@
  * Phase 5 - Data Preservation & Backup Contracts
  */
 
-export type BackupType = 'FULL' | 'SNAPSHOT' | 'MANUAL' | 'PRE_RESTORE' | 'UNINSTALL';
+export type BackupType = 'FULL' | 'SNAPSHOT' | 'MANUAL' | 'PRE_RESTORE' | 'UNINSTALL' | 'PROFILE_DELETE' | 'PRE_DELETE';
 
 export type BackupStatus =
   | 'PENDING'

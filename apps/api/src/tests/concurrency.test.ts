@@ -56,7 +56,10 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
 
     // 0. Ensure Profile database files exist with schema
     const apiDir = path.resolve(__dirname, '../../');
-    const testDbPath = path.resolve(apiDir, 'prisma/test.db');
+    const templateDb = path.resolve(apiDir, 'prisma/template.db');
+    const testDbPath = fs.existsSync(path.resolve(apiDir, 'prisma/test.db'))
+      ? path.resolve(apiDir, 'prisma/test.db')
+      : templateDb;
     const profileADbPath = path.resolve(apiDir, 'ProfileA.db');
     const profileBDbPath = path.resolve(apiDir, 'ProfileB.db');
 
@@ -66,8 +69,8 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
     }
 
     // 1. Register canonical profiles ProfileA and ProfileB
-    registerProfile({ code: 'ProfileA', name: 'Profile A Tenant' });
-    registerProfile({ code: 'ProfileB', name: 'Profile B Tenant' });
+    registerProfile({ code: 'ProfileA', name: 'Profile A Tenant', dbPath: profileADbPath });
+    registerProfile({ code: 'ProfileB', name: 'Profile B Tenant', dbPath: profileBDbPath });
 
     // 2. Ensure Profile records exist in system database
     const profA = await systemPrisma.profile.upsert({

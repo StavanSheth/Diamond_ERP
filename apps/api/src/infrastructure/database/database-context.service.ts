@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { PrismaClient } from '@prisma/client';
 import { 
   systemPrisma, 
@@ -10,9 +11,11 @@ import {
 } from './prisma';
 import { canonicalizeDatabasePath } from '../../modules/system/database/database-path.util';
 import { databaseValidationService } from '../../modules/system/database/database-validation.service';
+import { databaseRegistryService } from '../../modules/system/database/database-registry.service';
 import { ValidationError, NotFoundError, ConflictError } from '../../errors';
 import { logger } from '../logging';
 import { getControlDbPath, getDatabaseTemplatePath, getDatabasesDir } from '../paths';
+
 
 export interface ProfileDatabaseContext {
   profileId: string;
@@ -57,7 +60,24 @@ export class DatabaseContextService {
       });
 
       for (const prof of activeProfiles) {
-        const canonicalDbPath = prof.databaseRegistries[0]?.canonicalPath || prof.dbPath;
+        let canonicalDbPath = prof.databaseRegistries[0]?.canonicalPath || prof.dbPath;
+        if (!canonicalDbPath) {
+          const candidatePaths = [
+            path.resolve(getDatabasesDir(), `${prof.code}.db`),
+            path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'DiamondERP', 'databases', `${prof.code}.db`),
+          ];
+          for (const cand of candidatePaths) {
+            if (fs.existsSync(cand)) {
+              canonicalDbPath = cand;
+              await databaseRegistryService.registerDatabase({
+                rawPath: cand,
+                profileId: prof.id,
+                displayName: prof.name || prof.code,
+              }).catch(() => {});
+              break;
+            }
+          }
+        }
         if (canonicalDbPath && fs.existsSync(canonicalDbPath)) {
           try {
             registerProfile({
@@ -148,46 +168,37 @@ export class DatabaseContextService {
 
     let targetRegistry = activeRegistries[0];
 
-    // If no active registry but profile has registered databases
+    // If no active registry, inspect all registries for this profile
     if (!targetRegistry && (profile.databaseRegistries || []).length > 0) {
       targetRegistry = profile.databaseRegistries[0];
     }
 
-    let canonicalPath: string;
-    let databaseId: string;
-    let status: string = 'ACTIVE';
-    let schemaVersion: number = profile.schemaVersion || 1;
+    // Invariant: Profile exists BUT DatabaseRegistry entry does not exist -> Deterministic Lifecycle Error
+    if (!targetRegistry) {
+      throw new NotFoundError(
+        `Database lifecycle error: Profile "${profile.code}" (${profile.id}) exists but has no registered DatabaseRegistry entry. Silent database path inference is forbidden.`
+      );
+    }
 
-    if (targetRegistry) {
-      canonicalPath = targetRegistry.canonicalPath;
-      databaseId = targetRegistry.databaseId;
-      status = targetRegistry.status;
-      schemaVersion = targetRegistry.schemaVersion;
+    const canonicalPath = targetRegistry.canonicalPath;
+    const databaseId = targetRegistry.databaseId;
+    let status: string = targetRegistry.status || 'ACTIVE';
+    const schemaVersion: number = targetRegistry.schemaVersion || profile.schemaVersion || 1;
 
-      // Invariant E: A physical database path can belong to ONLY ONE Profile
-      const otherRegistries = await systemPrisma.databaseRegistry.findMany({
-        where: {
-          canonicalPath,
-          NOT: { id: targetRegistry.id },
-        },
-      });
+    // Invariant E: A physical database path can belong to ONLY ONE Profile
+    const conflictingRegistries = await systemPrisma.databaseRegistry.findMany({
+      where: {
+        canonicalPath,
+        NOT: { profileId: profile.id },
+      },
+      include: { profile: true },
+    });
 
-      if (otherRegistries.length > 0) {
-        throw new ConflictError(
-          `Database ownership conflict: Path "${canonicalPath}" is registered under multiple database IDs.`
-        );
-      }
-    } else if (profile.dbPath) {
-      const pathRes = canonicalizeDatabasePath(profile.dbPath);
-      if (!pathRes.valid) {
-        throw new ValidationError(`Invalid database path registered on profile: ${pathRes.error}`);
-      }
-      canonicalPath = pathRes.canonicalPath;
-      databaseId = `db_${profile.code}`;
-    } else {
-      const defaultProfilePath = path.resolve(getDatabasesDir(), `${profile.code}.db`);
-      canonicalPath = defaultProfilePath;
-      databaseId = `db_${profile.code}`;
+    if (conflictingRegistries.length > 0) {
+      const conflict = conflictingRegistries[0];
+      throw new ConflictError(
+        `Database ownership conflict: Path "${canonicalPath}" is already attached to profile "${conflict.profile?.code || conflict.profileId}". Two profiles cannot share the same database file.`
+      );
     }
 
     // Invariant: Reject internal control & template databases as business databases

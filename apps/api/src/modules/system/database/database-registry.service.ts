@@ -238,6 +238,20 @@ export class DatabaseRegistryService {
       throw new NotFoundError(`Database registry entry not found for ID: ${databaseId}`);
     }
 
+    // Validate new path does not collide with another profile
+    const duplicateOwner = await systemPrisma.databaseRegistry.findFirst({
+      where: {
+        canonicalPath,
+        NOT: { databaseId },
+      },
+      include: { profile: true },
+    });
+    if (duplicateOwner) {
+      throw new ConflictError(
+        `Database ownership conflict: Path "${canonicalPath}" is already attached to profile "${duplicateOwner.profile?.code || duplicateOwner.profileId}". Two profiles cannot share the same database file.`
+      );
+    }
+
     // Validate new path
     const validation = await databaseValidationService.validateDatabase(canonicalPath);
 
@@ -303,7 +317,15 @@ export class DatabaseRegistryService {
       });
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        const existing = await systemPrisma.databaseRegistry.findUnique({ where: { canonicalPath } });
+        const existing = await systemPrisma.databaseRegistry.findUnique({
+          where: { canonicalPath },
+          include: { profile: true },
+        });
+        if (existing && existing.profileId && existing.profileId !== input.profileId) {
+          throw new ConflictError(
+            `Database path "${canonicalPath}" is already attached to profile "${existing.profile?.code || existing.profileId}". Two profiles cannot share the same database file.`
+          );
+        }
         if (existing) return this.mapToDto(existing);
       }
       throw err;

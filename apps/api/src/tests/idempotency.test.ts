@@ -2,12 +2,17 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import { idempotencyMiddleware, requireIdempotency } from '../middleware/idempotency';
 import prisma, { registerProfile, disconnectAllClients, defaultProfile } from '../infrastructure/database/prisma';
 
 describe('Phase 3: Idempotency Hardening & Guarantees', () => {
   const app = express();
   app.use(express.json());
+
+  const apiDir = path.resolve(__dirname, '../../');
+  const idemDbPath = path.resolve(apiDir, 'IdemTest.db');
 
   // Setup test routes
   app.get('/test-read', (_req: Request, res: Response) => {
@@ -34,11 +39,21 @@ describe('Phase 3: Idempotency Hardening & Guarantees', () => {
   );
 
   beforeAll(async () => {
-    registerProfile({ code: 'IdemTest', name: 'Idempotency Test Profile' });
+    const templateDb = path.resolve(apiDir, 'prisma/template.db');
+    if (fs.existsSync(templateDb)) {
+      fs.copyFileSync(templateDb, idemDbPath);
+    }
+    registerProfile({ code: 'IdemTest', name: 'Idempotency Test Profile', dbPath: idemDbPath });
   });
 
   afterAll(async () => {
     await disconnectAllClients();
+    ['IdemTest.db', 'IdemTest.db-wal', 'IdemTest.db-shm'].forEach((f) => {
+      const p = path.resolve(apiDir, f);
+      if (fs.existsSync(p)) {
+        try { fs.unlinkSync(p); } catch {}
+      }
+    });
   });
 
   describe('3.1 requireIdempotency middleware', () => {

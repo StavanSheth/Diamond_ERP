@@ -22,6 +22,7 @@ export interface SemanticVerificationResult {
   status: 'VERIFIED' | 'FAILED';
   databaseVsCsv: 'VERIFIED' | 'FAILED';
   databaseVsXlsx: 'VERIFIED' | 'FAILED';
+  csvVsXlsx: 'VERIFIED' | 'FAILED';
   duplicatePrimaryKeys: number;
   missingRows: number;
   extraRows: number;
@@ -223,6 +224,29 @@ export class SemanticVerificationService {
         }
       }
 
+      // Check column completeness (Section 15 & 16)
+      if (dbRows.length > 0) {
+        const expectedCols = Object.keys(dbRows[0]).filter(
+          (c) => !SENSITIVE_COLUMN_PATTERN.test(c) && c !== 'createdAt' && c !== 'updatedAt' && c !== 'lastValidatedAt'
+        );
+        if (csvRows.length > 0) {
+          const actualCsvCols = new Set(Object.keys(csvRows[0]));
+          for (const col of expectedCols) {
+            if (!actualCsvCols.has(col)) {
+              errors.push(`Missing expected column "${col}" from CSV export on ${entity.entityName}`);
+            }
+          }
+        }
+        if (xlsxRows.length > 0) {
+          const actualXlsxCols = new Set(Object.keys(xlsxRows[0]));
+          for (const col of expectedCols) {
+            if (!actualXlsxCols.has(col)) {
+              errors.push(`Missing expected column "${col}" from XLSX export on ${entity.entityName}`);
+            }
+          }
+        }
+      }
+
       // Check field values for matching rows
       let fieldMismatches = 0;
       for (const [key, dbRow] of dbMap.entries()) {
@@ -233,7 +257,7 @@ export class SemanticVerificationService {
           if (SENSITIVE_COLUMN_PATTERN.test(col)) continue;
           if (col === 'createdAt' || col === 'updatedAt' || col === 'lastValidatedAt') continue;
 
-          if (csvRow && col in csvRow) {
+          if (csvRow) {
             if (!this.valuesMatch(dbVal, csvRow[col])) {
               fieldMismatches++;
               if (fieldMismatches <= 5) {
@@ -242,7 +266,7 @@ export class SemanticVerificationService {
             }
           }
 
-          if (xlsxRow && col in xlsxRow) {
+          if (xlsxRow) {
             if (!this.valuesMatch(dbVal, xlsxRow[col])) {
               fieldMismatches++;
               if (fieldMismatches <= 5) {
@@ -252,6 +276,29 @@ export class SemanticVerificationService {
           }
         }
       }
+
+      // Section 17: CSV vs XLSX direct verification
+      if (workbook) {
+        if (csvRows.length !== xlsxRows.length) {
+          errors.push(`Direct CSV vs XLSX row count mismatch on ${entity.entityName}: CSV=${csvRows.length}, XLSX=${xlsxRows.length}`);
+        }
+        for (const [key, cRow] of csvMap.entries()) {
+          const xRow = xlsxMap.get(key);
+          if (!xRow) {
+            errors.push(`Row "${key}" present in CSV but missing in XLSX on ${entity.entityName}`);
+            continue;
+          }
+          for (const [cCol, cVal] of Object.entries(cRow)) {
+            if (cCol in xRow && !this.valuesMatch(cVal, xRow[cCol])) {
+              fieldMismatches++;
+              if (fieldMismatches <= 5) {
+                errors.push(`Direct CSV vs XLSX value mismatch on ${entity.entityName} [${key}].${cCol}: CSV="${cVal}" vs XLSX="${xRow[cCol]}"`);
+              }
+            }
+          }
+        }
+      }
+
 
       const entityDuplicateKeys = csvDuplicateKeys + xlsxDuplicateKeys;
       const entityMissing = missingInCsv + missingInXlsx;
@@ -300,6 +347,7 @@ export class SemanticVerificationService {
       status: verified ? 'VERIFIED' : 'FAILED',
       databaseVsCsv: !csvAnyFailed ? 'VERIFIED' : 'FAILED',
       databaseVsXlsx: !xlsxAnyFailed ? 'VERIFIED' : 'FAILED',
+      csvVsXlsx: !csvAnyFailed && !xlsxAnyFailed ? 'VERIFIED' : 'FAILED',
       duplicatePrimaryKeys: totalDuplicateKeys,
       missingRows: totalMissingRows,
       extraRows: totalExtraRows,

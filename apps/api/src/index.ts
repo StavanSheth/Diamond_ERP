@@ -24,6 +24,7 @@ import { errorHandler } from './middleware/error-handler';
 import { corsMiddleware } from './middleware/cors';
 import { enforceContentType } from './middleware/content-type';
 import { authService, validateAuthConfig } from './modules/auth/auth.service';
+import { databaseContextService } from './infrastructure/database/database-context.service';
 import prisma, { systemPrisma, disconnectAllClients } from './infrastructure/database/prisma';
 import { recoveryService } from './modules/system/recovery/recovery.service';
 import { preservationService } from './modules/system/preservation/preservation.service';
@@ -51,6 +52,8 @@ async function bootstrap(): Promise<void> {
 
   // 2. Database connection check - MUST fail fast if database is unreachable (Finding 57)
   try {
+    await databaseContextService.syncProfilesFromSystemDb();
+    logger.info('Synchronized active profile databases from system.db');
     await prisma.$connect();
     logger.info('Connected to SQLite database via Prisma');
   } catch (err) {

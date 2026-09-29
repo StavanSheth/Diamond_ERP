@@ -131,7 +131,7 @@ export async function verifyDeviceCredential(credentialId?: string): Promise<boo
     try {
       const idBuffer = base64UrlToBuffer(credentialId);
       allowCredentials.push({
-        id: idBuffer,
+        id: idBuffer as unknown as BufferSource,
         type: 'public-key',
         transports: ['internal'],
       });
@@ -182,7 +182,7 @@ export async function hashPin(pin: string, saltInput?: string): Promise<string> 
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt,
+      salt: salt as unknown as BufferSource,
       iterations: 100000,
       hash: 'SHA-256',
     },
@@ -192,7 +192,7 @@ export async function hashPin(pin: string, saltInput?: string): Promise<string> 
 
   const hashArray = Array.from(new Uint8Array(derivedBits));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-  const saltB64 = bufferToBase64Url(salt.buffer);
+  const saltB64 = bufferToBase64Url(salt.buffer as ArrayBuffer);
   return `${saltB64}:${hashHex}`;
 }
 

@@ -1,9 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
-import os from 'os';
 import fs from 'fs';
-import { getDatabasesDir, getConfigDir, getDatabaseTemplatePath, getControlDbPath } from '../paths';
+import { getConfigDir, getDatabaseTemplatePath, getControlDbPath } from '../paths';
+
+
 
 // ── Profile Context ─────────────────────────────────────────────────────
 export interface ProfileContext {
@@ -15,8 +16,8 @@ export interface ProfileContext {
 export const requestContext = new AsyncLocalStorage<ProfileContext>();
 
 // ── Constants & Paths ───────────────────────────────────────────────────
-const DB_DIR = getDatabasesDir();
 const CONFIG_PATH = path.join(getConfigDir(), '.profile-config.json');
+
 const MAX_CLIENTS = 10;
 const PROFILE_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
 
@@ -82,55 +83,60 @@ export interface CanonicalProfile {
   dbPath: string;
 }
 
-// ── Canonical Profile Registry ──────────────────────────────────────────
-// Dynamic profile registry allowing creation of any valid profile.
+// ── Canonical Profile Registry Cache ─────────────────────────────────────
+// Cache of registered profiles, maintained strictly by DatabaseContextService / system.db.
+// Invariant: Prisma.ts MUST NOT independently infer or guess DB paths.
 const configuredProfiles = new Map<string, CanonicalProfile>();
 export const FORBIDDEN_PROFILE_NAMES = new Set(['system', 'template', 'test']);
 
-export function resolveProfileDbPath(code: string, explicitPath?: string): string {
-  if (explicitPath && fs.existsSync(explicitPath)) {
-    return explicitPath;
+/**
+ * Register a canonical profile in the in-memory Prisma client cache.
+ * Must be called by DatabaseContextService / DatabaseRegistry after validation.
+ */
+export function registerProfileInCache(profile: { code: string; name?: string; dbPath: string }): CanonicalProfile {
+  if (!PROFILE_REGEX.test(profile.code)) {
+    throw new Error(`Invalid profile code format: "${profile.code}". Must match ${PROFILE_REGEX}`);
   }
-  const defaultDirDb = path.resolve(DB_DIR, `${code}.db`);
-  if (fs.existsSync(defaultDirDb)) {
-    return defaultDirDb;
+  if (FORBIDDEN_PROFILE_NAMES.has(profile.code.toLowerCase())) {
+    throw new Error(`Reserved database profile name cannot be registered as a business profile: "${profile.code}"`);
   }
-  const localAppDb = path.join(
-    process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-    'DiamondERP',
-    'databases',
-    `${code}.db`
-  );
-  if (fs.existsSync(localAppDb)) {
-    return localAppDb;
+
+  const key = profile.code.toLowerCase();
+  const canonicalDbPath = path.resolve(profile.dbPath);
+
+  if (!fs.existsSync(canonicalDbPath)) {
+    throw new Error(
+      `Database file does not exist at "${canonicalDbPath}". Database provisioning must be completed before profile registration.`
+    );
   }
-  return defaultDirDb;
+
+  const canonical: CanonicalProfile = {
+    id: key,
+    code: profile.code,
+    name: profile.name || profile.code,
+    dbPath: canonicalDbPath,
+  };
+
+  configuredProfiles.set(key, canonical);
+
+  // Evict any existing client if path changed so new connection is opened
+  const existing = clientRegistry.get(key);
+  if (existing) {
+    clientRegistry.delete(key);
+    existing.client.$disconnect().catch(() => {});
+  }
+
+  return canonical;
 }
 
+export const registerProfile = registerProfileInCache;
+
 function initConfiguredProfiles() {
-  const currentCfg = readConfig();
   configuredProfiles.clear();
-  const allowed = new Set<string>([
-    ...(currentCfg.activeProfile ? [currentCfg.activeProfile] : []),
-    ...(currentCfg.allowedProfiles || []),
-  ]);
-
-  if (process.env.CONFIGURED_PROFILES) {
-    process.env.CONFIGURED_PROFILES.split(',').forEach((p) => allowed.add(p.trim()));
-  }
-
-  for (const code of allowed) {
-    if (PROFILE_REGEX.test(code) && !FORBIDDEN_PROFILE_NAMES.has(code.toLowerCase())) {
-      const dbPath = resolveProfileDbPath(code);
-      configuredProfiles.set(code.toLowerCase(), {
-        id: code.toLowerCase(),
-        code,
-        name: code,
-        dbPath,
-      });
-    }
-  }
-  // Phase 6: Filesystem discovery must NOT automatically make a database an active/configured business profile.
+  // Phase 1 Hardening: Load profile codes from .profile-config.json cache.
+  // DB paths are NOT inferred here — they are registered only via registerProfileInCache()
+  // which is called by DatabaseContextService.syncProfilesFromSystemDb() on startup.
+  // ponytail: disk scan removed; system.db is the sole authority for DB paths.
 }
 
 initConfiguredProfiles();
@@ -151,52 +157,7 @@ export function removeConfiguredProfile(profileCode: string): void {
   });
 }
 
-/**
- * Register a canonical profile programmatically and ensure DB exists.
- */
-export function registerProfile(profile: { code: string; name?: string; dbPath?: string }): CanonicalProfile {
-  if (!PROFILE_REGEX.test(profile.code)) {
-    throw new Error(`Invalid profile code format: "${profile.code}". Must match ${PROFILE_REGEX}`);
-  }
-  if (FORBIDDEN_PROFILE_NAMES.has(profile.code.toLowerCase())) {
-    throw new Error(`Reserved database profile name cannot be registered as a business profile: "${profile.code}"`);
-  }
-
-  const key = profile.code.toLowerCase();
-  const canonicalDbPath = resolveProfileDbPath(profile.code, profile.dbPath);
-
-  // Phase 7: registerProfile() should NOT create or provision the physical DB file.
-  // The database file MUST already exist before registering the profile.
-  if (!fs.existsSync(canonicalDbPath)) {
-    throw new Error(
-      `Database file does not exist at "${canonicalDbPath}". Database provisioning must be completed before profile registration.`
-    );
-  }
-
-  const canonical: CanonicalProfile = {
-    id: key,
-    code: profile.code,
-    name: profile.name || profile.code,
-    dbPath: canonicalDbPath,
-  };
-
-  configuredProfiles.set(key, canonical);
-
-  // Persist into .profile-config.json
-  try {
-    const currentCfg = readConfig();
-    const allowed = new Set(currentCfg.allowedProfiles || []);
-    allowed.add(profile.code);
-    saveConfig({
-      ...currentCfg,
-      allowedProfiles: Array.from(allowed),
-    });
-  } catch {
-    // ignore
-  }
-
-  return canonical;
-}
+// End profile cache management
 
 /**
  * Check if a profile is configured on the server.
@@ -319,10 +280,7 @@ export async function getClientForProfileAsync(profileCode: string): Promise<Pri
 
       // Ensure database file exists with complete schema
       if (!fs.existsSync(canonical.dbPath)) {
-        const resolved = resolveProfileDbPath(canonical.code);
-        if (fs.existsSync(resolved)) {
-          canonical.dbPath = resolved;
-        }
+        throw new Error(`Database file for profile "${canonical.code}" is missing at "${canonical.dbPath}".`);
       }
       ensureProfileDbFile(canonical.dbPath);
 
@@ -370,12 +328,7 @@ export function getClientForProfile(profileCode: string): PrismaClient {
   }
 
   if (!fs.existsSync(canonical.dbPath)) {
-    const resolved = resolveProfileDbPath(canonical.code);
-    if (fs.existsSync(resolved)) {
-      canonical.dbPath = resolved;
-    } else {
-      throw new Error(`Database file for profile "${profileCode}" is missing at "${canonical.dbPath}".`);
-    }
+    throw new Error(`Database file for profile "${profileCode}" is missing at "${canonical.dbPath}".`);
   }
 
   const client = createPrismaClient(`file:${canonical.dbPath}`);
