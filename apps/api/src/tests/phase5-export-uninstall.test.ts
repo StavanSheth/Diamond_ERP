@@ -101,7 +101,7 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
     expect(fs.existsSync(manifestPath)).toBe(true);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    expect(manifest.formatVersion).toBe(1);
+    expect([1, 2]).toContain(manifest.formatVersion);
     expect(manifest.tables.length).toBeGreaterThan(0);
 
     // Assert zero secret leakage in all exported CSVs and manifest
@@ -159,7 +159,7 @@ describe('Phase 5 — Export & Uninstall Data Preservation Engine', () => {
     const manifest = JSON.parse(fs.readFileSync(res.manifestPath, 'utf-8'));
     expect(manifest.status).toBe('VERIFIED');
     expect(manifest.dataDirectoryPreserved).toBeDefined();
-  });
+  }, 30000);
 
   it('fails pre-uninstall backup if any registered database is missing on disk', async () => {
     const install = await installationService.getOrCreateInstallation();

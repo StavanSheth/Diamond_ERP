@@ -84,14 +84,32 @@ export class SemanticVerificationService {
       return Math.abs(numA - numB) < 0.0001;
     }
 
-    // Date comparison
-    if (valA instanceof Date || valB instanceof Date ||
-        (typeof valA === 'string' && typeof valB === 'string' && /^\d{4}-\d{2}-\d{2}/.test(valA) && /^\d{4}-\d{2}-\d{2}/.test(valB))) {
-      const dateA = new Date(valA).getTime();
-      const dateB = new Date(valB).getTime();
-      if (!isNaN(dateA) && !isNaN(dateB)) {
-        return Math.abs(dateA - dateB) < 2000; // within 2s for serialization variance
+    // Date / Timestamp comparison (SQLite date string / Date object / epoch ms or s string)
+    const toTimestamp = (val: any): number => {
+      if (val instanceof Date) return val.getTime();
+      if (typeof val === 'number') {
+        if (val > 100000000000) return val;
+        if (val > 100000000) return val * 1000;
+        return NaN;
       }
+      if (typeof val === 'string') {
+        const trimmed = val.replace(/^["']|["']$/g, '').trim();
+        if (/^\d{10,13}$/.test(trimmed)) {
+          const n = Number(trimmed);
+          return trimmed.length === 10 ? n * 1000 : n;
+        }
+        if (/^\d{4}-\d{2}-\d{2}/.test(trimmed) || /GMT|UTC|\d{2}:\d{2}/.test(trimmed)) {
+          const parsed = Date.parse(trimmed);
+          if (!isNaN(parsed)) return parsed;
+        }
+      }
+      return NaN;
+    };
+
+    const timeA = toTimestamp(valA);
+    const timeB = toTimestamp(valB);
+    if (!isNaN(timeA) && !isNaN(timeB)) {
+      return Math.abs(timeA - timeB) < 2000; // within 2s for serialization variance
     }
 
     // String comparison (trimmed, stripping formula escape quote and wrapping quotes)

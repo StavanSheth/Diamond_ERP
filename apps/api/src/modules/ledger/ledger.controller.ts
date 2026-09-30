@@ -299,10 +299,10 @@ export class LedgerController {
         res.status(404).json({ success: false, error: 'Transaction not found' });
         return;
       }
-      if (txn.status === 'COMPLETED') {
+      if (txn.status === 'COMPLETED' || txn.status === 'POSTED') {
         res.status(400).json({
           success: false,
-          error: 'Completed accounting transactions are immutable. To correct balances, please post a reversal or correcting transaction.',
+          error: 'Posted and completed accounting transactions are immutable. To correct balances, please post a reversal or correcting transaction.',
           code: 'TRANSACTION_IMMUTABLE'
         });
         return;

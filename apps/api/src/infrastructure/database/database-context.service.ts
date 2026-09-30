@@ -5,6 +5,7 @@ import {
   systemPrisma,
   getClientForProfile,
   getActiveProfile,
+  getActiveProfileOrDefault,
   registerProfile,
   disconnectAllClients,
 } from './prisma';
@@ -222,7 +223,15 @@ export class DatabaseContextService {
    * Fails closed if no profile context is established.
    */
   async getActiveProfileDatabase(): Promise<ProfileDatabaseContext> {
-    const activeProfileCode = getActiveProfile();
+    let activeProfileCode: string | undefined;
+    try {
+      activeProfileCode = getActiveProfile();
+    } catch {
+      activeProfileCode = getActiveProfileOrDefault();
+    }
+    if (!activeProfileCode) {
+      throw new ConflictError('No active profile context could be established. Business database resolution requires an active profile.');
+    }
     return this.getDatabaseForProfileCode(activeProfileCode);
   }
 

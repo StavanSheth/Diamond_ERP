@@ -2061,6 +2061,72 @@ namespace DiamondERP.Setup
 
                 if (!isAuthorized)
                 {
+                    // Attempt automated preservation flow before blocking
+                    string scriptPath = Path.Combine(installDir, "api", "dist", "index.js");
+                    string bundledNode = Path.Combine(installDir, "runtime", "node.exe");
+                    if (!File.Exists(bundledNode)) bundledNode = Path.Combine(installDir, "node", "node.exe");
+                    if (!File.Exists(bundledNode)) bundledNode = "node.exe";
+
+                    if (File.Exists(scriptPath))
+                    {
+                        try
+                        {
+                            ProcessStartInfo autoPreservePsi = new ProcessStartInfo
+                            {
+                                FileName = bundledNode,
+                                Arguments = string.Format("\"{0}\" --auto-preserve", scriptPath),
+                                WorkingDirectory = Path.Combine(installDir, "api"),
+                                CreateNoWindow = true,
+                                UseShellExecute = false,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                            };
+                            autoPreservePsi.EnvironmentVariables["NODE_ENV"] = "production";
+                            autoPreservePsi.EnvironmentVariables["DIAMOND_DATA_DIR"] = userDbDir;
+
+                            using (Process preserveProc = Process.Start(autoPreservePsi))
+                            {
+                                preserveProc.WaitForExit(90000);
+                                if (preserveProc.ExitCode == 0 && File.Exists(tokenPath))
+                                {
+                                    string tokenJson = File.ReadAllText(tokenPath);
+                                    string authId = ExtractJsonValue(tokenJson, "authorizationId");
+                                    string status = ExtractJsonValue(tokenJson, "status");
+                                    string consumedAtStr = ExtractJsonValue(tokenJson, "consumedAt");
+                                    if (!string.IsNullOrEmpty(authId) && status == "ISSUED" && (string.IsNullOrEmpty(consumedAtStr) || consumedAtStr == "null"))
+                                    {
+                                        isAuthorized = true;
+                                        // Atomically mark token consumed
+                                        try
+                                        {
+                                            string tmpTokenPath = tokenPath + ".tmp_" + Guid.NewGuid().ToString("N");
+                                            string updatedJson = tokenJson.Replace("\"status\": \"ISSUED\"", "\"status\": \"CONSUMED\"")
+                                                                          .Replace("\"status\":\"ISSUED\"", "\"status\":\"CONSUMED\"")
+                                                                          .Replace("\"consumedAt\": null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")))
+                                                                          .Replace("\"consumedAt\":null", string.Format("\"consumedAt\": \"{0}\"", DateTime.UtcNow.ToString("o")));
+                                            File.WriteAllText(tmpTokenPath, updatedJson);
+                                            File.Copy(tmpTokenPath, tokenPath, true);
+                                            try { File.Delete(tmpTokenPath); } catch { }
+                                        }
+                                        catch { }
+                                    }
+                                }
+                                else if (preserveProc.ExitCode != 0)
+                                {
+                                    string errOutput = preserveProc.StandardError.ReadToEnd();
+                                    blockReason = "Automated data preservation failed: " + errOutput;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            blockReason = "Error launching automated preservation: " + ex.Message;
+                        }
+                    }
+                }
+
+                if (!isAuthorized)
+                {
                     if (!silent)
                     {
                         MessageBox.Show(

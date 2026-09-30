@@ -75,22 +75,28 @@ export class DatabaseDeletionService {
         throw new NotFoundError(`Profile "${cleanCode}" not found.`);
       }
 
-      // 2. Resolve database context
+      // 2. Resolve database context strictly via DatabaseContextService
       let canonicalDbFile: string | null = null;
       let registryRecord: any = null;
 
       try {
         const dbContext = await databaseContextService.getDatabaseForProfile(profile.id);
         canonicalDbFile = dbContext.canonicalPath;
-        registryRecord = profile.databaseRegistries.find((r) => r.id === dbContext.databaseId || r.canonicalPath === dbContext.canonicalPath);
+        registryRecord = profile.databaseRegistries.find(
+          (r) => r.id === dbContext.databaseId || r.canonicalPath === dbContext.canonicalPath
+        );
       } catch (ctxErr) {
-        // Check registry records directly if context validation failed
-        if (profile.databaseRegistries.length > 0) {
-          registryRecord = profile.databaseRegistries[0];
-          canonicalDbFile = registryRecord.canonicalPath;
-        } else if (profile.dbPath) {
-          canonicalDbFile = path.resolve(profile.dbPath);
+        if (deleteDatabaseFile) {
+          throw new ConflictError(
+            `Cannot physically delete database for profile "${cleanCode}": Authoritative database context could not be verified (${(ctxErr as Error).message}). Physical deletion aborted.`
+          );
         }
+      }
+
+      if (deleteDatabaseFile && (!canonicalDbFile || !registryRecord)) {
+        throw new ConflictError(
+          `Cannot physically delete database for profile "${cleanCode}": Active authoritative registry was not found. Physical deletion aborted.`
+        );
       }
 
       const deletedFiles: string[] = [];

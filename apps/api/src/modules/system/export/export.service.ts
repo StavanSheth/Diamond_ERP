@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
-import { systemPrisma, getActiveProfileOrDefault } from '../../../infrastructure/database/prisma';
+import { systemPrisma } from '../../../infrastructure/database/prisma';
 import { databaseContextService } from '../../../infrastructure/database/database-context.service';
 import {
   getExportDir,
@@ -143,10 +143,10 @@ export class ExportService {
     const controlDb = getControlDbPath().toLowerCase();
     const templateDb = getDatabaseTemplatePath()?.toLowerCase() || '';
 
-    // Authoritative resolution of profile business database via DatabaseContextService
+    // Authoritative resolution of profile business database strictly via DatabaseContextService
     let activeDbPath = req.databasePath;
     let activeRegistry: any = null;
-    let resolvedProfileCode = 'Stavan';
+    let resolvedProfileCode: string;
 
     if (activeDbPath) {
       const pathRes = canonicalizeDatabasePath(activeDbPath);
@@ -166,7 +166,7 @@ export class ExportService {
       }
 
       activeDbPath = canonical;
-      activeRegistry = await systemPrisma.databaseRegistry.findFirst({
+      activeRegistry = await systemPrisma.databaseRegistry.findUnique({
         where: { canonicalPath: canonical },
         include: { profile: true },
       });
@@ -178,18 +178,11 @@ export class ExportService {
       } else if (req.profileCode) {
         dbContext = await databaseContextService.getDatabaseForProfileCode(req.profileCode);
       } else {
-        try {
-          dbContext = await databaseContextService.getActiveProfileDatabase();
-        } catch {
-          const fallback = getActiveProfileOrDefault();
-          if (fallback) {
-            dbContext = await databaseContextService.getDatabaseForProfileCode(fallback);
-          }
-        }
+        dbContext = await databaseContextService.getActiveProfileDatabase();
       }
 
       if (!dbContext) {
-        throw new NotFoundError('No active business database found to export.');
+        throw new NotFoundError('No active business database found to export. Explicit profile context required.');
       }
 
       activeDbPath = dbContext.canonicalPath;

@@ -1,9 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, FORBIDDEN_PROFILE_NAMES, updateProfileDbPath } from '../../infrastructure/database/prisma';
+import prisma, { systemPrisma, getAllProfiles, getActiveProfileOrDefault, FORBIDDEN_PROFILE_NAMES, updateProfileDbPath, registerProfile, getClientForProfileAsync } from '../../infrastructure/database/prisma';
 import { ValidationError, NotFoundError } from '../../errors';
-import { getDatabasesDir } from '../../infrastructure/paths';
 import { userLifecycleService } from '../system/user-lifecycle/user-lifecycle.service';
 import { backupService } from '../system/backup/backup.service';
 import { databaseProvisioningService } from '../system/database/database-provisioning.service';
@@ -21,7 +20,7 @@ export class SettingsController {
       let rows: any[] = [];
       try {
         rows = await prisma.setting.findMany();
-      } catch (err: any) {
+      } catch (_err: any) {
         // Fallback gracefully if Setting table does not exist in current profile DB
         rows = [];
       }
@@ -195,7 +194,6 @@ export class SettingsController {
       });
 
       // Synchronize in-memory Prisma client pool
-      const { registerProfile, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
       registerProfile({
         code: cleanName,
         name: displayName || cleanName,
@@ -264,7 +262,6 @@ export class SettingsController {
         return;
       }
 
-      const { FORBIDDEN_PROFILE_NAMES, getClientForProfileAsync } = require('../../infrastructure/database/prisma');
       if (FORBIDDEN_PROFILE_NAMES.has(cleanName.toLowerCase())) {
         res.status(400).json({
           success: false,
@@ -402,7 +399,6 @@ export class SettingsController {
   checkpointWAL = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const activeProfile = (req as any).profileCode || getActiveProfileOrDefault();
-      const { getClientForProfileAsync } = require('../../infrastructure/database/prisma');
       const client = await getClientForProfileAsync(activeProfile);
 
       const result: any = await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
@@ -575,17 +571,17 @@ export class SettingsController {
       const activeProfile = getActiveProfileOrDefault();
 
       const formatted = profiles.map((p) => {
-        const canonicalPath = p.databaseRegistries[0]?.canonicalPath || p.dbPath || path.resolve(getDatabasesDir(), `${p.code}.db`);
-        const filename = path.basename(canonicalPath);
-        const exists = fs.existsSync(canonicalPath);
-        const sizeBytes = exists ? fs.statSync(canonicalPath).size : 0;
+        const canonicalPath = p.databaseRegistries[0]?.canonicalPath || null;
+        const filename = canonicalPath ? path.basename(canonicalPath) : `${p.code}.db`;
+        const exists = canonicalPath ? fs.existsSync(canonicalPath) : false;
+        const sizeBytes = exists && canonicalPath ? fs.statSync(canonicalPath).size : 0;
 
         return {
           id: p.id,
           code: p.code,
           name: p.name,
-          dbPath: canonicalPath,
-          canonicalPath,
+          dbPath: canonicalPath || '',
+          canonicalPath: canonicalPath || '',
           filename,
           sizeBytes,
           exists,
@@ -750,7 +746,6 @@ export class SettingsController {
       }
 
       try {
-        const { getClientForProfileAsync } = require('../../infrastructure/database/prisma');
         const client = await getClientForProfileAsync(activeProfile);
         await client.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE);');
       } catch { }

@@ -3,9 +3,9 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { systemPrisma, defaultProfile, getAllProfiles } from '../../infrastructure/database/prisma';
+import { systemPrisma, defaultProfile, getAllProfiles, registerProfile, ensureProfileDbFile, saveConfig } from '../../infrastructure/database/prisma';
 import { logger } from '../../infrastructure/logging';
-import { getConfigDir } from '../../infrastructure/paths';
+import { getConfigDir, getDatabasesDir } from '../../infrastructure/paths';
 import { AuthenticationError, AuthorizationError, ConflictError, ValidationError, NotFoundError } from '../../errors';
 
 // ── Configuration ───────────────────────────────────────────────────────
@@ -568,19 +568,69 @@ export class AuthService {
 
     const defaultPassword = envPassword || (process.env.NODE_ENV === 'test' ? 'Admin@123456' : 'Stavan@123');
 
-    // Ensure default profile exists
-    let stavanProfile = await systemPrisma.profile.findUnique({ where: { code: defaultProfile } });
+    // Ensure default profile exists with an active database registry
+    const profileCode = defaultProfile || 'Stavan';
+    let stavanProfile = await systemPrisma.profile.findFirst({
+      where: {
+        OR: [
+          { code: profileCode },
+          { code: 'Stavan' },
+        ],
+      },
+      include: {
+        databaseRegistries: true,
+      },
+    });
+
     if (!stavanProfile) {
       stavanProfile = await systemPrisma.profile.create({
         data: {
-          code: defaultProfile,
-          name: defaultProfile,
+          code: profileCode,
+          name: profileCode,
           isActive: true,
+        },
+        include: {
+          databaseRegistries: true,
         },
       });
     }
 
-    await this.createUser('stavan', defaultPassword, 'Stavan', ROLES.SUPER_ADMIN, [defaultProfile]);
+    const dbPath = path.resolve(path.join(getDatabasesDir(), `${profileCode}.db`));
+    ensureProfileDbFile(dbPath);
+
+    const { installationService } = await import('../system/installation.service');
+    const installation = await installationService.getOrCreateInstallation();
+
+    const activeRegistry = (stavanProfile.databaseRegistries || []).find((r: any) => r.status === 'ACTIVE');
+    if (!activeRegistry) {
+      await systemPrisma.databaseRegistry.create({
+        data: {
+          databaseId: crypto.randomUUID(),
+          displayName: `${profileCode} Business Database`,
+          canonicalPath: dbPath,
+          installationId: installation.id,
+          profileId: stavanProfile.id,
+          status: 'ACTIVE',
+          schemaVersion: 1,
+        },
+      });
+    }
+
+    try {
+      registerProfile({
+        code: profileCode,
+        name: stavanProfile.name,
+        dbPath,
+      });
+      saveConfig({
+        activeProfile: profileCode,
+        allowedProfiles: [profileCode],
+      });
+    } catch {
+      // Ignore cache registration issues
+    }
+
+    await this.createUser('stavan', defaultPassword, 'Stavan', ROLES.SUPER_ADMIN, [profileCode]);
     if (envPassword) {
       logger.info(`Default user "stavan" seeded from DEFAULT_ADMIN_PASSWORD.`);
     } else if (process.env.NODE_ENV !== 'test') {

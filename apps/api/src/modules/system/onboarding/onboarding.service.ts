@@ -128,49 +128,7 @@ export class OnboardingService {
 
     let activeRegistry = activeRegistries.find((r) => fs.existsSync(r.canonicalPath)) || null;
 
-    // Auto-heal database registry from existing local DB
-    if (!activeRegistry) {
-      const anyActive = await systemPrisma.databaseRegistry.findFirst({
-        where: { status: 'ACTIVE' },
-        include: { profile: true },
-      });
-      if (anyActive && fs.existsSync(anyActive.canonicalPath)) {
-        await systemPrisma.databaseRegistry.update({
-          where: { id: anyActive.id },
-          data: { installationId: install.id },
-        }).catch(() => {});
-        activeRegistry = anyActive;
-      }
-    }
-
     const databaseConfigured = !!activeRegistry;
-
-    // Enforce: Each user is attached with only one DB and no other DB
-    if (activeRegistry?.profileId && installUser) {
-      await systemPrisma.userProfile.upsert({
-        where: {
-          userId_profileId: {
-            userId: installUser.userId,
-            profileId: activeRegistry.profileId,
-          },
-        },
-        update: { isActive: true },
-        create: {
-          userId: installUser.userId,
-          profileId: activeRegistry.profileId,
-          role: installUser.user.role || 'SUPER_ADMIN',
-          isActive: true,
-        },
-      }).catch(() => {});
-
-      // Ensure no other DB profiles are attached to this user
-      await systemPrisma.userProfile.deleteMany({
-        where: {
-          userId: installUser.userId,
-          profileId: { not: activeRegistry.profileId },
-        },
-      }).catch(() => {});
-    }
 
     // 4. Authoritative Ready verification
     const isReady =
@@ -262,10 +220,6 @@ export class OnboardingService {
 
     if (install.lifecycleState === 'NOT_INITIALIZED') {
       await installationService.updateLifecycleState('APP_SETUP');
-    }
-    const current = await installationService.getOrCreateInstallation();
-    if (current.lifecycleState === 'APP_SETUP') {
-      await installationService.updateLifecycleState('PIN_SETUP');
     }
 
     return this.getOnboardingState();
@@ -444,6 +398,21 @@ export class OnboardingService {
         role,
         []
       );
+
+      await systemPrisma.auditEvent.create({
+        data: {
+          entityType: 'User',
+          entityId: user.id,
+          eventType: 'NEW_USER_CREATED',
+          description: `New business user account created: "${user.username}" [${user.id}]`,
+          performedBy: user.id,
+          metadata: JSON.stringify({
+            userId: user.id,
+            username: user.username,
+            role: user.role,
+          }),
+        },
+      }).catch(() => {});
     }
 
     // 2. Associate with installation (idempotent upsert)

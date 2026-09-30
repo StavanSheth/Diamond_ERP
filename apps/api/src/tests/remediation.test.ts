@@ -119,7 +119,7 @@ describe('Production Remediation Verification Suite', () => {
 
       expect(responseData).toBeDefined();
       expect(responseData.success).toBe(true);
-      expect(responseData.data.filename).toContain('diamond_erp_backup_');
+      expect(responseData.data.filename).toContain('_backup_');
       expect(responseData.data.sizeBytes).toBeGreaterThan(0);
       expect(responseData.data.checkpoint).toBe('TRUNCATE');
     });

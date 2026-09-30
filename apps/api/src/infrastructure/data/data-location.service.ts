@@ -288,7 +288,6 @@ class DataLocationService {
 
     // 1. Try better-sqlite3 first
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const Database = require('better-sqlite3');
       const db = new Database(dbPath, { readonly: true, fileMustExist: true });
       try {
@@ -312,7 +311,6 @@ class DataLocationService {
       }
       // 2. If better-sqlite3 cannot be loaded, execute via PrismaClient
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { PrismaClient: CheckClient } = require('@prisma/client');
         const checkClient = new CheckClient({
           datasources: { db: { url: `file:${dbPath.replace(/\\/g, '/')}` } },

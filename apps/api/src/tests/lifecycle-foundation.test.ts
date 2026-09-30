@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { installationService, LIFECYCLE_STAGES } from '../modules/system/installation.service';
 import { authService, ROLES } from '../modules/auth/auth.service';
 import { authController } from '../modules/auth/auth.controller';
-import prisma, { systemPrisma, ensureProfileDbFile, getClientForProfile, runWithProfile, getActiveProfile } from '../infrastructure/database/prisma';
+import prisma, { systemPrisma, ensureProfileDbFile, getClientForProfile, runWithProfile, getActiveProfile, registerProfile } from '../infrastructure/database/prisma';
 import { getDatabasesDir, getDatabaseTemplatePath, getControlDbPath } from '../infrastructure/paths';
 import { canonicalizeDatabasePath } from '../modules/system/database/database-path.util';
 import { databaseValidationService } from '../modules/system/database/database-validation.service';
@@ -266,7 +266,10 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       ).rejects.toThrow(/Illegal lifecycle transition/);
 
       // Controlled reset to NOT_INITIALIZED is allowed
-      const reset = await installationService.updateLifecycleState('NOT_INITIALIZED');
+      const reset = await installationService.updateLifecycleState('NOT_INITIALIZED', {
+        isReset: true,
+        resetReason: 'DEVELOPMENT_TEST_RESET',
+      });
       expect(reset.lifecycleState).toBe('NOT_INITIALIZED');
       expect(reset.initializedAt).toBeNull();
     });
@@ -819,6 +822,8 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
 
       ensureProfileDbFile(pathA);
       ensureProfileDbFile(pathB);
+      registerProfile({ code: codeA, name: codeA, dbPath: pathA });
+      registerProfile({ code: codeB, name: codeB, dbPath: pathB });
 
       expect(pathA).not.toBe(pathB);
 
@@ -990,6 +995,7 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
         profileId: profileRecord!.id,
         installationId: install.id,
       });
+      registerProfile({ code: profileCode, name: profileCode, dbPath });
 
       // Record SHA-256 before deactivation
       const sha256Before = crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
@@ -1059,6 +1065,8 @@ describe('Phase 2 Foundation: Complete Lifecycle, Control DB, Registry & Securit
       testDbFiles.push(dbPathA, dbPathB);
       ensureProfileDbFile(dbPathA);
       ensureProfileDbFile(dbPathB);
+      registerProfile({ code: codeA, name: codeA, dbPath: dbPathA });
+      registerProfile({ code: codeB, name: codeB, dbPath: dbPathB });
 
       // 1. Control DB record created in systemPrisma
       const controlDev = await installationService.registerDevice({

@@ -740,6 +740,39 @@ describe('Production Hardening: Concurrency, Profile Isolation & Atomicity', () 
     });
 
     it('posted ledger transaction updates are rejected with 400 TRANSACTION_IMMUTABLE', async () => {
+      await runWithProfile('ProfileA', async () => {
+        let ledger = await prisma.ledger.findFirst();
+        if (!ledger) {
+          const stock = await prisma.stock.findFirst();
+          ledger = await prisma.ledger.create({
+            data: {
+              stockId: stock!.id,
+              ledgerType: 'PURCHASE',
+              name: 'Test Ledger',
+            },
+          });
+        }
+        const maxSeq = await prisma.transaction.aggregate({
+          where: { ledgerId: ledger.id },
+          _max: { sequenceNumber: true },
+        });
+        const nextSeq = (maxSeq._max.sequenceNumber || 0) + 100;
+        await prisma.transaction.upsert({
+          where: { id: 'test-tx-id' },
+          update: { status: 'POSTED' },
+          create: {
+            id: 'test-tx-id',
+            ledgerId: ledger.id,
+            transactionNo: `TX-TEST-IMMUTABLE-${Date.now()}`,
+            transactionDate: new Date(),
+            transactionType: 'PURCHASE',
+            sequenceNumber: nextSeq,
+            createdBy: 'admin',
+            status: 'POSTED',
+          },
+        });
+      });
+
       const res = await request(app)
         .put('/api/ledger/test-tx-id')
         .set('Authorization', `Bearer ${adminToken}`)

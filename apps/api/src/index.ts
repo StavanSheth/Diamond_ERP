@@ -67,6 +67,24 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
+  // 2.1 Automated Uninstall CLI Trigger (--auto-preserve)
+  if (process.argv.includes('--auto-preserve')) {
+    logger.info('Executing automated pre-uninstall preservation flow via CLI trigger...');
+    try {
+      const { uninstallPreflightService } = await import('./modules/system/uninstall/uninstall-preflight.service');
+      const destIndex = process.argv.indexOf('--destination');
+      const destinationDir = destIndex !== -1 && process.argv[destIndex + 1] ? process.argv[destIndex + 1] : undefined;
+      const result = await uninstallPreflightService.runAutomatedUninstallPreservation({ destinationDir });
+      logger.info(`Automated uninstall preservation succeeded: ${JSON.stringify(result)}`);
+      await disconnectAllClients();
+      process.exit(0);
+    } catch (err: any) {
+      logger.error('FATAL: Automated uninstall preservation failed:', undefined, err);
+      await disconnectAllClients();
+      process.exit(1);
+    }
+  }
+
   // 3. Seed default admin user and default profile if database is uninitialized (Finding 58)
   // Controlled by environment / non-production to avoid unexpected state mutation in production
   if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true' || process.env.NODE_ENV !== 'production') {

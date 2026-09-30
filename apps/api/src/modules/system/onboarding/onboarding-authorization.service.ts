@@ -159,6 +159,10 @@ export class OnboardingAuthorizationService {
         throw new AuthorizationError('Authenticated user account is inactive or not found.');
       }
 
+      if (dbUser.role !== 'ADMIN' && dbUser.role !== 'SUPER_ADMIN') {
+        throw new AuthorizationError('Operation requires ADMIN role.');
+      }
+
       return;
     }
 

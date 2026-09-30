@@ -20,6 +20,7 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
   let installId: string;
   let deviceId: string;
   const createdTestFiles: string[] = [];
+  const createdRegistryIds: string[] = [];
 
   beforeEach(async () => {
     const install = await installationService.getOrCreateInstallation();
@@ -40,6 +41,12 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
   });
 
   afterEach(async () => {
+    if (createdRegistryIds.length > 0) {
+      await systemPrisma.databaseRegistry.deleteMany({
+        where: { id: { in: createdRegistryIds } },
+      }).catch(() => {});
+      createdRegistryIds.length = 0;
+    }
     for (const f of createdTestFiles) {
       if (fs.existsSync(f)) {
         try { fs.unlinkSync(f); } catch {}
@@ -214,7 +221,7 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
 
       // Register with mixed case
       const upperPath = testDb.toUpperCase();
-      await systemPrisma.databaseRegistry.create({
+      const reg1 = await systemPrisma.databaseRegistry.create({
         data: {
           databaseId: crypto.randomUUID(),
           displayName: 'Cased DB',
@@ -225,6 +232,7 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
           installationId: installId,
         },
       });
+      createdRegistryIds.push(reg1.id);
 
       const discovery = await onboardingService.discoverDatabases();
       const matches = discovery.candidates.filter(
@@ -235,7 +243,7 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
 
     it('classifies missing database file as MISSING status in discovery', async () => {
       const missingPath = path.resolve(getDatabasesDir(), `non_existent_${Date.now()}.db`);
-      await systemPrisma.databaseRegistry.create({
+      const reg2 = await systemPrisma.databaseRegistry.create({
         data: {
           databaseId: crypto.randomUUID(),
           displayName: 'Missing DB',
@@ -246,6 +254,7 @@ describe('Diamond ERP V3 — Phase 5: Existing User + Database Discovery & Valid
           installationId: installId,
         },
       });
+      createdRegistryIds.push(reg2.id);
 
       const discovery = await onboardingService.discoverDatabases();
       const found = discovery.candidates.find(

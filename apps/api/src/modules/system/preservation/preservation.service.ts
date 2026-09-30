@@ -417,7 +417,19 @@ export class PreservationService {
         };
         fs.writeFileSync(targetDbBackupManifestPath, JSON.stringify(dbBackupManifest, null, 2), 'utf-8');
 
-        // Section 10: Create per-profile directory structure (profiles/ProfileName/)
+        // Section 7 Architecture: Profile-A/ directly under preservation package root
+        const directProfileDir = path.join(bundleDir, dbFolderName);
+        const directDbDir = path.join(directProfileDir, 'database');
+        const directCsvDir = path.join(directProfileDir, 'csv');
+        const directXlsxDir = path.join(directProfileDir, 'xlsx');
+        fs.mkdirSync(directDbDir, { recursive: true });
+        fs.mkdirSync(directCsvDir, { recursive: true });
+        fs.mkdirSync(directXlsxDir, { recursive: true });
+
+        fs.copyFileSync(targetDbBackupPath, path.join(directDbDir, 'database_backup.db'));
+        fs.copyFileSync(targetDbBackupManifestPath, path.join(directDbDir, 'database_backup.db.manifest.json'));
+
+        // Mirror under profiles/ for backwards compatibility
         const profileBaseDir = path.join(bundleDir, 'profiles', dbFolderName);
         const profileDbDir = path.join(profileBaseDir, 'database');
         const profileCsvDir = path.join(profileBaseDir, 'csv');
@@ -505,6 +517,7 @@ export class PreservationService {
             });
             fs.writeFileSync(csvPath, csvOutput, 'utf-8');
             fs.copyFileSync(csvPath, path.join(profileCsvDir, csvFileName));
+            fs.copyFileSync(csvPath, path.join(directCsvDir, csvFileName));
 
             const csvStat = fs.statSync(csvPath);
             const csvSha = this.calculateSha256(csvPath);
@@ -546,6 +559,7 @@ export class PreservationService {
           const dbXlsxPath = path.join(xlsxBundleDir, dbXlsxFileName);
           await workbook.xlsx.writeFile(dbXlsxPath);
           fs.copyFileSync(dbXlsxPath, path.join(profileXlsxDir, 'business_data.xlsx'));
+          fs.copyFileSync(dbXlsxPath, path.join(directXlsxDir, 'business_data.xlsx'));
 
           const xlsxStat = fs.statSync(dbXlsxPath);
           const xlsxSha = this.calculateSha256(dbXlsxPath);
@@ -611,6 +625,11 @@ export class PreservationService {
           };
           fs.writeFileSync(
             path.join(profileBaseDir, 'profile-manifest.json'),
+            JSON.stringify(profileManifest, null, 2),
+            'utf-8'
+          );
+          fs.writeFileSync(
+            path.join(directProfileDir, 'profile-manifest.json'),
             JSON.stringify(profileManifest, null, 2),
             'utf-8'
           );
@@ -716,6 +735,9 @@ export class PreservationService {
         dataDirectoryPreserved: true,
       };
       fs.writeFileSync(preservationManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
+      // Section 7 Root manifest.json requirement
+      const rootManifestPath = path.join(bundleDir, 'manifest.json');
+      fs.writeFileSync(rootManifestPath, JSON.stringify(preservationManifest, null, 2), 'utf-8');
 
       const manifestSha256 = this.calculateSha256(preservationManifestPath);
 
@@ -843,7 +865,10 @@ export class PreservationService {
       }
     }
 
-    const manifestPath = path.join(bundleDir, 'preservation-manifest.json');
+    let manifestPath = path.join(bundleDir, 'preservation-manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      manifestPath = path.join(bundleDir, 'manifest.json');
+    }
     if (!fs.existsSync(manifestPath)) {
       return {
         packageId: path.basename(bundleDir),
@@ -853,7 +878,7 @@ export class PreservationService {
         csvVerified: false,
         xlsxVerified: false,
         manifestVerified: false,
-        error: 'preservation-manifest.json missing from bundle',
+        error: 'preservation manifest (preservation-manifest.json or manifest.json) missing from bundle',
       };
     }
 
@@ -879,9 +904,14 @@ export class PreservationService {
     // ── Multi-Database Verification Path ─────────────────────────────────
     if (manifest.databases && Array.isArray(manifest.databases) && manifest.databases.length > 0) {
       for (const dbItem of manifest.databases) {
-        // 1. Verify Database Backup
-        const dbBackupFile = path.join(bundleDir, dbItem.backupPath || `databases/${dbItem.profileCode}/database_backup.db`);
-        if (!fs.existsSync(dbBackupFile)) {
+        // 1. Verify Database Backup (check both manifest backupPath and direct profile directory)
+        const candidateDbFiles = [
+          dbItem.backupPath ? path.join(bundleDir, dbItem.backupPath) : null,
+          path.join(bundleDir, dbItem.profileCode, 'database', 'database_backup.db'),
+          path.join(bundleDir, `databases/${dbItem.profileCode}/database_backup.db`),
+        ].filter((p): p is string => !!p && fs.existsSync(p));
+
+        if (candidateDbFiles.length === 0) {
           return {
             packageId: manifest.packageId,
             verified: false,
@@ -890,40 +920,45 @@ export class PreservationService {
             csvVerified: false,
             xlsxVerified: false,
             manifestVerified: true,
-            error: `Database backup file missing for ${dbItem.databaseId || dbItem.profileCode}: ${dbBackupFile}`,
+            error: `Database backup file missing for ${dbItem.databaseId || dbItem.profileCode}`,
           };
         }
 
-        const dbValidation = await databaseValidationService.validateDatabase(dbBackupFile);
-        if (dbValidation.status !== 'ACTIVE') {
-          return {
-            packageId: manifest.packageId,
-            verified: false,
-            status: 'FAILED',
-            databaseBackupVerified: false,
-            csvVerified: false,
-            xlsxVerified: false,
-            manifestVerified: true,
-            error: `Database backup failed validation for ${dbItem.databaseId || dbItem.profileCode}: ${dbValidation.details}`,
-          };
-        }
+        for (const candidate of candidateDbFiles) {
+          const actualDbSha = this.calculateSha256(candidate);
+          if (dbItem.sha256 && dbItem.sha256 !== actualDbSha) {
+            return {
+              packageId: manifest.packageId,
+              verified: false,
+              status: 'FAILED',
+              databaseBackupVerified: false,
+              csvVerified: false,
+              xlsxVerified: false,
+              manifestVerified: true,
+              error: `Database backup SHA-256 checksum mismatch for ${dbItem.databaseId || dbItem.profileCode}`,
+            };
+          }
 
-        const actualDbSha = this.calculateSha256(dbBackupFile);
-        if (dbItem.sha256 && dbItem.sha256 !== actualDbSha) {
-          return {
-            packageId: manifest.packageId,
-            verified: false,
-            status: 'FAILED',
-            databaseBackupVerified: false,
-            csvVerified: false,
-            xlsxVerified: false,
-            manifestVerified: true,
-            error: `Database backup SHA-256 checksum mismatch for ${dbItem.databaseId || dbItem.profileCode}`,
-          };
+          const dbValidation = await databaseValidationService.validateDatabase(candidate);
+          if (dbValidation.status !== 'ACTIVE') {
+            return {
+              packageId: manifest.packageId,
+              verified: false,
+              status: 'FAILED',
+              databaseBackupVerified: false,
+              csvVerified: false,
+              xlsxVerified: false,
+              manifestVerified: true,
+              error: `Database backup failed validation for ${dbItem.databaseId || dbItem.profileCode}: ${dbValidation.details}`,
+            };
+          }
         }
 
         // 2. Verify CSV directory and files
-        const dbCsvDir = path.join(bundleDir, dbItem.csvDir || `csv/${dbItem.profileCode}`);
+        let dbCsvDir = path.join(bundleDir, dbItem.profileCode, 'csv');
+        if (!fs.existsSync(dbCsvDir)) {
+          dbCsvDir = path.join(bundleDir, dbItem.csvDir || `csv/${dbItem.profileCode}`);
+        }
         if (!fs.existsSync(dbCsvDir)) {
           return {
             packageId: manifest.packageId,
@@ -1035,7 +1070,10 @@ export class PreservationService {
         }
 
         // 3. Verify XLSX file
-        const dbXlsxFilePath = path.join(bundleDir, dbItem.xlsxFile || `xlsx/${dbItem.profileCode}_business_data.xlsx`);
+        let dbXlsxFilePath = path.join(bundleDir, dbItem.profileCode, 'xlsx', 'business_data.xlsx');
+        if (!fs.existsSync(dbXlsxFilePath)) {
+          dbXlsxFilePath = path.join(bundleDir, dbItem.xlsxFile || `xlsx/${dbItem.profileCode}_business_data.xlsx`);
+        }
         if (!fs.existsSync(dbXlsxFilePath)) {
           return {
             packageId: manifest.packageId,

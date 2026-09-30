@@ -43,6 +43,7 @@ describe('Diamond ERP V3 — Phase 8 Master Full Lifecycle E2E Test (34-Step Con
     if (fs.existsSync(templateDb) && !fs.existsSync(liveTargetDb)) {
       fs.copyFileSync(templateDb, liveTargetDb);
     }
+    await systemPrisma.deviceSecurity.deleteMany({}).catch(() => {});
   });
 
   afterAll(async () => {

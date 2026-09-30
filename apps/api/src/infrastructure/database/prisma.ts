@@ -386,7 +386,14 @@ export function getActiveProfile(): string {
  */
 export function getActiveProfileOrDefault(): string {
   const store = requestContext.getStore();
-  return store?.profileCode || store?.profileId || defaultProfile;
+  const explicit = store?.profileCode || store?.profileId;
+  if (explicit) return explicit;
+  if (defaultProfile) return defaultProfile;
+  const cfg = readConfig();
+  if (cfg.activeProfile) return cfg.activeProfile;
+  const all = getAllProfiles();
+  if (all.length > 0) return all[0];
+  return '';
 }
 
 // ── Proxy ───────────────────────────────────────────────────────────────
@@ -400,6 +407,14 @@ export function getActiveProfileOrDefault(): string {
 const prismaProxy = new Proxy({} as PrismaClient, {
   get(_target, prop) {
     const profileId = getActiveProfileOrDefault();
+    if (!profileId) {
+      if (prop === '$connect' || prop === '$disconnect') {
+        return async () => {};
+      }
+      throw new Error(
+        'Profile "" is not configured or registered. Explicit setup/registration is required before accessing database client.'
+      );
+    }
     const activeClient = getClientForProfile(profileId);
 
     const value = (activeClient as any)[prop];
