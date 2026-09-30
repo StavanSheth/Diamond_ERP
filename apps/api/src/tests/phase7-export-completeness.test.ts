@@ -13,9 +13,9 @@ import { getDatabaseTemplatePath } from '../infrastructure/paths';
 
 describe('Phase 7 — Export Completeness & Registry Integrity', () => {
   const exportService = new ExportService();
-  const testDir = path.resolve('apps/api/test-scratch-export-completeness');
+  const testDir = path.resolve('test-scratch-export-completeness');
   const testDbPath = path.join(testDir, 'export_test.db');
-  const templateDb = getDatabaseTemplatePath() || path.resolve('apps/api/Stavan.db');
+  const templateDb = getDatabaseTemplatePath() || path.resolve('Stavan.db') || path.resolve('prisma/template.db');
 
   beforeAll(async () => {
     if (!fs.existsSync(testDir)) {
@@ -36,6 +36,31 @@ describe('Phase 7 — Export Completeness & Registry Integrity', () => {
         },
       });
     }
+
+    const canonical = path.resolve(testDbPath).toLowerCase();
+    let profile = await systemPrisma.profile.findUnique({ where: { code: 'export_test' } });
+    if (!profile) {
+      profile = await systemPrisma.profile.create({
+        data: {
+          code: 'export_test',
+          name: 'Export Test Profile',
+          dbPath: testDbPath,
+          status: 'ACTIVE',
+        },
+      });
+    }
+    await systemPrisma.databaseRegistry.upsert({
+      where: { canonicalPath: canonical },
+      update: { profileId: profile.id, status: 'ACTIVE' },
+      create: {
+        databaseId: 'db_export_test',
+        installationId: inst.id,
+        profileId: profile.id,
+        displayName: 'Export Test Profile',
+        canonicalPath: canonical,
+        status: 'ACTIVE',
+      },
+    });
   });
 
   afterAll(async () => {

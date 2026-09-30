@@ -64,7 +64,15 @@ export function useReferenceData() {
       if (cachedParties) setParties(cachedParties);
     };
 
+    const handleProfileChange = () => {
+      invalidateReferenceData();
+      setStocks([]);
+      setParties([]);
+      fetchReferenceData(true);
+    };
+
     listeners.add(handleUpdate);
+    window.addEventListener('profileChanged', handleProfileChange);
 
     if (!cachedStocks || !cachedParties) {
       fetchReferenceData();
@@ -72,6 +80,7 @@ export function useReferenceData() {
 
     return () => {
       listeners.delete(handleUpdate);
+      window.removeEventListener('profileChanged', handleProfileChange);
     };
   }, [fetchReferenceData]);
 

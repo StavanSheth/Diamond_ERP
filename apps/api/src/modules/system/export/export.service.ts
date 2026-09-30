@@ -170,7 +170,25 @@ export class ExportService {
         where: { canonicalPath: canonical },
         include: { profile: true },
       });
-      resolvedProfileCode = activeRegistry?.profile?.code || path.basename(canonical, '.db');
+      if (!activeRegistry) {
+        const allRegistries = await systemPrisma.databaseRegistry.findMany({
+          include: { profile: true },
+        });
+        activeRegistry = allRegistries.find(
+          (r) => path.resolve(r.canonicalPath).toLowerCase() === canonical.toLowerCase()
+        ) || null;
+      }
+      if (!activeRegistry) {
+        throw new NotFoundError(
+          `Database is not registered in system registry: "${canonical}". DATABASE_NOT_REGISTERED.`
+        );
+      }
+      resolvedProfileCode = activeRegistry.profile?.code || (activeRegistry.displayName ? activeRegistry.displayName.replace(/[^a-zA-Z0-9_-]/g, '_') : '');
+      if (!resolvedProfileCode) {
+        throw new NotFoundError(
+          `Owning profile not found for registered database: "${canonical}". DATABASE_NOT_REGISTERED.`
+        );
+      }
     } else {
       let dbContext: any = null;
       if (req.profileId) {

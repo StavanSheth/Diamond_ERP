@@ -20,7 +20,7 @@ export class SettingsController {
       let rows: any[] = [];
       try {
         rows = await prisma.setting.findMany();
-      } catch (_err: any) {
+      } catch {
         // Fallback gracefully if Setting table does not exist in current profile DB
         rows = [];
       }

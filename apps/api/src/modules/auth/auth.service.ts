@@ -631,6 +631,13 @@ export class AuthService {
     }
 
     await this.createUser('stavan', defaultPassword, 'Stavan', ROLES.SUPER_ADMIN, [profileCode]);
+    if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true' && installation.lifecycleState !== 'READY') {
+      await systemPrisma.installation.update({
+        where: { id: installation.id },
+        data: { lifecycleState: 'READY', initializedAt: new Date() },
+      });
+      logger.info('Installation lifecycle transitioned to READY following auto-seed.');
+    }
     if (envPassword) {
       logger.info(`Default user "stavan" seeded from DEFAULT_ADMIN_PASSWORD.`);
     } else if (process.env.NODE_ENV !== 'test') {
