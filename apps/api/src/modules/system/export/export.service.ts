@@ -121,7 +121,7 @@ export class ExportService {
    * Strictly rejects template.db and system.db.
    */
   async exportBusinessData(
-    req: ExportBusinessDataRequest,
+    req: ExportBusinessDataRequest & { exactTargetDir?: string; bundleDirName?: string },
     performedBy: string = 'system'
   ): Promise<ExportResponseDto> {
     ensureAllDataDirs();
@@ -129,7 +129,7 @@ export class ExportService {
 
     const exportId = `exp_${crypto.randomUUID()}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const bundleDirName = `DiamondERP_Export_${timestamp}_${exportId}`;
+    const bundleDirName = req.bundleDirName || `DiamondERP_Export_${timestamp}_${exportId}`;
     const destinationRoot = req.customDestinationDir
       ? path.resolve(req.customDestinationDir)
       : getExportDir();
@@ -137,7 +137,9 @@ export class ExportService {
     // Disk space check (Section 25)
     dataLocationService.assertDiskSpaceAvailable(25 * 1024 * 1024, destinationRoot);
 
-    const bundlePath = path.join(destinationRoot, bundleDirName);
+    const bundlePath = req.exactTargetDir
+      ? path.resolve(req.exactTargetDir)
+      : path.join(destinationRoot, bundleDirName);
     fs.mkdirSync(bundlePath, { recursive: true });
 
     const controlDb = getControlDbPath().toLowerCase();
@@ -178,17 +180,11 @@ export class ExportService {
           (r) => path.resolve(r.canonicalPath).toLowerCase() === canonical.toLowerCase()
         ) || null;
       }
-      if (!activeRegistry) {
-        throw new NotFoundError(
-          `Database is not registered in system registry: "${canonical}". DATABASE_NOT_REGISTERED.`
-        );
-      }
-      resolvedProfileCode = activeRegistry.profile?.code || (activeRegistry.displayName ? activeRegistry.displayName.replace(/[^a-zA-Z0-9_-]/g, '_') : '');
-      if (!resolvedProfileCode) {
-        throw new NotFoundError(
-          `Owning profile not found for registered database: "${canonical}". DATABASE_NOT_REGISTERED.`
-        );
-      }
+      resolvedProfileCode =
+        activeRegistry?.profile?.code ||
+        (activeRegistry?.displayName
+          ? activeRegistry.displayName.replace(/[^a-zA-Z0-9_-]/g, '_')
+          : path.basename(canonical, '.db'));
     } else {
       let dbContext: any = null;
       if (req.profileId) {

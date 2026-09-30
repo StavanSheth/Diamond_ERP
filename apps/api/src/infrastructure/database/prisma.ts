@@ -389,10 +389,6 @@ export function getActiveProfileOrDefault(): string {
   const explicit = store?.profileCode || store?.profileId;
   if (explicit) return explicit;
   if (defaultProfile) return defaultProfile;
-  const cfg = readConfig();
-  if (cfg.activeProfile) return cfg.activeProfile;
-  const all = getAllProfiles();
-  if (all.length > 0) return all[0];
   return '';
 }
 

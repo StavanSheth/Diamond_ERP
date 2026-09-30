@@ -85,6 +85,23 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  // 2.2 CLI Trigger to consume uninstall authorization in control database and local token
+  if (process.argv.includes('--consume-uninstall-authorization')) {
+    const authIdx = process.argv.indexOf('--consume-uninstall-authorization');
+    const authId = authIdx !== -1 && process.argv[authIdx + 1] ? process.argv[authIdx + 1] : undefined;
+    try {
+      const { uninstallPreflightService } = await import('./modules/system/uninstall/uninstall-preflight.service');
+      await uninstallPreflightService.consumeAuthorizationToken(authId);
+      logger.info(`Uninstall authorization consumed successfully: ${authId || 'from token file'}`);
+      await disconnectAllClients();
+      process.exit(0);
+    } catch (err: any) {
+      logger.error('Failed to consume uninstall authorization via CLI:', undefined, err);
+      await disconnectAllClients();
+      process.exit(1);
+    }
+  }
+
   // 3. Seed default admin user and default profile if database is uninitialized (Finding 58)
   // Controlled by environment / non-production to avoid unexpected state mutation in production
   if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true' || process.env.NODE_ENV !== 'production') {

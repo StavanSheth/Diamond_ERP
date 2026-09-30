@@ -2047,6 +2047,7 @@ namespace DiamondERP.Setup
                                                 try { File.Delete(tmpTokenPath); } catch { }
                                             }
                                             catch { }
+                                            ConsumeAuthorizationInBackend(installDir, userDbDir, authId);
                                         }
                                     }
                                 }
@@ -2109,6 +2110,7 @@ namespace DiamondERP.Setup
                                             try { File.Delete(tmpTokenPath); } catch { }
                                         }
                                         catch { }
+                                        ConsumeAuthorizationInBackend(installDir, userDbDir, authId);
                                     }
                                 }
                                 else if (preserveProc.ExitCode != 0)
@@ -2286,6 +2288,37 @@ namespace DiamondERP.Setup
                 return val == "null" ? null : val;
             }
             return null;
+        }
+
+        private static void ConsumeAuthorizationInBackend(string installDir, string userDbDir, string authId)
+        {
+            if (string.IsNullOrEmpty(authId)) return;
+            try
+            {
+                string scriptPath = Path.Combine(installDir, "api", "dist", "index.js");
+                string bundledNode = Path.Combine(installDir, "runtime", "node.exe");
+                if (!File.Exists(bundledNode)) bundledNode = Path.Combine(installDir, "node", "node.exe");
+                if (!File.Exists(bundledNode)) bundledNode = "node.exe";
+
+                if (File.Exists(scriptPath))
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo
+                    {
+                        FileName = bundledNode,
+                        Arguments = string.Format("\"{0}\" --consume-uninstall-authorization \"{1}\"", scriptPath, authId),
+                        WorkingDirectory = Path.Combine(installDir, "api"),
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                    };
+                    psi.EnvironmentVariables["NODE_ENV"] = "production";
+                    psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = userDbDir;
+                    using (Process proc = Process.Start(psi))
+                    {
+                        proc.WaitForExit(15000);
+                    }
+                }
+            }
+            catch { }
         }
     }
 }
