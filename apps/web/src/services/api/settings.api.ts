@@ -59,6 +59,20 @@ export const settingsApi = {
     return request('/api/settings/users');
   },
 
+  /** Create a new business user */
+  createUser(data: {
+    username: string;
+    password?: string;
+    displayName?: string;
+    role?: string;
+    profileCode?: string;
+  }): Promise<{ success: boolean; message: string; data: any }> {
+    return request('/api/settings/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
   /** Update user details */
   updateUser(userId: string, data: { displayName?: string; role?: string }): Promise<{ success: boolean; message: string; data: any }> {
     return request(`/api/settings/users/${userId}`, {

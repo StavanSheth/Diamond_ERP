@@ -14,9 +14,41 @@ export interface AuthenticatedRequest extends Request {
 
 /**
  * Helper to assign default system admin credentials for local desktop ERP usage.
+ * Automatically binds to the real primary active user in SQLite if one exists.
  */
-function assignDefaultAdmin(req: Request): void {
+async function assignDefaultAdmin(req: Request): Promise<void> {
   const defaultProfiles = getAllProfiles();
+  try {
+    const realUser = await systemPrisma.user.findFirst({
+      where: { isActive: true, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        userProfiles: {
+          include: { profile: true },
+        },
+      },
+    });
+
+    if (realUser) {
+      const userProfileCodes = realUser.userProfiles?.filter((up) => up.isActive).map((up) => up.profile.code) || [];
+      const authorizedProfiles = realUser.role === ROLES.SUPER_ADMIN
+        ? Array.from(new Set([...userProfileCodes, ...defaultProfiles]))
+        : (userProfileCodes.length > 0 ? userProfileCodes : [defaultProfile]);
+
+      (req as AuthenticatedRequest).user = {
+        id: realUser.id,
+        username: realUser.username,
+        displayName: realUser.displayName,
+        role: realUser.role,
+        sessionId: 'desktop-session',
+        profiles: authorizedProfiles,
+      };
+      return;
+    }
+  } catch (err: any) {
+    logger.warn(`Could not resolve primary user for default admin: ${err?.message || err}`);
+  }
+
   (req as AuthenticatedRequest).user = {
     id: 'default-admin',
     username: 'admin',
@@ -41,7 +73,7 @@ export async function authenticate(
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    assignDefaultAdmin(req);
+    await assignDefaultAdmin(req);
     next();
     return;
   }
@@ -50,7 +82,7 @@ export async function authenticate(
   const payload = authService.verifyToken(token);
   if (!payload) {
     if (!config.isProduction) {
-      assignDefaultAdmin(req);
+      await assignDefaultAdmin(req);
       next();
       return;
     }
@@ -75,7 +107,7 @@ export async function authenticate(
 
     if (!user || !user.isActive || user.tokenVersion !== payload.tokenVersion) {
       if (!config.isProduction) {
-        assignDefaultAdmin(req);
+        await assignDefaultAdmin(req);
         next();
         return;
       }

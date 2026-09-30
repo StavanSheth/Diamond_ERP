@@ -103,6 +103,7 @@ export const api = {
   getActivationStatus: settingsApi.getActivationStatus,
   activateApp: settingsApi.activateApp,
   listUsers: settingsApi.listUsers,
+  createUser: settingsApi.createUser,
   updateUser: settingsApi.updateUser,
   listDatabases: settingsApi.listDatabases,
   updateDatabase: settingsApi.updateDatabase,

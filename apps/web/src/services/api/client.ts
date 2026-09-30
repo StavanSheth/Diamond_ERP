@@ -25,11 +25,11 @@ export interface ApiRequestOptions extends RequestInit {
 const BASE_URL = '';
 const FORBIDDEN_PROFILES = new Set(['system', 'template', 'test']);
 
-function sanitizeProfile(p: string | null | undefined): string {
-  if (!p) return 'Stavan';
+function sanitizeProfile(p: string | null | undefined): string | null {
+  if (!p) return null;
   const trimmed = p.trim();
   if (!trimmed || FORBIDDEN_PROFILES.has(trimmed.toLowerCase())) {
-    return 'Stavan';
+    return null;
   }
   return trimmed;
 }
@@ -50,7 +50,7 @@ class SessionStore {
       this.token = localStorage.getItem('token');
       const rawStored = localStorage.getItem('profileId');
       this.profileId = sanitizeProfile(rawStored);
-      if (rawStored && rawStored !== this.profileId) {
+      if (rawStored && this.profileId && rawStored !== this.profileId) {
         localStorage.setItem('profileId', this.profileId);
       }
     }
@@ -91,7 +91,11 @@ class SessionStore {
     this.profileId = cleanProfileId;
 
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('profileId', cleanProfileId);
+      if (cleanProfileId) {
+        localStorage.setItem('profileId', cleanProfileId);
+      } else {
+        localStorage.removeItem('profileId');
+      }
     }
 
     if (typeof window !== 'undefined') {
@@ -192,7 +196,7 @@ export async function requestCore(
       if (contentType.includes('application/json')) {
         const errorJson = await res.json().catch(() => ({}));
         if (res.status === 400 && errorJson?.code === 'PROFILE_NOT_CONFIGURED') {
-          sessionStore.setProfileId('Stavan');
+          sessionStore.setProfileId(null);
         }
         throw new ApiError(
           errorJson.error || errorJson.message || `Request failed with status ${res.status}`,

@@ -115,6 +115,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
     setError(null);
     try {
       await api.onboarding.initializeApp();
+      await api.onboarding.updateLifecycleState('PIN_SETUP');
       await fetchStatus();
     } catch (err: any) {
       setError(err?.message || 'Failed to initialize application setup');
@@ -600,7 +601,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                     type="text"
                     value={newUsername}
                     onChange={(e) => setNewUsername(e.target.value)}
-                    placeholder="e.g. stavan"
+                    placeholder="e.g. admin"
                     className="w-full px-4 py-3 bg-slate-950/60 border border-slate-700 rounded-xl text-slate-100"
                   />
                 </div>
@@ -613,7 +614,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onReady }) =
                     type="text"
                     value={newDisplayName}
                     onChange={(e) => setNewDisplayName(e.target.value)}
-                    placeholder="e.g. Stavan Sheth"
+                    placeholder="e.g. Administrator"
                     className="w-full px-4 py-3 bg-slate-950/60 border border-slate-700 rounded-xl text-slate-100"
                   />
                 </div>

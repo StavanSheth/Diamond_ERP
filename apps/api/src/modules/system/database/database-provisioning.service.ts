@@ -404,14 +404,26 @@ export class DatabaseProvisioningService {
     if (!input.userId || !input.userId.trim()) {
       throw new ValidationError('A valid target userId is strictly required for provisioning a new database.');
     }
-    const targetUserId = input.userId.trim();
+    let targetUserId = input.userId.trim();
 
     const install = input.installationId
       ? { id: input.installationId }
       : await installationService.getOrCreateInstallation();
 
     // Validate user exists and is active
-    const user = await systemPrisma.user.findUnique({ where: { id: targetUserId } });
+    let user = await systemPrisma.user.findUnique({ where: { id: targetUserId } });
+    if (!user || !user.isActive || user.deletedAt) {
+      if (targetUserId === 'default-admin') {
+        const fallbackUser = await systemPrisma.user.findFirst({
+          where: { isActive: true, deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (fallbackUser) {
+          user = fallbackUser;
+          targetUserId = fallbackUser.id;
+        }
+      }
+    }
     if (!user || !user.isActive || user.deletedAt) {
       throw new ValidationError('Target user is invalid, inactive, or soft-deleted.');
     }

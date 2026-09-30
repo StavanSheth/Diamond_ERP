@@ -102,16 +102,16 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  // 3. Seed default admin user and default profile if database is uninitialized (Finding 58)
-  // Controlled by environment / non-production to avoid unexpected state mutation in production
-  if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true' || process.env.NODE_ENV !== 'production') {
+  // 3. Seed default admin user and default profile only when explicitly enabled (e.g. automated test suites)
+  // Fresh installations require user onboarding and must NOT auto-seed default profiles/users.
+  if (process.env.AUTO_SEED_DEFAULT_ADMIN === 'true') {
     try {
       await authService.seedDefaultAdmin();
     } catch (err) {
       logger.warn(`Failed to seed default admin: ${err}`);
     }
   } else {
-    logger.info('Auto-seeding default admin is disabled in production.');
+    logger.info('Auto-seeding default admin is disabled. Fresh installations require initial setup via onboarding.');
   }
 
   // 4. Controllers

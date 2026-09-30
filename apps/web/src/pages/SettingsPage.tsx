@@ -21,7 +21,7 @@ export const SettingsPage: React.FC = () => {
     setBackupPin,
     isPlatformAuthSupported,
   } = useAppLock();
-  const { switchProfile } = useAuth();
+  const { switchProfile, profileId } = useAuth();
   const [deviceRegistrationStatus, setDeviceRegistrationStatus] = useState<string | null>(null);
 
   const [customUnit, setCustomUnit] = useState<'minutes' | 'hours' | 'days'>('minutes');
@@ -52,7 +52,7 @@ export const SettingsPage: React.FC = () => {
 
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [profiles, setProfiles] = useState<string[]>([]);
-  const [activeProfile, setActiveProfile] = useState<string>('Stavan');
+  const [activeProfile, setActiveProfile] = useState<string>(profileId || '');
 
   const [newProfileModalOpen, setNewProfileModalOpen] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
@@ -126,6 +126,15 @@ export const SettingsPage: React.FC = () => {
   const [editUserDisplayName, setEditUserDisplayName] = useState('');
   const [editUserRole, setEditUserRole] = useState('');
   const [savingUser, setSavingUser] = useState(false);
+
+  // New User State
+  const [newUserModalOpen, setNewUserModalOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+  const [newUserDisplayName, setNewUserDisplayName] = useState('');
+  const [newUserRole, setNewUserRole] = useState('ADMIN');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserProfileCode, setNewUserProfileCode] = useState('');
+  const [creatingUser, setCreatingUser] = useState(false);
 
   // Database Edit State
   const [editingDbId, setEditingDbId] = useState<string | null>(null);
@@ -283,6 +292,39 @@ export const SettingsPage: React.FC = () => {
       alert(err.message || 'Failed to update user');
     } finally {
       setSavingUser(false);
+    }
+  };
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUsername.trim()) {
+      alert('Username is required');
+      return;
+    }
+    if (!newUserPassword || newUserPassword.length < 8) {
+      alert('Password must be at least 8 characters');
+      return;
+    }
+    setCreatingUser(true);
+    try {
+      await api.createUser({
+        username: newUsername.trim(),
+        password: newUserPassword,
+        displayName: newUserDisplayName.trim() || newUsername.trim(),
+        role: newUserRole,
+        profileCode: newUserProfileCode.trim() || undefined,
+      });
+      setNewUserModalOpen(false);
+      setNewUsername('');
+      setNewUserDisplayName('');
+      setNewUserPassword('');
+      await fetchUsers();
+      await fetchDatabases();
+      alert('User created successfully');
+    } catch (err: any) {
+      alert(err.message || 'Failed to create user');
+    } finally {
+      setCreatingUser(false);
     }
   };
 
@@ -1006,7 +1048,7 @@ export const SettingsPage: React.FC = () => {
                     New Profile
                   </button>
 
-                  {activeProfile.toLowerCase() !== 'stavan' && (
+                  {profiles.length > 1 && (
                     <button
                       type="button"
                       onClick={async () => {
@@ -1015,9 +1057,12 @@ export const SettingsPage: React.FC = () => {
                           await triggerSafetyBackupDownload(activeProfile);
                           await api.deleteProfile(activeProfile, true);
                           alert(`Safety backups (.db and .xlsx) downloaded and profile "${activeProfile}" deleted successfully.`);
-                          await api.switchProfile('Stavan');
-                          switchProfile('Stavan');
-                          setActiveProfile('Stavan');
+                          const fallbackProfile = profiles.find((p) => p.toLowerCase() !== activeProfile.toLowerCase()) || profiles[0];
+                          if (fallbackProfile) {
+                            await api.switchProfile(fallbackProfile);
+                            switchProfile(fallbackProfile);
+                            setActiveProfile(fallbackProfile);
+                          }
                           window.location.reload();
                         } catch (err: any) {
                           alert(err.message || 'Failed to delete profile');
@@ -1282,6 +1327,23 @@ export const SettingsPage: React.FC = () => {
                       </button>
                     </div>
 
+                    {managementTab === 'users' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewUsername('');
+                          setNewUserDisplayName('');
+                          setNewUserPassword('');
+                          setNewUserProfileCode(databasesList[0]?.name || activeProfile || '');
+                          setNewUserModalOpen(true);
+                        }}
+                        className="flex items-center gap-1 text-xs text-white bg-indigo-600 hover:bg-indigo-700 font-bold px-2.5 py-1 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">person_add</span>
+                        Add User
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
@@ -1289,7 +1351,7 @@ export const SettingsPage: React.FC = () => {
                         fetchDatabases();
                       }}
                       disabled={loadingUsers || loadingDatabases}
-                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 bg-white shadow-2xs"
+                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 bg-white shadow-2xs cursor-pointer"
                     >
                       <span className={`material-symbols-outlined text-[14px] ${loadingUsers || loadingDatabases ? 'animate-spin' : ''}`}>refresh</span>
                       Refresh
@@ -1306,7 +1368,7 @@ export const SettingsPage: React.FC = () => {
                     ) : (
                       <div className="flex flex-col gap-2">
                         {usersList.map((usr) => {
-                          const isStavan = usr.username.toLowerCase() === 'stavan';
+                          const isPrimaryAdmin = usr.role === 'SUPER_ADMIN' && usersList.filter((u) => u.role === 'SUPER_ADMIN').length <= 1;
                           const isEditing = editingUserId === usr.id;
 
                           return (
@@ -1332,7 +1394,7 @@ export const SettingsPage: React.FC = () => {
                                       <select
                                         value={editUserRole}
                                         onChange={(e) => setEditUserRole(e.target.value)}
-                                        disabled={isStavan}
+                                        disabled={isPrimaryAdmin}
                                         className="px-2.5 py-1 text-xs border border-indigo-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold disabled:bg-slate-100"
                                       >
                                         <option value="SUPER_ADMIN">SUPER_ADMIN</option>
@@ -1372,7 +1434,7 @@ export const SettingsPage: React.FC = () => {
                                       <span className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-700 rounded border border-slate-200">
                                         {usr.role}
                                       </span>
-                                      {isStavan && (
+                                      {isPrimaryAdmin && (
                                         <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded border border-emerald-300">
                                           Primary Admin
                                         </span>
@@ -1435,7 +1497,7 @@ export const SettingsPage: React.FC = () => {
                                       Edit
                                     </button>
 
-                                    {isStavan ? (
+                                    {isPrimaryAdmin ? (
                                       <span className="text-[11px] text-slate-400 italic px-2 py-1">Protected</span>
                                     ) : (
                                       <button
@@ -2645,6 +2707,118 @@ export const SettingsPage: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {newUserModalOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fadeIn">
+          <form
+            onSubmit={handleCreateUser}
+            className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 space-y-4"
+          >
+            <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+              <span className="material-symbols-outlined text-indigo-600 text-xl">person_add</span>
+              <h3 className="font-bold text-sm text-slate-900 m-0">Add New Team User</h3>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Username *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  placeholder="e.g. john_doe"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Full Display Name
+                </label>
+                <input
+                  type="text"
+                  value={newUserDisplayName}
+                  onChange={(e) => setNewUserDisplayName(e.target.value)}
+                  placeholder="e.g. John Doe"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Role
+                </label>
+                <select
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold bg-white"
+                >
+                  <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                  <option value="ADMIN">ADMIN</option>
+                  <option value="MANAGER">MANAGER</option>
+                  <option value="ACCOUNTANT">ACCOUNTANT</option>
+                  <option value="INVENTORY_MANAGER">INVENTORY_MANAGER</option>
+                  <option value="SALES">SALES</option>
+                  <option value="VIEWER">VIEWER</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Initial Password (min. 8 chars) *
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={newUserPassword}
+                  onChange={(e) => setNewUserPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Link Company Database
+                </label>
+                <select
+                  value={newUserProfileCode}
+                  onChange={(e) => setNewUserProfileCode(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold bg-white"
+                >
+                  <option value="">None (Can be linked later)</option>
+                  {databasesList.map((d) => (
+                    <option key={d.id} value={d.code}>
+                      {d.name || d.code} ({d.code}.db)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setNewUserModalOpen(false)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={creatingUser || !newUsername.trim() || newUserPassword.length < 8}
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all disabled:opacity-40 cursor-pointer"
+              >
+                {creatingUser ? 'Creating...' : 'Create User'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

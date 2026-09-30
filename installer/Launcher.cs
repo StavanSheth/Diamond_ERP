@@ -250,10 +250,17 @@ namespace DiamondERP.App
         public AppMainWindow()
         {
             this.Title = WINDOW_TITLE;
-            this.Width = 1360;
-            this.Height = 880;
-            this.MinWidth = 1024;
-            this.MinHeight = 700;
+
+            // Responsive window sizing bounded to the current monitor's working area
+            // Prevents window and title bar (minimize/close buttons) from expanding offscreen
+            Rect workArea = SystemParameters.WorkArea;
+            this.MinWidth = Math.Min(800, workArea.Width * 0.85);
+            this.MinHeight = Math.Min(500, workArea.Height * 0.85);
+            this.MaxWidth = workArea.Width;
+            this.MaxHeight = workArea.Height;
+
+            this.Width = Math.Min(1360, Math.Max(this.MinWidth, workArea.Width * 0.95));
+            this.Height = Math.Min(880, Math.Max(this.MinHeight, workArea.Height * 0.92));
             this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
             this.Background = new SolidColorBrush(Color.FromRgb(15, 23, 42)); // Slate-900
 
@@ -411,6 +418,13 @@ namespace DiamondERP.App
             {
                 source.AddHook(WndProc);
             }
+
+            // Ensure window titlebar and controls (minimize, maximize, close) stay strictly within visible desktop work area
+            Rect wa = SystemParameters.WorkArea;
+            if (this.Top < wa.Top) this.Top = wa.Top;
+            if (this.Left < wa.Left) this.Left = wa.Left;
+            if (this.Height > wa.Height) this.Height = wa.Height;
+            if (this.Width > wa.Width) this.Width = wa.Width;
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)

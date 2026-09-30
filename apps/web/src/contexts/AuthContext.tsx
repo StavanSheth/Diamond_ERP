@@ -17,26 +17,17 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEFAULT_USER: AuthenticatedUserInfo = {
-  id: 'default-stavan',
-  username: 'stavan',
-  displayName: 'Stavan',
-  role: 'SUPER_ADMIN',
-  profiles: ['Stavan'],
-  activeProfile: 'Stavan',
-};
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(DEFAULT_USER);
+  const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(sessionStore.getToken());
-  const [profileId, setProfileIdState] = useState<string | null>(sessionStore.getProfileId() || 'Stavan');
+  const [profileId, setProfileIdState] = useState<string | null>(sessionStore.getProfileId() || null);
   const [loading, setLoading] = useState(false);
 
   // Sync profile state on external or internal profileChanged event
   useEffect(() => {
     const handleProfileChanged = (e: Event) => {
       const custom = e as CustomEvent;
-      setProfileIdState(custom.detail?.profileId || 'Stavan');
+      setProfileIdState(custom.detail?.profileId || null);
     };
     window.addEventListener('profileChanged', handleProfileChanged);
     return () => window.removeEventListener('profileChanged', handleProfileChanged);
@@ -50,7 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentToken = sessionStore.getToken();
       if (!currentToken) {
         if (active) {
-          setUser(DEFAULT_USER);
+          setUser(null);
           setLoading(false);
         }
         return;
@@ -64,7 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         if (active) {
-          setUser(DEFAULT_USER);
+          setUser(null);
         }
       } finally {
         if (active) {
@@ -83,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const localLogout = () => {
     sessionStore.setToken(null);
     setToken(null);
-    setUser(DEFAULT_USER);
+    setUser(null);
   };
 
   // Set the token state in api.ts listener

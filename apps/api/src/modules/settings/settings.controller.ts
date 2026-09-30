@@ -11,6 +11,8 @@ import { databaseHealthService } from '../system/database/database-health.servic
 import { databaseRegistryService } from '../system/database/database-registry.service';
 import { databaseDeletionService } from '../system/database/database-deletion.service';
 import { dataLocationService } from '../../infrastructure/data';
+import { authService } from '../auth/auth.service';
+import { installationService } from '../system/installation.service';
 
 
 export class SettingsController {
@@ -173,8 +175,11 @@ export class SettingsController {
 
       // Resolve requesting user
       let targetUser = (req as any).user;
-      if (!targetUser?.id) {
-        targetUser = await systemPrisma.user.findFirst({ where: { isActive: true } });
+      if (!targetUser?.id || targetUser.id === 'default-admin') {
+        targetUser = await systemPrisma.user.findFirst({
+          where: { isActive: true, deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        });
       }
       if (!targetUser) {
         throw new ValidationError('Cannot provision profile without an active system user.');
@@ -185,6 +190,9 @@ export class SettingsController {
       if (existingProf) {
         throw new ValidationError(`Profile "${cleanName}" already exists.`);
       }
+
+      const install = await installationService.getOrCreateInstallation();
+      await installationService.associateUser(install.id, targetUser.id);
 
       // Authoritative database provisioning via DatabaseProvisioningService
       const provisionResult = await databaseProvisioningService.provisionBlankDatabase({
@@ -542,6 +550,43 @@ export class SettingsController {
           displayName: updated.displayName,
           role: updated.role,
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/settings/users
+   * Creates a new business user, assigns optional profile, and binds to installation.
+   */
+  createUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { username, password, displayName, role, profileCode } = req.body;
+      if (!username || typeof username !== 'string' || !username.trim()) {
+        throw new ValidationError('Username is required');
+      }
+      if (!password || typeof password !== 'string' || password.length < 8) {
+        throw new ValidationError('Password must be at least 8 characters');
+      }
+
+      const install = await installationService.getOrCreateInstallation();
+      const targetProfiles = profileCode ? [String(profileCode).trim()] : [];
+
+      const user = await authService.createUser(
+        username.trim(),
+        password,
+        (displayName || username).trim(),
+        role || 'ADMIN',
+        targetProfiles
+      );
+
+      await installationService.associateUser(install.id, user.id);
+
+      res.status(201).json({
+        success: true,
+        message: `User "${user.username}" created successfully`,
+        data: user,
       });
     } catch (error) {
       next(error);

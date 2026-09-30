@@ -555,6 +555,9 @@ export class AuthService {
    * Seed a default admin user and default profile if database contains no users.
    */
   async seedDefaultAdmin(): Promise<void> {
+    if (process.env.AUTO_SEED_DEFAULT_ADMIN !== 'true') {
+      return;
+    }
     const userCount = await systemPrisma.user.count();
     if (userCount > 0) return;
 

@@ -21,6 +21,7 @@ export function createSettingsRouter(controller: SettingsController): Router {
 
   // User & Database Management
   if (controller.listUsers) router.get('/users', controller.listUsers);
+  if (controller.createUser) router.post('/users', controller.createUser);
   if (controller.updateUser) router.put('/users/:userId', controller.updateUser);
   if (controller.deactivateUser) router.post('/users/:userId/deactivate', controller.deactivateUser);
   if (controller.deleteUser) router.delete('/users/:userId', controller.deleteUser);
