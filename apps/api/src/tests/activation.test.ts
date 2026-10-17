@@ -84,4 +84,34 @@ describe('Master App Lock & Lifetime Activation Controller', () => {
     await activationController.getActivationStatus({} as any, mockStatusRes, () => {});
     expect(statusResult.isActivated).toBe(true);
   });
+
+  it('activates permanently with complex phase-tweaked key Diamond@2026#SecureVault-APP', async () => {
+    let statusCode = 200;
+    let jsonResult: any = null;
+    const mockRes: any = {
+      status: (code: number) => {
+        statusCode = code;
+        return mockRes;
+      },
+      json: (data: any) => { jsonResult = data; }
+    };
+
+    await activationController.activate({
+      body: { password: 'Diamond@2026#SecureVault-APP' }
+    } as any, mockRes, () => {});
+
+    expect(statusCode).toBe(200);
+    expect(jsonResult.success).toBe(true);
+
+    // Verify setting saved with timestamp
+    const activatedSetting = await prisma.setting.findUnique({
+      where: { key: 'app_activated' }
+    });
+    expect(activatedSetting?.value).toBe('true');
+
+    const timestampSetting = await prisma.setting.findUnique({
+      where: { key: 'app_activated_at' }
+    });
+    expect(timestampSetting?.value).toBeDefined();
+  });
 });

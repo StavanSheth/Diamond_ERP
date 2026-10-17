@@ -126,7 +126,7 @@ export const FirstRunActivationOverlay: React.FC = () => {
               htmlFor="master-activation-password"
               className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
             >
-              Password
+              Activation Password
             </label>
             <div className="relative">
               <input
@@ -137,7 +137,7 @@ export const FirstRunActivationOverlay: React.FC = () => {
                 disabled={submitting}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder="Enter activation password (e.g. ...-APP)"
                 className="w-full px-4 py-3 bg-slate-950/60 border border-slate-700/80 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all pr-11"
               />
               <button

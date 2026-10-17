@@ -143,6 +143,7 @@ async function main() {
     'Microsoft.Web.WebView2.Wpf.dll',
     'WebView2Loader.dll',
     'app.ico',
+    'Uninstall.bat',
   ];
 
   for (const file of winFiles) {

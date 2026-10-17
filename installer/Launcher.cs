@@ -79,6 +79,7 @@ namespace DiamondERP.App
         private static readonly object _shutdownLock = new object();
         private static volatile BackendState _backendState = BackendState.NotStarted;
         private static Stopwatch _startupStopwatch;
+        private static readonly object _logLock = new object();
 
         private WebView2 _webView;
         private Grid _loadingGrid;
@@ -87,6 +88,9 @@ namespace DiamondERP.App
         [STAThread]
         public static void Main(string[] args)
         {
+            // Bypass WPAD/proxy discovery overhead on local loopback HTTP probes
+            try { WebRequest.DefaultWebProxy = null; } catch { }
+
             // Command-line diagnostics and version inspection
             if (args != null && args.Length > 0)
             {
@@ -497,7 +501,10 @@ namespace DiamondERP.App
                 }
                 string logFile = Path.Combine(logsDir, "launcher.log");
                 string entry = string.Format("[{0:o}] [{1}] {2}{3}", DateTime.Now, category, message, Environment.NewLine);
-                File.AppendAllText(logFile, entry);
+                lock (_logLock)
+                {
+                    File.AppendAllText(logFile, entry);
+                }
             }
             catch { }
         }
@@ -550,7 +557,7 @@ namespace DiamondERP.App
 
                     // 3. Wait for target service readiness
                     string readinessCheckUrl = _isProductionMode ? healthUrl : "http://localhost:5175/";
-                    bool ready = WaitForBackend(readinessCheckUrl, 40, 500);
+                    bool ready = WaitForBackend(readinessCheckUrl, 60, 500);
 
                     if (!ready)
                     {
@@ -657,29 +664,32 @@ namespace DiamondERP.App
                 psi.EnvironmentVariables["DIAMOND_DATA_DIR"] = _dataDir;
                 psi.EnvironmentVariables["DIAMOND_DESKTOP_PARENT_PID"] = Process.GetCurrentProcess().Id.ToString();
 
-                _backendProcess = Process.Start(psi);
-                if (_backendProcess != null)
+                _backendProcess = new Process();
+                _backendProcess.StartInfo = psi;
+                _backendProcess.EnableRaisingEvents = true;
+                _backendProcess.OutputDataReceived += (s, e) =>
                 {
-                    _backendPid = _backendProcess.Id;
-                    _backendStartedByThisLauncher = true;
-                    _backendState = BackendState.Running;
-                    _backendProcess.OutputDataReceived += (s, e) =>
+                    if (!string.IsNullOrEmpty(e.Data))
                     {
-                        if (!string.IsNullOrEmpty(e.Data))
-                        {
-                            WriteLog("BackendOut", e.Data);
-                        }
-                    };
-                    _backendProcess.ErrorDataReceived += (s, e) =>
+                        WriteLog("BackendOut", e.Data);
+                    }
+                };
+                _backendProcess.ErrorDataReceived += (s, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
                     {
-                        if (!string.IsNullOrEmpty(e.Data))
-                        {
-                            WriteLog("BackendErr", e.Data);
-                        }
-                    };
-                    _backendProcess.BeginOutputReadLine();
-                    _backendProcess.BeginErrorReadLine();
-                }
+                        WriteLog("BackendErr", e.Data);
+                    }
+                };
+                _backendProcess.Exited += (s, e) => HandleBackendExit();
+                _backendProcess.Start();
+
+                _backendPid = _backendProcess.Id;
+                _backendStartedByThisLauncher = true;
+                _backendState = BackendState.Running;
+                _backendProcess.BeginOutputReadLine();
+                _backendProcess.BeginErrorReadLine();
+
                 WriteLog("BACKEND_START", string.Format("Started production Node backend (PID: {0}, Port: {1}, Runtime: {2}, Entry: {3})",
                     _backendPid, DEFAULT_PORT, nodeExe, scriptPath));
             }
@@ -695,20 +705,16 @@ namespace DiamondERP.App
                     UseShellExecute = false,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
-                _backendProcess = Process.Start(devPsi);
-                if (_backendProcess != null)
-                {
-                    _backendPid = _backendProcess.Id;
-                    _backendStartedByThisLauncher = true;
-                    _backendState = BackendState.Running;
-                }
-                WriteLog("BACKEND_START", string.Format("Started development API process via npm (PID: {0})", _backendPid));
-            }
-
-            if (_backendProcess != null)
-            {
+                _backendProcess = new Process();
+                _backendProcess.StartInfo = devPsi;
                 _backendProcess.EnableRaisingEvents = true;
                 _backendProcess.Exited += (s, e) => HandleBackendExit();
+                _backendProcess.Start();
+
+                _backendPid = _backendProcess.Id;
+                _backendStartedByThisLauncher = true;
+                _backendState = BackendState.Running;
+                WriteLog("BACKEND_START", string.Format("Started development API process via npm (PID: {0})", _backendPid));
             }
         }
 
@@ -1197,6 +1203,7 @@ namespace DiamondERP.App
                         {
                             string shutdownUrl = string.Format("http://{0}:{1}/api/system/shutdown", LOOPBACK_HOST, DEFAULT_PORT);
                             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(shutdownUrl);
+                            req.Proxy = null;
                             req.Method = "POST";
                             req.Timeout = 1500;
                             req.ContentLength = 0;
@@ -1251,7 +1258,8 @@ namespace DiamondERP.App
             try
             {
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-                request.Timeout = 1500;
+                request.Proxy = null;
+                request.Timeout = 2000;
                 request.Method = "GET";
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 {
@@ -1301,7 +1309,8 @@ namespace DiamondERP.App
             try
             {
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-                request.Timeout = 800;
+                request.Proxy = null;
+                request.Timeout = 1000;
                 request.Method = "GET";
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 {

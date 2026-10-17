@@ -82,3 +82,26 @@ npm run test     # Runs test suites across all workspaces
 |---|---|---|---|
 | Backend API | `3002` | `apps/api/.env` → `PORT=3002` | — |
 | Frontend Dev | `5175` | `apps/web/vite.config.ts` | `/api/*` & `/health` → `http://localhost:3002` |
+
+---
+
+## 🔐 Security Keys & Access Credentials
+
+DiamondERP V3 implements a **Dual-Layer Protection Lock** (Installer Setup Lock & First-Run App Activation Lock) along with default system credentials:
+
+### 1. Installer Setup Security Key (Lock 1)
+- **Where Prompted**: During setup wizard on **Page 3 ("Additional Tasks")** before extraction and installation.
+- **Password**: Diamond@2026#SecureVault-SETUP
+- **Silent Install CLI Option**: `DiamondERP-3.0.0-Setup.exe /silent /key:Diamond@2026#SecureVault-SETUP`
+
+### 2. First-Run App Activation Key (Lock 2)
+- **Where Prompted**: Full-screen activation overlay in the web UI on first application launch.
+- **Password**: Diamond@2026#SecureVault-APP
+- **Test Mode Fallback**: `XW2756WGH` (accepted when `NODE_ENV=test`)
+- **Environment Variable**: `DIAMOND_ACTIVATION_KEY` (optional override)
+
+### 3. Default Admin Login Credentials
+- **Username**: `stavan`
+- **Password**: `Stavan@123`
+- **Role**: `SUPER_ADMIN` (Default profile: `Stavan`)
+

@@ -46,7 +46,6 @@ const STAGING_DIR = path.join(ROOT_DIR, 'build', 'windows', 'DiamondERP');
 const RELEASES_DIR = path.join(ROOT_DIR, 'build', 'releases');
 const INSTALLER_SRC = path.join(ROOT_DIR, 'installer', 'Installer.cs');
 const LAUNCHER_SRC = path.join(ROOT_DIR, 'installer', 'Launcher.cs');
-const CSPROJ_PATH = path.join(ROOT_DIR, 'installer', 'DiamondERP.csproj');
 const INSTALLER_MANIFEST = path.join(ROOT_DIR, 'installer', 'Installer.manifest');
 const LAUNCHER_MANIFEST = path.join(ROOT_DIR, 'installer', 'Launcher.manifest');
 const SCRATCH_DIR = path.join(ROOT_DIR, 'scratch', 'test-phase9');

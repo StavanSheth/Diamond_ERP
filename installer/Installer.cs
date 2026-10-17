@@ -56,6 +56,24 @@ namespace DiamondERP.Setup
         private CheckBox chkDesktopShortcut;
         private CheckBox chkStartMenuShortcut;
         private CheckBox chkLaunchAfter;
+        private TextBox txtSetupPassword;
+
+        private const string SETUP_AUTH_HASH = "3842f265baef323d833de330eb358dd86b4c5493dbf7853003fe5d8e1900d2ae";
+
+        private bool VerifySetupPassword(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return false;
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input.Trim()));
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    sb.Append(bytes[i].ToString("x2"));
+                }
+                return sb.ToString().Equals(SETUP_AUTH_HASH, StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
         // Page 4: Ready to Install Controls
         private TextBox txtSummary;
@@ -562,6 +580,34 @@ namespace DiamondERP.Setup
             grpLaunch.Controls.Add(chkLaunchAfter);
             pages[3].Controls.Add(grpLaunch);
 
+            GroupBox grpAuth = new GroupBox
+            {
+                Text = "Installation Security Key:",
+                Location = new Point(14, 194),
+                Size = new Size(466, 68),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
+            };
+
+            Label lblPwdPrompt = new Label
+            {
+                Text = "Enter setup authorization password to continue:",
+                Location = new Point(18, 18),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                ForeColor = Color.FromArgb(60, 60, 60)
+            };
+            grpAuth.Controls.Add(lblPwdPrompt);
+
+            txtSetupPassword = new TextBox
+            {
+                Location = new Point(18, 36),
+                Size = new Size(350, 23),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                UseSystemPasswordChar = true
+            };
+            grpAuth.Controls.Add(txtSetupPassword);
+            pages[3].Controls.Add(grpAuth);
+
             wizardBodyPanel.Controls.Add(pages[3]);
         }
 
@@ -943,6 +989,22 @@ namespace DiamondERP.Setup
                 if (!ValidateInstallationPath(targetDir, out pathErr))
                 {
                     MessageBox.Show(pathErr, "Invalid Destination Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
+            if (currentPage == 3)
+            {
+                if (!VerifySetupPassword(txtSetupPassword.Text))
+                {
+                    MessageBox.Show(
+                        "Please enter a valid setup authorization password to continue with installation.",
+                        "Setup Password Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    txtSetupPassword.Focus();
+                    txtSetupPassword.SelectAll();
                     return;
                 }
             }
@@ -2131,27 +2193,29 @@ namespace DiamondERP.Setup
                 {
                     if (!silent)
                     {
-                        MessageBox.Show(
-                            "UNINSTALL BLOCKED BY DATA PRESERVATION SAFETY GATE\n\n" +
-                            "Active business databases and transactions were detected in your AppData directory.\n\n" +
-                            "Reason: " + blockReason + "\n\n" +
-                            "To protect customer data from accidental loss, you must complete the Pre-Uninstall Data Preservation Wizard in Diamond ERP before uninstalling.\n\n" +
-                            "Steps to proceed:\n" +
-                            "1. Open Diamond ERP\n" +
-                            "2. Go to Settings -> Data Preservation & Uninstall Wizard\n" +
-                            "3. Click 'Create & Verify Preservation Package' (exports CSV, XLSX, and Database Backup)\n" +
-                            "4. Click 'Authorize Uninstall'\n" +
-                            "5. Run the uninstaller again.",
-                            "DiamondERP Uninstall Gate — Action Required",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
+                        var overrideConfirm = MessageBox.Show(
+                            "Active business databases and records were detected in your AppData folder.\n\n" +
+                            "Would you like to proceed with uninstalling Diamond ERP application files?\n\n" +
+                            "Note: Your business records and databases in AppData will be strictly preserved and protected.",
+                            "DiamondERP Uninstall",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question
                         );
+
+                        if (overrideConfirm == DialogResult.Yes)
+                        {
+                            isAuthorized = true;
+                        }
+                        else
+                        {
+                            return;
+                        }
                     }
                     else
                     {
                         Console.Error.WriteLine("Error: Uninstall blocked by Phase 7 Safety Gate: " + blockReason);
+                        return;
                     }
-                    return;
                 }
             }
 
@@ -2214,7 +2278,7 @@ namespace DiamondERP.Setup
                             ProcessStartInfo psi = new ProcessStartInfo
                             {
                                 FileName = "cmd.exe",
-                                Arguments = string.Format("/c ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", safeDir),
+                                Arguments = string.Format("/c cd /d %TEMP% & ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{0}\"", safeDir),
                                 CreateNoWindow = true,
                                 UseShellExecute = false,
                                 WindowStyle = ProcessWindowStyle.Hidden
