@@ -1,0 +1,21 @@
+{
+  "product": "Diamond ERP",
+  "version": "3.0.0",
+  "platform": "win32",
+  "architecture": "x64",
+  "releaseDate": "2026-10-17T21:11:02.493Z",
+  "artifacts": {
+    "DiamondERP-3.0.0-Setup.exe": {
+      "file": "DiamondERP-3.0.0-Setup.exe",
+      "sizeBytes": 66494464,
+      "sizeMb": "63.41",
+      "sha256": "fe091d0b0494b3412ec19bb11a7d7a81fbc7d737eb0c739d2388142be6903b5e"
+    },
+    "DiamondERP-3.0.0-Windows-x64.zip": {
+      "file": "DiamondERP-3.0.0-Windows-x64.zip",
+      "sizeBytes": 66425508,
+      "sizeMb": "63.35",
+      "sha256": "a018ef9d0d3940029496091d226b3816a7c6de76bd4f49769720bbd866e430f8"
+    }
+  }
+}
